@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT - Rapid Ranked</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            min-height: 100vh;
+            background: #0d0d0d;
+            color: white;
+            font-family: Arial, Helvetica, sans-serif;
+            padding: 20px;
+        }
+
+        .container {
+            width: min(700px, 100%);
+            margin: auto;
+        }
+
+        .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            color: white;
+            text-decoration: none;
+            font-size: 22px;
+            font-weight: 900;
+        }
+
+        .logo span {
+            color: #d4af37;
+        }
+
+        .back {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .card {
+            background: #181818;
+            border: 1px solid #303030;
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        h1 {
+            font-size: 26px;
+            margin-bottom: 8px;
+        }
+
+        .description {
+            color: #888;
+            margin-bottom: 28px;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        .section-title {
+            color: #d4af37;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+        }
+
+        .time-options,
+        .stake-options {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .option {
+            padding: 16px 10px;
+            background: #222;
+            border: 1px solid #383838;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .option:hover {
+            background: #2b2b2b;
+        }
+
+        .option.selected {
+            border-color: #d4af37;
+            background: #30280f;
+            color: #d4af37;
+        }
+
+        .option strong {
+            display: block;
+            font-size: 16px;
+        }
+
+        .option small {
+            display: block;
+            margin-top: 5px;
+            color: #888;
+            font-size: 11px;
+        }
+
+        .option.selected small {
+            color: #b9a45c;
+        }
+
+        .summary {
+            margin-top: 25px;
+            padding: 16px;
+            background: #111;
+            border-radius: 8px;
+            border: 1px solid #292929;
+        }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #252525;
+        }
+
+        .summary-row:last-child {
+            border-bottom: none;
+        }
+
+        .summary-row span {
+            color: #888;
+        }
+
+        .summary-row strong {
+            color: white;
+        }
+
+        .find-button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            background: #d4af37;
+            color: #111;
+            font-size: 16px;
+            font-weight: 900;
+            cursor: pointer;
+        }
+
+        .find-button:hover {
+            background: #e5c45a;
+        }
+
+        .note {
+            margin-top: 15px;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+
+        @media (max-width: 500px) {
+            body {
+                padding: 12px;
+            }
+
+            .card {
+                padding: 18px;
+            }
+
+            .time-options,
+            .stake-options {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            h1 {
+                font-size: 22px;
+            }
+        }
+    </style>
+<script src="../js/api.js"></script>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="top">
+
+        <a href="chess.html" class="logo">
+            GOAL<span>$</span>GAMBIT
+        </a>
+
+        <a href="chess.html" class="back">
+            ← Back
+        </a>
+
+    </div>
+
+
+    <div class="card">
+
+        <h1>Rapid Ranked</h1>
+
+        <p class="description">
+            Choose your time control and stake before entering ranked matchmaking.
+        </p>
+
+
+        <!-- TIME -->
+        <div class="section">
+
+            <div class="section-title">
+                TIME CONTROL
+            </div>
+
+            <div class="time-options">
+
+                <button
+                    class="option selected"
+                    data-minutes="10"
+                    data-increment="0">
+
+                    <strong>10:00</strong>
+                    <small>10 minutes</small>
+
+                </button>
+
+
+                <button
+                    class="option"
+                    data-minutes="10"
+                    data-increment="5">
+
+                    <strong>10 + 5</strong>
+                    <small>10 min + 5 sec</small>
+
+                </button>
+
+
+                <button
+                    class="option"
+                    data-minutes="10"
+                    data-increment="15">
+
+                    <strong>10 + 15</strong>
+                    <small>10 min + 15 sec</small>
+
+                </button>
+
+
+                <button
+                    class="option"
+                    data-minutes="15"
+                    data-increment="10">
+
+                    <strong>15 + 10</strong>
+                    <small>15 min + 10 sec</small>
+
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- STAKE -->
+        <div class="section">
+
+            <div class="section-title">
+                STAKE
+            </div>
+
+            <div class="stake-options">
+
+                <button
+                    class="option selected"
+                    data-stake="20">
+
+                    <strong>KSh 20</strong>
+                    <small>Entry stake</small>
+
+                </button>
+
+
+                <button
+                    class="option"
+                    data-stake="50">
+
+                    <strong>KSh 50</strong>
+                    <small>Entry stake</small>
+
+                </button>
+
+
+                <button
+                    class="option"
+                    data-stake="100">
+
+                    <strong>KSh 100</strong>
+                    <small>Entry stake</small>
+
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- SUMMARY -->
+        <div class="summary">
+
+            <div class="summary-row">
+                <span>Game</span>
+                <strong>Rapid Ranked</strong>
+            </div>
+
+            <div class="summary-row">
+                <span>Time</span>
+                <strong id="summaryTime">
+                    10:00
+                </strong>
+            </div>
+
+            <div class="summary-row">
+                <span>Stake</span>
+                <strong id="summaryStake">
+                    KSh 20
+                </strong>
+            </div>
+
+        </div>
+
+
+        <button
+            id="findMatchButton"
+            class="find-button"
+            type="button">
+
+            Find Ranked Match
+
+        </button>
+
+
+        <p class="note">
+            Matchmaking will connect you with another player using the same settings.
+        </p>
+
+    </div>
+
+</div>
+
+
+<script>
+
+    let selectedMinutes = 10;
+    let selectedIncrement = 0;
+    let selectedStake = 20;
+
+
+    /* TIME SELECTION */
+
+    const timeOptions =
+        document.querySelectorAll(
+            ".time-options .option"
+        );
+
+    timeOptions.forEach(function(button) {
+
+        button.addEventListener(
+            "click",
+            function() {
+
+                timeOptions.forEach(function(item) {
+                    item.classList.remove("selected");
+                });
+
+                button.classList.add("selected");
+
+                selectedMinutes =
+                    Number(
+                        button.dataset.minutes
+                    );
+
+                selectedIncrement =
+                    Number(
+                        button.dataset.increment
+                    );
+
+                updateSummary();
+            }
+        );
+
+    });
+
+
+    /* STAKE SELECTION */
+
+    const stakeOptions =
+        document.querySelectorAll(
+            ".stake-options .option"
+        );
+
+    stakeOptions.forEach(function(button) {
+
+        button.addEventListener(
+            "click",
+            function() {
+
+                stakeOptions.forEach(function(item) {
+                    item.classList.remove("selected");
+                });
+
+                button.classList.add("selected");
+
+                selectedStake =
+                    Number(
+                        button.dataset.stake
+                    );
+
+                updateSummary();
+            }
+        );
+
+    });
+
+
+    /* SUMMARY */
+
+    function updateSummary() {
+
+        let timeText =
+            selectedMinutes +
+            " + " +
+            selectedIncrement;
+
+        if (selectedIncrement === 0) {
+            timeText =
+                selectedMinutes + ":00";
+        }
+
+        document.getElementById(
+            "summaryTime"
+        ).textContent = timeText;
+
+        document.getElementById(
+            "summaryStake"
+        ).textContent =
+            "KSh " + selectedStake;
+    }
+
+
+    /* FIND MATCH */
+
+    document.getElementById(
+        "findMatchButton"
+    ).addEventListener(
+        "click",
+        function() {
+
+            const url =
+                "board.html" +
+                "?mode=rapid-ranked" +
+                "&minutes=" +
+                encodeURIComponent(selectedMinutes) +
+                "&increment=" +
+                encodeURIComponent(selectedIncrement) +
+                "&stake=" +
+                encodeURIComponent(selectedStake);
+
+            GG.guardedGo(url, selectedStake, "chess");
+
+        }
+    );
+
+</script>
+
+</body>
+</html>

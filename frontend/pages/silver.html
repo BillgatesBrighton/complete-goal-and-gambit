@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Silver League</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #050505;
+    color: #fff;
+    min-height: 100vh;
+}
+
+.navbar {
+    height: 70px;
+    background: #080808;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 35px;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+.logo {
+    color: #d4af37;
+    font-size: 21px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+.nav-links {
+    display: flex;
+    gap: 25px;
+}
+
+.nav-links a {
+    color: #aaa;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.nav-links a:hover,
+.nav-links a.active {
+    color: #d4af37;
+}
+
+.dashboard-btn {
+    background: #d4af37;
+    color: #000;
+    text-decoration: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 13px;
+}
+
+.container {
+    width: 92%;
+    max-width: 1200px;
+    margin: auto;
+    padding: 40px 0 100px;
+}
+
+.hero {
+    text-align: center;
+    margin-bottom: 35px;
+}
+
+.hero h1 {
+    color: #d4af37;
+    font-size: 38px;
+    margin-bottom: 10px;
+}
+
+.hero p {
+    color: #888;
+    line-height: 1.6;
+}
+
+.back-btn {
+    display: inline-block;
+    margin-bottom: 25px;
+    color: #aaa;
+    text-decoration: none;
+    font-size: 13px;
+}
+
+.back-btn:hover {
+    color: #d4af37;
+}
+
+.league-header {
+    background: #0b0b0b;
+    border: 1px solid #d4af37;
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 25px;
+}
+
+.league-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+}
+
+.league-header h2 {
+    color: #d4af37;
+    margin-bottom: 7px;
+}
+
+.league-header p {
+    color: #888;
+    font-size: 13px;
+}
+
+.entry {
+    text-align: right;
+}
+
+.entry span {
+    display: block;
+    color: #777;
+    font-size: 11px;
+    margin-bottom: 5px;
+}
+
+.entry strong {
+    color: #fff;
+    font-size: 20px;
+}
+
+.status-box {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 18px;
+    margin-bottom: 25px;
+}
+
+.status-box h3 {
+    color: #d4af37;
+    margin-bottom: 8px;
+}
+
+.status-box p {
+    color: #888;
+    line-height: 1.6;
+    font-size: 13px;
+}
+
+.message {
+    display: none;
+    background: #151515;
+    border: 1px solid #d4af37;
+    color: #d4af37;
+    padding: 13px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.section {
+    background: #0b0b0b;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 25px;
+}
+
+.section h2 {
+    color: #d4af37;
+    margin-bottom: 20px;
+}
+
+.join-button {
+    width: 100%;
+    padding: 13px;
+    background: #d4af37;
+    color: #000;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.join-button:hover {
+    background: #e1c04a;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+
+.stat {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 7px;
+    padding: 15px;
+    text-align: center;
+}
+
+.stat span {
+    display: block;
+    color: #777;
+    font-size: 11px;
+    margin-bottom: 7px;
+}
+
+.stat strong {
+    color: #fff;
+    font-size: 18px;
+}
+
+.player-list {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.player {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 12px;
+    color: #ccc;
+    font-size: 13px;
+}
+
+.current-user {
+    color: #fff;
+    border-color: #d4af37;
+}
+
+.table-wrapper {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 720px;
+}
+
+th {
+    background: #151515;
+    color: #d4af37;
+    padding: 13px 8px;
+    font-size: 12px;
+}
+
+td {
+    padding: 13px 8px;
+    border-bottom: 1px solid #222;
+    text-align: center;
+    font-size: 13px;
+    color: #ccc;
+}
+
+td:nth-child(1),
+td:nth-child(2) {
+    text-align: left;
+}
+
+.position {
+    color: #d4af37;
+    font-weight: bold;
+}
+
+.rules {
+    color: #888;
+    line-height: 1.8;
+    font-size: 14px;
+}
+
+.rules li {
+    margin-left: 20px;
+}
+
+@media (max-width: 900px) {
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .player-list {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+@media (max-width: 650px) {
+
+    .navbar {
+        padding: 0 15px;
+    }
+
+    .nav-links {
+        display: none;
+    }
+
+    .container {
+        width: 94%;
+    }
+
+    .hero h1 {
+        font-size: 30px;
+    }
+
+    .league-header-top {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .entry {
+        text-align: left;
+    }
+
+}
+
+@media (max-width: 450px) {
+
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .player-list {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="logo">
+        GOAL$GAMBIT
+    </div>
+
+    <div class="nav-links">
+
+        <a href="konami.html">Dashboard</a>
+        <a href="ranked.html">Ranked</a>
+        <a href="leagues.html" class="active">Leagues</a>
+        <a href="tournaments.html">Tournaments</a>
+
+    </div>
+
+    <a href="konami.html" class="dashboard-btn">
+        DASHBOARD
+    </a>
+
+</nav>
+
+
+<div class="container">
+
+    <a href="leagues.html" class="back-btn">
+        ← BACK TO LEAGUES
+    </a>
+
+    <div class="hero">
+
+        <h1>SILVER LEAGUE</h1>
+
+        <p>
+            A higher level of competitive league play.
+            Compete in a separate 20-player league.
+        </p>
+
+    </div>
+
+
+    <div class="league-header">
+
+        <div class="league-header-top">
+
+            <div>
+
+                <h2>
+                    SILVER LEAGUE
+                </h2>
+
+                <p>
+                    Maximum 20 players • Home & Away format
+                </p>
+
+            </div>
+
+            <div class="entry">
+
+                <span>ENTRY FEE</span>
+
+                <strong>
+                    KSh 50
+                </strong>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div
+        class="message"
+        id="message">
+    </div>
+
+
+    <div class="status-box">
+
+        <h3>
+            LEAGUE STATUS
+        </h3>
+
+        <p id="leagueStatus">
+            0 / 20 players have joined.
+        </p>
+
+    </div>
+
+
+    <div class="section">
+
+        <h2>
+            JOIN SILVER LEAGUE
+        </h2>
+
+        <p
+            style="color:#888;line-height:1.6;margin-bottom:18px;">
+
+            Pay the KSh 50 entry fee to enter the
+            Silver League. Your player record and
+            results belong only to this league.
+
+        </p>
+
+        <button
+            class="join-button"
+            onclick="joinLeague()">
+
+            JOIN SILVER LEAGUE
+
+        </button>
+
+    </div>
+
+
+    <div class="section">
+
+        <h2>
+            SILVER LEAGUE
+        </h2>
+
+        <div class="stats-grid">
+
+            <div class="stat">
+                <span>PLAYERS</span>
+                <strong id="statPlayers">0</strong>
+            </div>
+
+            <div class="stat">
+                <span>RECORDED MATCHES</span>
+                <strong id="statMatches">0</strong>
+            </div>
+
+            <div class="stat">
+                <span>YOUR GAMES</span>
+                <strong id="statYourGames">0</strong>
+            </div>
+
+            <div class="stat">
+                <span>YOUR POINTS</span>
+                <strong id="statYourPoints">0</strong>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="section">
+
+        <h2>
+            SILVER LEAGUE PLAYERS
+        </h2>
+
+        <div
+            class="player-list"
+            id="playerList">
+        </div>
+
+    </div>
+
+
+    <div class="section">
+
+        <h2>
+            SILVER LEAGUE STANDINGS
+        </h2>
+
+        <div class="table-wrapper">
+
+            <table>
+
+                <thead>
+
+                    <tr>
+
+                        <th>#</th>
+                        <th>PLAYER</th>
+                        <th>P</th>
+                        <th>W</th>
+                        <th>D</th>
+                        <th>L</th>
+                        <th>GF</th>
+                        <th>GA</th>
+                        <th>GD</th>
+                        <th>PTS</th>
+
+                    </tr>
+
+                </thead>
+
+                <tbody id="standingsBody">
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </div>
+
+
+    <div class="section">
+
+        <h2>
+            SILVER LEAGUE RULES
+        </h2>
+
+        <ul class="rules">
+
+            <li>
+                Maximum of 20 players.
+            </li>
+
+            <li>
+                Each player will have 38 matches
+                in a complete season.
+            </li>
+
+            <li>
+                Every player faces each opponent twice:
+                once home and once away.
+            </li>
+
+            <li>
+                A win gives 3 points.
+            </li>
+
+            <li>
+                A draw gives 1 point.
+            </li>
+
+            <li>
+                A loss gives 0 points.
+            </li>
+
+            <li>
+                Silver League has its own separate
+                standings and results.
+            </li>
+
+            <li>
+                League matches are played through
+                the GOAL$GAMBIT Match Hub and eFootball.
+            </li>
+
+        </ul>
+
+    </div>
+
+</div>
+
+
+<script src="../js/api.js"></script>
+<script>
+
+const LEAGUE = "Silver";
+const STAKE = 50;
+
+const PLAYERS_KEY =
+    "goalGambitLeaguePlayers_Silver";
+
+const RESULTS_KEY =
+    "goalGambitLeagueResults_Silver";
+
+
+function getUsername() {
+
+    return localStorage.getItem(
+        "goalGambitUsername"
+    ) || localStorage.getItem(
+        "username"
+    ) || "";
+
+}
+
+
+function getBalance() {
+
+    return Number(
+        localStorage.getItem(
+            "goalGambitBalance"
+        ) || 0
+    );
+
+}
+
+
+function setBalance(value) {
+
+    localStorage.setItem(
+        "goalGambitBalance",
+        String(value)
+    );
+
+}
+
+
+function getPlayers() {
+
+    try {
+
+        return JSON.parse(
+            localStorage.getItem(
+                PLAYERS_KEY
+            ) || "[]"
+        );
+
+    }
+
+    catch {
+
+        return [];
+
+    }
+
+}
+
+
+function getResults() {
+
+    try {
+
+        return JSON.parse(
+            localStorage.getItem(
+                RESULTS_KEY
+            ) || "[]"
+        );
+
+    }
+
+    catch {
+
+        return [];
+
+    }
+
+}
+
+
+function escapeHTML(value) {
+
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+}
+
+
+function showMessage(text) {
+
+    const message =
+        document.getElementById("message");
+
+    message.textContent = text;
+
+    message.style.display = "block";
+
+    setTimeout(() => {
+
+        message.style.display = "none";
+
+    }, 3500);
+
+}
+
+
+async function joinLeague() {
+
+    const username = getUsername();
+
+    if (!username || !GG.getToken()) {
+        alert("You need a GOAL$GAMBIT account before joining a league.");
+        window.location.href = "login.html";
+        return;
+    }
+
+    const players = getPlayers();
+
+    if (players.some(function (player) {
+        return String(player.username).toLowerCase() === username.toLowerCase();
+    })) {
+        showMessage("You are already in the Silver League.");
+        return;
+    }
+
+    if (players.length >= 20) {
+        alert("Silver League is full.");
+        return;
+    }
+
+    // No balance, no entry: check the real wallet before asking the server.
+    if (!(await GG.hasBalance(STAKE))) {
+        return;
+    }
+
+    const result = await GG.api("/api/leagues/" + LEAGUE + "/join", { method: "POST" });
+
+    if (!result.ok) {
+        alert(result.data.message || "Could not join the league.");
+        return;
+    }
+
+    await syncLeague();
+    await GG.refreshBalance();
+
+    showMessage("You successfully joined the Silver League.");
+}
+
+// The league table comes from the server so every player sees the same members.
+async function syncLeague() {
+    const result = await GG.api("/api/leagues/" + LEAGUE, { noRedirect: true });
+    if (result.ok && Array.isArray(result.data.standings)) {
+        const players = result.data.standings.map(function (row) {
+            return {
+                username: row.username,
+                stake: STAKE,
+                paid: true,
+                refunded: false,
+                joinedAt: new Date().toISOString()
+            };
+        });
+        localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
+    }
+    render();
+}
+
+
+function renderStats() {
+
+    const players =
+        getPlayers();
+
+    const results =
+        getResults();
+
+    const username =
+        getUsername();
+
+    let games = 0;
+    let points = 0;
+
+
+    results.forEach(result => {
+
+        if (result.home === username) {
+
+            games++;
+
+            const h =
+                Number(result.homeScore);
+
+            const a =
+                Number(result.awayScore);
+
+            if (h > a) points += 3;
+            else if (h === a) points++;
+
+        }
+
+        else if (result.away === username) {
+
+            games++;
+
+            const h =
+                Number(result.homeScore);
+
+            const a =
+                Number(result.awayScore);
+
+            if (a > h) points += 3;
+            else if (h === a) points++;
+
+        }
+
+    });
+
+
+    document.getElementById(
+        "statPlayers"
+    ).textContent =
+        players.length;
+
+    document.getElementById(
+        "statMatches"
+    ).textContent =
+        results.length;
+
+    document.getElementById(
+        "statYourGames"
+    ).textContent =
+        games;
+
+    document.getElementById(
+        "statYourPoints"
+    ).textContent =
+        points;
+
+    document.getElementById(
+        "leagueStatus"
+    ).textContent =
+        players.length +
+        " / 20 players have joined.";
+
+}
+
+
+function renderPlayers() {
+
+    const players =
+        getPlayers();
+
+    const username =
+        getUsername();
+
+    const container =
+        document.getElementById(
+            "playerList"
+        );
+
+
+    if (!players.length) {
+
+        container.innerHTML = `
+
+            <div class="player">
+                No players have joined
+                the Silver League yet.
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    container.innerHTML =
+
+        players.map(player => {
+
+            const current =
+                String(
+                    player.username
+                ).toLowerCase() ===
+                username.toLowerCase();
+
+
+            return `
+
+                <div class="player ${
+                    current
+                    ? "current-user"
+                    : ""
+                }">
+
+                    ${escapeHTML(
+                        player.username
+                    )}
+
+                    ${
+                        current
+                        ? " • YOU"
+                        : ""
+                    }
+
+                </div>
+
+            `;
+
+        }).join("");
+
+}
+
+
+function renderStandings() {
+
+    const players =
+        getPlayers();
+
+    const results =
+        getResults();
+
+    const username =
+        getUsername();
+
+    const table = {};
+
+
+    players.forEach(player => {
+
+        table[player.username] = {
+
+            username:
+                player.username,
+
+            P: 0,
+            W: 0,
+            D: 0,
+            L: 0,
+            GF: 0,
+            GA: 0,
+            GD: 0,
+            Pts: 0
+
+        };
+
+    });
+
+
+    results.forEach(result => {
+
+        const home =
+            result.home;
+
+        const away =
+            result.away;
+
+
+        if (
+            !table[home] ||
+            !table[away]
+        ) return;
+
+
+        const h =
+            Number(result.homeScore);
+
+        const a =
+            Number(result.awayScore);
+
+
+        if (
+            !Number.isInteger(h) ||
+            !Number.isInteger(a)
+        ) return;
+
+
+        table[home].P++;
+        table[away].P++;
+
+        table[home].GF += h;
+        table[home].GA += a;
+
+        table[away].GF += a;
+        table[away].GA += h;
+
+
+        if (h > a) {
+
+            table[home].W++;
+            table[home].Pts += 3;
+            table[away].L++;
+
+        }
+
+        else if (a > h) {
+
+            table[away].W++;
+            table[away].Pts += 3;
+            table[home].L++;
+
+        }
+
+        else {
+
+            table[home].D++;
+            table[away].D++;
+
+            table[home].Pts++;
+            table[away].Pts++;
+
+        }
+
+    });
+
+
+    Object.values(table).forEach(player => {
+
+        player.GD =
+            player.GF -
+            player.GA;
+
+    });
+
+
+    const sorted =
+        Object.values(table).sort(
+            (a,b) =>
+                b.Pts - a.Pts ||
+                b.GD - a.GD ||
+                b.GF - a.GF ||
+                a.username.localeCompare(
+                    b.username
+                )
+        );
+
+
+    const body =
+        document.getElementById(
+            "standingsBody"
+        );
+
+
+    if (!sorted.length) {
+
+        body.innerHTML = `
+
+            <tr>
+                <td colspan="10">
+                    No players have joined
+                    the Silver League yet.
+                </td>
+            </tr>
+
+        `;
+
+        return;
+
+    }
+
+
+    body.innerHTML =
+
+        sorted.map((player,index) => {
+
+            const current =
+                player.username.toLowerCase() ===
+                username.toLowerCase();
+
+
+            return `
+
+                <tr>
+
+                    <td class="position">
+                        ${index + 1}
+                    </td>
+
+                    <td style="${
+                        current
+                        ? "color:#fff;font-weight:bold;"
+                        : ""
+                    }">
+
+                        ${escapeHTML(
+                            player.username
+                        )}
+
+                    </td>
+
+                    <td>${player.P}</td>
+                    <td>${player.W}</td>
+                    <td>${player.D}</td>
+                    <td>${player.L}</td>
+                    <td>${player.GF}</td>
+                    <td>${player.GA}</td>
+                    <td>${player.GD}</td>
+
+                    <td>
+                        <strong>
+                            ${player.Pts}
+                        </strong>
+                    </td>
+
+                </tr>
+
+            `;
+
+        }).join("");
+
+}
+
+
+function render() {
+
+    renderStats();
+    renderPlayers();
+    renderStandings();
+
+}
+
+
+syncLeague();
+
+window.addEventListener(
+    "storage",
+    render
+);
+
+window.addEventListener(
+    "pageshow",
+    render
+);
+
+</script>
+
+</body>
+
+</html>

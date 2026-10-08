@@ -1,0 +1,2500 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Chess Match</title>
+
+<style>
+
+/* =========================================================
+   RESET
+========================================================= */
+
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+
+/* =========================================================
+   BODY
+========================================================= */
+
+body{
+    font-family:Arial,Helvetica,sans-serif;
+
+    background:
+        radial-gradient(
+            circle at top,
+            #171717,
+            #050505 65%
+        );
+
+    color:#fff;
+
+    min-height:100vh;
+}
+
+
+/* =========================================================
+   NAVBAR
+========================================================= */
+
+.navbar{
+    height:70px;
+
+    padding:0 5%;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    background:#090909;
+
+    border-bottom:1px solid #252525;
+}
+
+
+.brand{
+    font-weight:900;
+
+    letter-spacing:1px;
+
+    font-size:18px;
+}
+
+
+.brand span{
+    color:#f4bd20;
+}
+
+
+.back{
+    color:#aaa;
+
+    border:1px solid #292929;
+
+    padding:9px 14px;
+
+    border-radius:9px;
+
+    text-decoration:none;
+
+    font-size:13px;
+
+    transition:.2s;
+}
+
+
+.back:hover{
+    color:#f4bd20;
+
+    border-color:#f4bd20;
+}
+
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+main{
+    width:min(1250px,94%);
+
+    margin:auto;
+
+    padding:28px 0 60px;
+}
+
+
+/* =========================================================
+   MATCH HEADER
+========================================================= */
+
+.match-header{
+
+    background:
+        linear-gradient(
+            145deg,
+            #171717,
+            #0b0b0b
+        );
+
+    border:1px solid #292929;
+
+    border-radius:14px;
+
+    padding:18px 20px;
+
+    margin-bottom:20px;
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:20px;
+
+    flex-wrap:wrap;
+}
+
+
+.header-left h1{
+    font-size:25px;
+
+    margin-bottom:6px;
+}
+
+
+.header-left p{
+    color:#777;
+
+    font-size:13px;
+}
+
+
+.match-meta{
+
+    display:flex;
+
+    gap:9px;
+
+    flex-wrap:wrap;
+
+    justify-content:flex-end;
+}
+
+
+.meta{
+    background:#101010;
+
+    border:1px solid #292929;
+
+    border-radius:9px;
+
+    padding:9px 12px;
+
+    font-size:12px;
+
+    color:#999;
+}
+
+
+.meta strong{
+    color:#f4bd20;
+
+    margin-left:4px;
+}
+
+
+/* =========================================================
+   STATUS BAR
+========================================================= */
+
+.status-bar{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:10px;
+
+    padding:12px 15px;
+
+    border-radius:10px;
+
+    background:#0c0c0c;
+
+    border:1px solid #292929;
+
+    margin-bottom:20px;
+
+    color:#aaa;
+
+    font-size:13px;
+}
+
+
+.status-dot{
+
+    width:9px;
+
+    height:9px;
+
+    border-radius:50%;
+
+    background:#777;
+
+    flex:none;
+}
+
+
+.status-bar.ready{
+    border-color:#315a38;
+}
+
+
+.status-bar.ready .status-dot{
+    background:#72df86;
+}
+
+
+.status-bar.waiting{
+    border-color:#5b4921;
+}
+
+
+.status-bar.waiting .status-dot{
+    background:#f4bd20;
+}
+
+
+.status-bar.error{
+    border-color:#5a2929;
+}
+
+
+.status-bar.error .status-dot{
+    background:#ff5555;
+}
+
+
+/* =========================================================
+   MATCH INFORMATION
+========================================================= */
+
+.match-info{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(4,minmax(0,1fr));
+
+    gap:12px;
+
+    margin-bottom:20px;
+}
+
+
+.info-card{
+
+    background:#0b0b0b;
+
+    border:1px solid #242424;
+
+    border-radius:11px;
+
+    padding:14px;
+}
+
+
+.info-card small{
+
+    display:block;
+
+    color:#666;
+
+    font-size:11px;
+
+    margin-bottom:6px;
+}
+
+
+.info-card strong{
+
+    display:block;
+
+    color:#ddd;
+
+    font-size:14px;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+    white-space:nowrap;
+}
+
+
+/* =========================================================
+   BOARD CONTAINER
+========================================================= */
+
+.board-container{
+
+    position:relative;
+
+    width:100%;
+
+    min-height:600px;
+
+    background:#070707;
+
+    border:1px solid #252525;
+
+    border-radius:14px;
+
+    overflow:hidden;
+
+    box-shadow:
+        0 30px 80px rgba(0,0,0,.55);
+}
+
+
+.board-frame{
+
+    display:block;
+
+    width:100%;
+
+    min-height:780px;
+
+    border:none;
+
+    background:#050505;
+}
+
+
+/* =========================================================
+   CONTROLLER OVERLAY
+========================================================= */
+
+.controller-overlay{
+
+    position:absolute;
+
+    inset:0;
+
+    z-index:10;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    padding:25px;
+
+    background:
+        rgba(5,5,5,.78);
+
+    backdrop-filter:blur(5px);
+
+    transition:.25s;
+}
+
+
+.controller-overlay.hidden{
+
+    opacity:0;
+
+    pointer-events:none;
+}
+
+
+.waiting-card{
+
+    width:min(430px,100%);
+
+    background:
+        linear-gradient(
+            145deg,
+            #171717,
+            #0b0b0b
+        );
+
+    border:1px solid #383838;
+
+    border-radius:16px;
+
+    padding:30px;
+
+    text-align:center;
+
+    box-shadow:
+        0 30px 70px rgba(0,0,0,.7);
+}
+
+
+.waiting-icon{
+
+    width:60px;
+
+    height:60px;
+
+    margin:0 auto 18px;
+
+    border-radius:50%;
+
+    border:2px solid #f4bd20;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    color:#f4bd20;
+
+    font-size:25px;
+
+    animation:pulse 1.7s infinite;
+}
+
+
+@keyframes pulse{
+
+    0%{
+        box-shadow:
+            0 0 0 0
+            rgba(244,189,32,.35);
+    }
+
+    70%{
+        box-shadow:
+            0 0 0 16px
+            rgba(244,189,32,0);
+    }
+
+    100%{
+        box-shadow:
+            0 0 0 0
+            rgba(244,189,32,0);
+    }
+}
+
+
+.waiting-card h2{
+
+    font-size:22px;
+
+    margin-bottom:10px;
+}
+
+
+.waiting-card p{
+
+    color:#888;
+
+    font-size:13px;
+
+    line-height:1.6;
+
+    margin-bottom:18px;
+}
+
+
+.waiting-card .waiting-main{
+
+    color:#f4bd20;
+
+    font-weight:800;
+
+    margin-bottom:6px;
+}
+
+
+.waiting-card .waiting-sub{
+
+    color:#666;
+
+    font-size:12px;
+
+    margin-bottom:0;
+}
+
+
+/* =========================================================
+   RESULT NOTICE
+========================================================= */
+
+.result-notice{
+
+    display:none;
+
+    margin-top:20px;
+
+    background:#0c0c0c;
+
+    border:1px solid #315a38;
+
+    border-radius:12px;
+
+    padding:16px;
+}
+
+
+.result-notice.show{
+
+    display:block;
+}
+
+
+.result-notice strong{
+
+    display:block;
+
+    color:#72df86;
+
+    margin-bottom:5px;
+}
+
+
+.result-notice span{
+
+    color:#888;
+
+    font-size:13px;
+}
+
+
+/* =========================================================
+   BOTTOM CONTROLS
+========================================================= */
+
+.bottom-controls{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:15px;
+
+    margin-top:20px;
+
+    flex-wrap:wrap;
+}
+
+
+.control-note{
+
+    color:#666;
+
+    font-size:12px;
+
+    line-height:1.5;
+
+    max-width:650px;
+}
+
+
+.return-button{
+
+    border:1px solid #292929;
+
+    background:#101010;
+
+    color:#aaa;
+
+    padding:11px 16px;
+
+    border-radius:9px;
+
+    text-decoration:none;
+
+    font-weight:700;
+
+    font-size:13px;
+
+    transition:.2s;
+}
+
+
+.return-button:hover{
+
+    border-color:#f4bd20;
+
+    color:#f4bd20;
+}
+
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media(max-width:850px){
+
+    .match-info{
+
+        grid-template-columns:
+            repeat(2,minmax(0,1fr));
+    }
+
+    .board-container{
+
+        min-height:500px;
+    }
+
+    .board-frame{
+
+        min-height:650px;
+    }
+
+}
+
+
+@media(max-width:600px){
+
+    .navbar{
+
+        height:62px;
+    }
+
+    .match-header{
+
+        padding:16px;
+    }
+
+    .header-left h1{
+
+        font-size:21px;
+    }
+
+    .match-meta{
+
+        justify-content:flex-start;
+    }
+
+    .match-info{
+
+        grid-template-columns:1fr 1fr;
+
+        gap:8px;
+    }
+
+    .info-card{
+
+        padding:12px;
+    }
+
+    .board-frame{
+
+        min-height:620px;
+    }
+
+    .waiting-card{
+
+        padding:24px;
+    }
+
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<!-- =====================================================
+     NAVBAR
+===================================================== -->
+
+<header class="navbar">
+
+    <div class="brand">
+        GOAL<span>$</span>GAMBIT
+    </div>
+
+    <a
+        href="chess.html"
+        class="back"
+        id="backButton"
+    >
+        ← Chess Dashboard
+    </a>
+
+</header>
+
+
+
+<main>
+
+
+<!-- =====================================================
+     MATCH HEADER
+===================================================== -->
+
+<section class="match-header">
+
+    <div class="header-left">
+
+        <h1 id="matchTitle">
+            Chess Match
+        </h1>
+
+        <p id="matchSubtitle">
+            Preparing your match room...
+        </p>
+
+    </div>
+
+
+    <div class="match-meta">
+
+        <div class="meta">
+            Mode:
+            <strong id="modeText">
+                Chess
+            </strong>
+        </div>
+
+        <div class="meta">
+            Time:
+            <strong id="timeText">
+                —
+            </strong>
+        </div>
+
+        <div class="meta">
+            Stake:
+            <strong id="stakeText">
+                —
+            </strong>
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- =====================================================
+     STATUS
+===================================================== -->
+
+<div
+    class="status-bar waiting"
+    id="statusBar"
+>
+
+    <span class="status-dot"></span>
+
+    <span id="statusText">
+        Preparing match...
+    </span>
+
+</div>
+
+
+
+<!-- =====================================================
+     MATCH INFORMATION
+===================================================== -->
+
+<section class="match-info">
+
+
+    <div class="info-card">
+
+        <small>
+            YOU
+        </small>
+
+        <strong id="playerName">
+            —
+        </strong>
+
+    </div>
+
+
+    <div class="info-card">
+
+        <small>
+            OPPONENT
+        </small>
+
+        <strong id="opponentName">
+            Waiting...
+        </strong>
+
+    </div>
+
+
+    <div class="info-card">
+
+        <small>
+            MATCH ID
+        </small>
+
+        <strong id="matchIdText">
+            Waiting...
+        </strong>
+
+    </div>
+
+
+    <div class="info-card">
+
+        <small>
+            ROUND
+        </small>
+
+        <strong id="roundText">
+            —
+        </strong>
+
+    </div>
+
+</section>
+
+
+
+<!-- =====================================================
+     BOARD
+===================================================== -->
+
+<section class="board-container">
+
+
+    <iframe
+        id="chessBoard"
+        class="board-frame"
+        src="board.html"
+        title="GOAL$GAMBIT Chess Board"
+        allow="fullscreen"
+    ></iframe>
+
+
+
+    <!-- =================================================
+         PAIRING OVERLAY
+    ================================================= -->
+
+    <div
+        class="controller-overlay"
+        id="controllerOverlay"
+    >
+
+        <div class="waiting-card">
+
+            <div class="waiting-icon">
+                ♟
+            </div>
+
+            <h2 id="overlayTitle">
+                Finding Opponent
+            </h2>
+
+            <p
+                class="waiting-main"
+                id="overlayMain"
+            >
+                Your chess board is locked.
+            </p>
+
+            <p
+                class="waiting-sub"
+                id="overlaySub"
+            >
+                Waiting for the server to assign
+                your opponent and match.
+            </p>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- =====================================================
+     RESULT NOTICE
+===================================================== -->
+
+<div
+    class="result-notice"
+    id="resultNotice"
+>
+
+    <strong>
+        Result received
+    </strong>
+
+    <span id="resultNoticeText">
+        Your result has been received and is ready
+        for secure verification.
+    </span>
+
+</div>
+
+
+
+<!-- =====================================================
+     BOTTOM CONTROLS
+===================================================== -->
+
+<section class="bottom-controls">
+
+    <p class="control-note" id="controlNote">
+
+        Matchmaking, match assignment, game verification
+        and any real-money settlement are controlled by
+        the secure server. This page does not create
+        opponents or alter the wallet.
+
+    </p>
+
+
+    <a
+        href="chess.html"
+        class="return-button"
+        id="returnButton"
+    >
+        Return to Chess
+    </a>
+
+</section>
+
+
+</main>
+
+
+
+<script>
+
+/* =========================================================
+   LOCAL STORAGE HELPERS
+========================================================= */
+
+function readStorage(key){
+
+    return localStorage.getItem(key) || "";
+
+}
+
+
+function readJSON(key){
+
+    try{
+
+        return JSON.parse(
+            localStorage.getItem(key) || "null"
+        );
+
+    }catch(error){
+
+        return null;
+
+    }
+
+}
+
+
+/* =========================================================
+   ACCOUNT
+========================================================= */
+
+function getAccount(){
+
+    return readJSON(
+        "goalGambitAccount"
+    );
+
+}
+
+
+function getUsername(){
+
+    const account =
+        getAccount();
+
+    if(
+        account &&
+        account.username
+    ){
+
+        return account.username;
+
+    }
+
+    return readStorage(
+        "goalGambitUsername"
+    );
+
+}
+
+
+/* =========================================================
+   CURRENT MODE
+========================================================= */
+
+const matchMode =
+    readStorage(
+        "goalGambitMatchMode"
+    );
+
+
+const rankedMode =
+    readStorage(
+        "goalGambitRankedMode"
+    );
+
+
+const rankedStake =
+    readStorage(
+        "goalGambitRankedStake"
+    );
+
+
+const rankedTimeControl =
+    readStorage(
+        "goalGambitRankedTimeControl"
+    );
+
+
+const tournamentId =
+    readStorage(
+        "goalGambitTournamentId"
+    );
+
+
+const tournamentMatchId =
+    readStorage(
+        "goalGambitTournamentMatchId"
+    );
+
+
+const tournamentType =
+    readStorage(
+        "goalGambitTournamentType"
+    );
+
+
+const tournamentName =
+    readStorage(
+        "goalGambitSelectedTournament"
+    );
+
+
+const tournamentEntry =
+    readStorage(
+        "goalGambitTournamentEntry"
+    );
+
+
+const tournamentTimeControl =
+    readStorage(
+        "goalGambitTournamentTimeControl"
+    );
+
+
+const tournamentRound =
+    readStorage(
+        "goalGambitTournamentRound"
+    );
+
+
+const tournamentOpponent =
+    readStorage(
+        "goalGambitOpponent"
+    );
+
+
+const tournamentColor =
+    readStorage(
+        "goalGambitPlayerColor"
+    );
+
+
+/* =========================================================
+   RANKED STATE
+========================================================= */
+
+let rankedMatchId =
+    readStorage(
+        "goalGambitRankedMatchId"
+    );
+
+
+let rankedOpponent =
+    readStorage(
+        "goalGambitRankedOpponent"
+    );
+
+
+let rankedPlayerColor =
+    readStorage(
+        "goalGambitRankedPlayerColor"
+    );
+
+
+let rankedAssignedTimeControl =
+    readStorage(
+        "goalGambitRankedTimeControl"
+    );
+
+
+/* =========================================================
+   DOM
+========================================================= */
+
+const boardFrame =
+    document.getElementById(
+        "chessBoard"
+    );
+
+
+const statusBar =
+    document.getElementById(
+        "statusBar"
+    );
+
+
+const statusText =
+    document.getElementById(
+        "statusText"
+    );
+
+
+const overlay =
+    document.getElementById(
+        "controllerOverlay"
+    );
+
+
+const overlayTitle =
+    document.getElementById(
+        "overlayTitle"
+    );
+
+
+const overlayMain =
+    document.getElementById(
+        "overlayMain"
+    );
+
+
+const overlaySub =
+    document.getElementById(
+        "overlaySub"
+    );
+
+
+const resultNotice =
+    document.getElementById(
+        "resultNotice"
+    );
+
+
+const resultNoticeText =
+    document.getElementById(
+        "resultNoticeText"
+    );
+
+
+/* =========================================================
+   STATUS FUNCTION
+========================================================= */
+
+function setStatus(
+    message,
+    type
+){
+
+    statusText.textContent =
+        message;
+
+
+    statusBar.classList.remove(
+        "waiting",
+        "ready",
+        "error"
+    );
+
+
+    if(type){
+
+        statusBar.classList.add(
+            type
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   OVERLAY
+========================================================= */
+
+function showOverlay(
+    title,
+    main,
+    sub
+){
+
+    overlayTitle.textContent =
+        title;
+
+    overlayMain.textContent =
+        main;
+
+    overlaySub.textContent =
+        sub;
+
+    overlay.classList.remove(
+        "hidden"
+    );
+
+}
+
+
+function hideOverlay(){
+
+    overlay.classList.add(
+        "hidden"
+    );
+
+}
+
+
+/* =========================================================
+   PREPARE PAGE
+========================================================= */
+
+function preparePage(){
+
+    const player =
+        getUsername();
+
+
+    document.getElementById(
+        "playerName"
+    ).textContent =
+        player || "Player";
+
+
+    /* -----------------------------------------------------
+       RANKED
+    ----------------------------------------------------- */
+
+    if(
+        matchMode === "ranked"
+    ){
+
+        document.getElementById(
+            "matchTitle"
+        ).textContent =
+            "Daily Ranked Chess";
+
+
+        document.getElementById(
+            "matchSubtitle"
+        ).textContent =
+            "Waiting for a ranked opponent.";
+
+
+        document.getElementById(
+            "modeText"
+        ).textContent =
+            rankedMode ||
+            "Ranked";
+
+
+        document.getElementById(
+            "timeText"
+        ).textContent =
+            rankedAssignedTimeControl ||
+            rankedTimeControl ||
+            "—";
+
+
+        document.getElementById(
+            "stakeText"
+        ).textContent =
+            rankedStake
+                ? "KSh " + rankedStake
+                : "—";
+
+
+        document.getElementById(
+            "roundText"
+        ).textContent =
+            "Ranked";
+
+
+        if(
+            rankedMatchId &&
+            rankedOpponent
+        ){
+
+            applyRankedAssignment({
+
+                matchId:
+                    rankedMatchId,
+
+                opponent:
+                    rankedOpponent,
+
+                playerColor:
+                    rankedPlayerColor,
+
+                timeControl:
+                    rankedAssignedTimeControl ||
+                    rankedTimeControl
+
+            });
+
+        }
+
+        else{
+
+            showRankedWaiting();
+
+        }
+
+        return;
+
+    }
+
+
+    /* -----------------------------------------------------
+       TOURNAMENT
+    ----------------------------------------------------- */
+
+    if(
+        tournamentId
+    ){
+
+        document.getElementById(
+            "matchTitle"
+        ).textContent =
+            tournamentName ||
+            "Chess Tournament";
+
+
+        document.getElementById(
+            "matchSubtitle"
+        ).textContent =
+            tournamentType ||
+            "Tournament";
+
+
+        document.getElementById(
+            "modeText"
+        ).textContent =
+            tournamentType ||
+            "Tournament";
+
+
+        document.getElementById(
+            "timeText"
+        ).textContent =
+            tournamentTimeControl ||
+            "—";
+
+
+        document.getElementById(
+            "stakeText"
+        ).textContent =
+            tournamentEntry
+                ? "KSh " + tournamentEntry
+                : "—";
+
+
+        document.getElementById(
+            "roundText"
+        ).textContent =
+            tournamentRound ||
+            "Waiting";
+
+
+        document.getElementById(
+            "opponentName"
+        ).textContent =
+            tournamentOpponent ||
+            "Waiting...";
+
+
+        if(
+            tournamentMatchId &&
+            tournamentOpponent
+        ){
+
+            applyTournamentAssignment({
+
+                matchId:
+                    tournamentMatchId,
+
+                tournamentId:
+                    tournamentId,
+
+                opponent:
+                    tournamentOpponent,
+
+                playerColor:
+                    tournamentColor,
+
+                timeControl:
+                    tournamentTimeControl
+
+            });
+
+        }
+
+        else{
+
+            showTournamentWaiting();
+
+        }
+
+        return;
+
+    }
+
+
+    /* -----------------------------------------------------
+       NORMAL CHESS
+    ----------------------------------------------------- */
+
+    document.getElementById(
+        "matchTitle"
+    ).textContent =
+        "Chess Match";
+
+
+    document.getElementById(
+        "matchSubtitle"
+    ).textContent =
+        "Standard chess board.";
+
+
+    document.getElementById(
+        "modeText"
+    ).textContent =
+        "Chess";
+
+
+    document.getElementById(
+        "timeText"
+    ).textContent =
+        "Choose in board";
+
+
+    document.getElementById(
+        "stakeText"
+    ).textContent =
+        "—";
+
+
+    document.getElementById(
+        "roundText"
+    ).textContent =
+        "—";
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        "Local Player";
+
+
+    setStatus(
+        "Chess board ready.",
+        "ready"
+    );
+
+
+    hideOverlay();
+
+}
+
+
+/* =========================================================
+   RANKED WAITING
+========================================================= */
+
+function showRankedWaiting(){
+
+    setStatus(
+        "Finding a ranked opponent...",
+        "waiting"
+    );
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        "Finding Opponent";
+
+
+    document.getElementById(
+        "matchIdText"
+    ).textContent =
+        "Waiting...";
+
+
+    showOverlay(
+        "Finding Opponent",
+        "Your chess board is locked.",
+        "The secure matchmaking server will assign your opponent and match."
+    );
+
+
+    sendBoardConfig({
+
+        mode:
+            "ranked",
+
+        rankedMode:
+            rankedMode,
+
+        rankedStake:
+            rankedStake,
+
+        matchId:
+            "",
+
+        timeControl:
+            rankedTimeControl ||
+            "15+10",
+
+        tournamentMode:
+            false,
+
+        rankedModeActive:
+            true,
+
+        player:{
+
+            username:
+                getUsername(),
+
+            color:
+                ""
+
+        },
+
+        opponent:{
+
+            username:
+                ""
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   RANKED ASSIGNMENT
+========================================================= */
+
+function applyRankedAssignment(
+    assignment
+){
+
+    rankedMatchId =
+        String(
+            assignment.matchId || ""
+        );
+
+
+    rankedOpponent =
+        String(
+            assignment.opponent || ""
+        );
+
+
+    rankedPlayerColor =
+        String(
+            assignment.playerColor || ""
+        );
+
+
+    rankedAssignedTimeControl =
+        String(
+            assignment.timeControl ||
+            rankedTimeControl ||
+            "15+10"
+        );
+
+
+    if(!rankedMatchId || !rankedOpponent){
+
+        showRankedWaiting();
+
+        return;
+
+    }
+
+
+    localStorage.setItem(
+        "goalGambitRankedMatchId",
+        rankedMatchId
+    );
+
+
+    localStorage.setItem(
+        "goalGambitRankedOpponent",
+        rankedOpponent
+    );
+
+
+    localStorage.setItem(
+        "goalGambitRankedPlayerColor",
+        rankedPlayerColor
+    );
+
+
+    localStorage.setItem(
+        "goalGambitRankedTimeControl",
+        rankedAssignedTimeControl
+    );
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        rankedOpponent;
+
+
+    document.getElementById(
+        "matchIdText"
+    ).textContent =
+        rankedMatchId;
+
+
+    document.getElementById(
+        "timeText"
+    ).textContent =
+        rankedAssignedTimeControl;
+
+
+    setStatus(
+        "Opponent found. Match ready.",
+        "ready"
+    );
+
+
+    showOverlay(
+        "Match Ready",
+        "Your opponent has been assigned.",
+        "Preparing the chess board..."
+    );
+
+
+    sendBoardConfig({
+
+        mode:
+            "ranked",
+
+        rankedMode:
+            rankedMode,
+
+        rankedStake:
+            rankedStake,
+
+        matchId:
+            rankedMatchId,
+
+        timeControl:
+            rankedAssignedTimeControl,
+
+        tournamentMode:
+            false,
+
+        rankedModeActive:
+            true,
+
+        player:{
+
+            username:
+                getUsername(),
+
+            color:
+                rankedPlayerColor
+
+        },
+
+        opponent:{
+
+            username:
+                rankedOpponent
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   TOURNAMENT WAITING
+========================================================= */
+
+function showTournamentWaiting(){
+
+    setStatus(
+        "Waiting for tournament pairing...",
+        "waiting"
+    );
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        "Waiting for Pairing";
+
+
+    document.getElementById(
+        "matchIdText"
+    ).textContent =
+        "Waiting...";
+
+
+    showOverlay(
+        "Waiting for Pairing",
+        "Your tournament board is locked.",
+        "The tournament table will assign your next opponent."
+    );
+
+
+    sendBoardConfig({
+
+        mode:
+            "tournament",
+
+        matchId:
+            "",
+
+        tournamentId:
+            tournamentId,
+
+        tournamentType:
+            tournamentType,
+
+        name:
+            tournamentName,
+
+        round:
+            tournamentRound,
+
+        entryFee:
+            tournamentEntry,
+
+        timeControl:
+            tournamentTimeControl,
+
+        tournamentMode:
+            false,
+
+        rankedModeActive:
+            false,
+
+        player:{
+
+            username:
+                getUsername(),
+
+            color:
+                ""
+
+        },
+
+        opponent:{
+
+            username:
+                ""
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   TOURNAMENT ASSIGNMENT
+========================================================= */
+
+function applyTournamentAssignment(
+    assignment
+){
+
+    const matchId =
+        String(
+            assignment.matchId || ""
+        );
+
+
+    const opponent =
+        String(
+            assignment.opponent || ""
+        );
+
+
+    const color =
+        String(
+            assignment.playerColor || ""
+        );
+
+
+    const timeControl =
+        String(
+            assignment.timeControl ||
+            tournamentTimeControl ||
+            "3+2"
+        );
+
+
+    if(!matchId || !opponent){
+
+        showTournamentWaiting();
+
+        return;
+
+    }
+
+
+    localStorage.setItem(
+        "goalGambitTournamentMatchId",
+        matchId
+    );
+
+
+    localStorage.setItem(
+        "goalGambitOpponent",
+        opponent
+    );
+
+
+    localStorage.setItem(
+        "goalGambitPlayerColor",
+        color
+    );
+
+
+    localStorage.setItem(
+        "goalGambitTournamentTimeControl",
+        timeControl
+    );
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        opponent;
+
+
+    document.getElementById(
+        "matchIdText"
+    ).textContent =
+        matchId;
+
+
+    setStatus(
+        "Pairing complete. Match ready.",
+        "ready"
+    );
+
+
+    showOverlay(
+        "Match Ready",
+        "Your tournament opponent has been assigned.",
+        "Preparing the chess board..."
+    );
+
+
+    sendBoardConfig({
+
+        mode:
+            "tournament",
+
+        matchId:
+            matchId,
+
+        tournamentId:
+            tournamentId,
+
+        tournamentType:
+            tournamentType,
+
+        name:
+            tournamentName,
+
+        round:
+            tournamentRound,
+
+        entryFee:
+            tournamentEntry,
+
+        timeControl:
+            timeControl,
+
+        tournamentMode:
+            true,
+
+        rankedModeActive:
+            false,
+
+        player:{
+
+            username:
+                getUsername(),
+
+            color:
+                color
+
+        },
+
+        opponent:{
+
+            username:
+                opponent
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   SEND CONFIGURATION TO BOARD
+========================================================= */
+
+function sendBoardConfig(
+    config
+){
+
+    if(
+        !boardFrame.contentWindow
+    ){
+
+        return;
+
+    }
+
+
+    boardFrame.contentWindow.postMessage(
+
+        {
+            type:
+                "GOAL_GAMBIT_INIT",
+
+            config:
+                config
+
+        },
+
+        "*"
+
+    );
+
+}
+
+
+/* =========================================================
+   BOARD READY
+========================================================= */
+
+window.addEventListener(
+    "message",
+    function(event){
+
+        if(
+            event.source !==
+            boardFrame.contentWindow
+        ){
+
+            return;
+
+        }
+
+
+        const data =
+            event.data;
+
+
+        if(!data){
+
+            return;
+
+        }
+
+
+        /* -------------------------------------------------
+           BOARD READY
+        ------------------------------------------------- */
+
+        if(
+            data.type ===
+            "GOAL_GAMBIT_BOARD_READY"
+        ){
+
+            sendCurrentConfiguration();
+
+        }
+
+
+        /* -------------------------------------------------
+           RANKED ASSIGNMENT
+        ------------------------------------------------- */
+
+        if(
+            data.type ===
+            "GOAL_GAMBIT_RANKED_MATCH_ASSIGNED"
+        ){
+
+            const assignment =
+                data.assignment ||
+                data.match ||
+                data;
+
+
+            applyRankedAssignment({
+
+                matchId:
+                    assignment.matchId,
+
+                opponent:
+                    assignment.opponent ||
+                    assignment.opponentUsername,
+
+                playerColor:
+                    assignment.playerColor,
+
+                timeControl:
+                    assignment.timeControl
+
+            });
+
+        }
+
+
+        /* -------------------------------------------------
+           TOURNAMENT ASSIGNMENT
+        ------------------------------------------------- */
+
+        if(
+            data.type ===
+            "GOAL_GAMBIT_TOURNAMENT_MATCH_ASSIGNED"
+        ){
+
+            const assignment =
+                data.assignment ||
+                data.match ||
+                data;
+
+
+            applyTournamentAssignment({
+
+                matchId:
+                    assignment.matchId,
+
+                opponent:
+                    assignment.opponent ||
+                    assignment.opponentUsername,
+
+                playerColor:
+                    assignment.playerColor,
+
+                timeControl:
+                    assignment.timeControl
+
+            });
+
+        }
+
+
+        /* -------------------------------------------------
+           GAME STARTED
+        ------------------------------------------------- */
+
+        if(
+            data.type ===
+            "GOAL_GAMBIT_GAME_STARTED"
+        ){
+
+            hideOverlay();
+
+
+            setStatus(
+                "Game in progress.",
+                "ready"
+            );
+
+
+            document.getElementById(
+                "matchSubtitle"
+            ).textContent =
+                "Your match is now in progress.";
+
+        }
+
+
+        /* -------------------------------------------------
+           CHESS RESULT
+        ------------------------------------------------- */
+
+        if(
+            data.type ===
+            "GOAL_GAMBIT_CHESS_RESULT"
+        ){
+
+            handleChessResult(
+                data
+            );
+
+        }
+
+    }
+);
+
+
+/* =========================================================
+   SEND CURRENT CONFIGURATION
+========================================================= */
+
+function sendCurrentConfiguration(){
+
+    if(
+        matchMode ===
+        "ranked"
+    ){
+
+        if(
+            rankedMatchId &&
+            rankedOpponent
+        ){
+
+            sendBoardConfig({
+
+                mode:
+                    "ranked",
+
+                rankedMode:
+                    rankedMode,
+
+                rankedStake:
+                    rankedStake,
+
+                matchId:
+                    rankedMatchId,
+
+                timeControl:
+                    rankedAssignedTimeControl ||
+                    rankedTimeControl,
+
+                tournamentMode:
+                    false,
+
+                rankedModeActive:
+                    true,
+
+                player:{
+
+                    username:
+                        getUsername(),
+
+                    color:
+                        rankedPlayerColor
+
+                },
+
+                opponent:{
+
+                    username:
+                        rankedOpponent
+
+                }
+
+            });
+
+        }
+
+        else{
+
+            showRankedWaiting();
+
+        }
+
+        return;
+
+    }
+
+
+    if(
+        tournamentId
+    ){
+
+        if(
+            tournamentMatchId &&
+            tournamentOpponent
+        ){
+
+            sendBoardConfig({
+
+                mode:
+                    "tournament",
+
+                matchId:
+                    tournamentMatchId,
+
+                tournamentId:
+                    tournamentId,
+
+                tournamentType:
+                    tournamentType,
+
+                name:
+                    tournamentName,
+
+                round:
+                    tournamentRound,
+
+                entryFee:
+                    tournamentEntry,
+
+                timeControl:
+                    tournamentTimeControl,
+
+                tournamentMode:
+                    true,
+
+                rankedModeActive:
+                    false,
+
+                player:{
+
+                    username:
+                        getUsername(),
+
+                    color:
+                        tournamentColor
+
+                },
+
+                opponent:{
+
+                    username:
+                        tournamentOpponent
+
+                }
+
+            });
+
+        }
+
+        else{
+
+            showTournamentWaiting();
+
+        }
+
+        return;
+
+    }
+
+}
+
+
+/* =========================================================
+   RESULT HANDLING
+========================================================= */
+
+function handleChessResult(
+    data
+){
+
+    const result =
+        data.result ||
+        data.message ||
+        "Game completed.";
+
+
+    resultNoticeText.textContent =
+        result +
+        " — result received for secure verification.";
+
+
+    resultNotice.classList.add(
+        "show"
+    );
+
+
+    setStatus(
+        "Game finished. Result received.",
+        "ready"
+    );
+
+
+    document.getElementById(
+        "matchSubtitle"
+    ).textContent =
+        "Result received — awaiting secure verification.";
+
+
+    /*
+       IMPORTANT:
+
+       No wallet balance is changed here.
+
+       No prize is credited here.
+
+       No stake is deducted here.
+
+       No local result is treated as financially final.
+
+       The future backend will verify the match and
+       perform any authoritative settlement.
+    */
+
+
+    if(
+        data.mode ===
+        "ranked"
+    ){
+
+        console.log(
+            "Ranked result ready for backend verification:",
+            data
+        );
+
+    }
+
+
+    if(
+        data.mode ===
+        "tournament"
+    ){
+
+        console.log(
+            "Tournament result ready for backend verification:",
+            data
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   RETURN BUTTON
+========================================================= */
+
+function configureReturnButton(){
+
+    const button =
+        document.getElementById(
+            "returnButton"
+        );
+
+
+    if(
+        matchMode ===
+        "ranked"
+    ){
+
+        if(
+            rankedMode ===
+            "Rapid"
+        ){
+
+            button.href =
+                "rapid-ranked.html";
+
+        }
+
+        else if(
+            rankedMode ===
+            "Blitz"
+        ){
+
+            button.href =
+                "blitz-ranked.html";
+
+        }
+
+        else if(
+            rankedMode ===
+            "Bullet"
+        ){
+
+            button.href =
+                "bullet-ranked.html";
+
+        }
+
+        else{
+
+            button.href =
+                "chess.html";
+
+        }
+
+        return;
+
+    }
+
+
+    button.href =
+        "chess.html";
+
+}
+
+
+/* =========================================================
+   CLEAN STALE NORMAL MATCH DATA
+========================================================= */
+
+function prepareStorageState(){
+
+    /*
+       We intentionally do NOT clear ranked or tournament
+       data here because those values identify the active
+       match room.
+
+       They are cleared later by the relevant entry page
+       or after the backend confirms completion.
+    */
+
+}
+
+
+/* =========================================================
+   INITIALIZE
+========================================================= */
+
+prepareStorageState();
+
+configureReturnButton();
+
+preparePage();
+
+
+/* =========================================================
+   IFRAME LOAD
+========================================================= */
+
+boardFrame.addEventListener(
+    "load",
+    function(){
+
+        sendCurrentConfiguration();
+
+    }
+);
+
+</script>
+
+
+</body>
+
+</html>

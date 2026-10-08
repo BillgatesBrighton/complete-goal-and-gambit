@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Wallet</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background:
+        radial-gradient(circle at top, #171717, #050505 65%);
+    color: white;
+    min-height: 100vh;
+}
+
+a {
+    text-decoration: none;
+    color: inherit;
+}
+
+.navbar {
+    height: 74px;
+    padding: 0 6%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0b0b0b;
+    border-bottom: 1px solid #202020;
+}
+
+.brand {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+.brand span {
+    color: #f4bd20;
+}
+
+.back {
+    padding: 10px 16px;
+    border: 1px solid #292929;
+    border-radius: 10px;
+    color: #aaa;
+}
+
+main {
+    width: min(850px, 92%);
+    margin: auto;
+    padding: 45px 0 70px;
+}
+
+.title {
+    margin-bottom: 25px;
+}
+
+.small-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #777;
+    text-transform: uppercase;
+}
+
+.title h1 {
+    font-size: 40px;
+    margin: 8px 0;
+}
+
+.title p {
+    color: #888;
+    line-height: 1.6;
+}
+
+.balance {
+    background:
+        linear-gradient(145deg, #191919, #0b0b0b);
+    border: 1px solid #2b2b2b;
+    border-radius: 20px;
+    padding: 28px;
+    margin-bottom: 25px;
+}
+
+.balance-amount {
+    color: #f4bd20;
+    font-size: 38px;
+    font-weight: 900;
+    margin-top: 10px;
+    transition: 0.25s;
+}
+
+.balance-amount.updated {
+    animation: balancePop 0.45s ease;
+}
+
+@keyframes balancePop {
+
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.12);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+}
+
+.card {
+    background:
+        linear-gradient(145deg, #151515, #0d0d0d);
+    border: 1px solid #292929;
+    border-radius: 18px;
+    padding: 25px;
+}
+
+.card h2 {
+    margin-bottom: 18px;
+}
+
+.mpesa-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 78px;
+    height: 30px;
+    padding: 0 10px;
+    margin-bottom: 16px;
+    border-radius: 7px;
+    background: #3fae2a;
+    color: #fff;
+    font-weight: 900;
+    letter-spacing: .5px;
+    font-size: 15px;
+}
+
+.field-label {
+    display: block;
+    margin: 2px 0 7px;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.phone-hint {
+    color: #666;
+    font-size: 11px;
+    margin-top: -5px;
+    margin-bottom: 12px;
+}
+
+input {
+    width: 100%;
+    padding: 13px;
+    border-radius: 10px;
+    border: 1px solid #303030;
+    background: #080808;
+    color: white;
+    outline: none;
+    margin-bottom: 12px;
+}
+
+input:focus {
+    border-color: #f4bd20;
+}
+
+button {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    background: #f4bd20;
+    color: #090909;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #ffd34f;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.withdraw button {
+    background: #242424;
+    color: white;
+}
+
+.withdraw button:hover {
+    background: #333;
+}
+
+.message {
+    margin-top: 15px;
+    color: #aaa;
+    font-size: 13px;
+    min-height: 18px;
+}
+
+.transactions {
+    margin-top: 25px;
+    background:
+        linear-gradient(145deg, #151515, #0d0d0d);
+    border: 1px solid #292929;
+    border-radius: 18px;
+    overflow: hidden;
+}
+
+.transaction {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    padding: 15px 18px;
+    border-bottom: 1px solid #242424;
+    font-size: 13px;
+}
+
+.transaction:last-child {
+    border-bottom: none;
+}
+
+.transaction-head {
+    color: #777;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.deposit {
+    color: #55d66f;
+    font-weight: 800;
+}
+
+.withdrawal {
+    color: #ff5d5d;
+    font-weight: 800;
+}
+
+.match-loss {
+    color: #ff5d5d;
+    font-weight: 800;
+}
+
+.empty {
+    padding: 25px;
+    text-align: center;
+    color: #777;
+}
+
+.notice {
+    margin-top: 20px;
+    padding: 15px;
+    background: #111;
+    border: 1px solid #292929;
+    border-radius: 12px;
+    color: #777;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+@media (max-width: 650px) {
+
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .title h1 {
+        font-size: 32px;
+    }
+
+    .transaction {
+        grid-template-columns: 1fr 1fr 1fr;
+        font-size: 11px;
+    }
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<header class="navbar">
+
+<a href="index.html" class="brand">
+GOAL<span>$</span>GAMBIT
+</a>
+
+<a href="dashboard.html" class="back">
+← Dashboard
+</a>
+
+</header>
+
+<main>
+
+<div id="returnBanner" class="notice" hidden>
+    <span>Your tournament deposit is ready. Return when you’re done with your wallet.</span>
+    <a href="tournaments.html">Back to tournaments</a>
+</div>
+
+<section class="title">
+
+<div class="small-label">
+GOAL$GAMBIT WALLET
+</div>
+
+<h1>
+Manage your funds.
+</h1>
+
+<p>
+Deposit funds for competitions or
+request withdrawals from your balance.
+</p>
+
+</section>
+
+<section class="balance">
+
+<div class="small-label">
+Available Balance
+</div>
+
+<div class="balance-amount" id="balance">
+KSh 0.00
+</div>
+
+</section>
+
+<div class="grid">
+
+<div class="card">
+
+<div class="mpesa-logo">M-PESA</div>
+
+<h2>
+💰 Deposit
+</h2>
+
+<label class="field-label" for="depositAmount">Amount (KSh)</label>
+
+<input
+type="number"
+id="depositAmount"
+placeholder="Enter amount"
+min="1"
+step="1"
+inputmode="numeric"
+
+>
+
+<label class="field-label" for="depositPhone">M-Pesa Number</label>
+
+<input
+type="tel"
+id="depositPhone"
+placeholder="07XXXXXXXX or 2547XXXXXXXX"
+inputmode="tel"
+autocomplete="tel"
+
+>
+
+<div class="phone-hint">
+Accepted: 07XXXXXXXX, 011XXXXXXX or 07420XXXXX.
+</div>
+
+<button id="depositButton" onclick="deposit()">
+Deposit Funds
+</button>
+
+<div class="message" id="depositMessage"></div>
+
+</div>
+
+<div class="card withdraw">
+
+<div class="mpesa-logo">M-PESA</div>
+
+<h2>
+💸 Withdraw
+</h2>
+
+<label class="field-label" for="withdrawAmount">Amount (KSh)</label>
+
+<input
+type="number"
+id="withdrawAmount"
+placeholder="Enter amount"
+min="1"
+step="0.01"
+inputmode="decimal"
+
+>
+
+<label class="field-label" for="withdrawPhone">M-Pesa Number</label>
+
+<input
+type="tel"
+id="withdrawPhone"
+placeholder="07XXXXXXXX or 2547XXXXXXXX"
+inputmode="tel"
+autocomplete="tel"
+
+>
+
+<div class="phone-hint">
+Accepted: 07XXXXXXXX, 011XXXXXXX or 07420XXXXX.
+</div>
+
+<button onclick="withdraw()">
+Withdraw Funds
+</button>
+
+<div class="message" id="withdrawMessage"></div>
+
+</div>
+
+</div>
+
+<section class="transactions">
+
+<div class="transaction transaction-head">
+
+<div>Type</div>
+
+<div>Amount</div>
+
+<div>Date</div>
+
+</div>
+
+<div id="transactionList">
+
+<div class="empty">
+No transactions yet.
+</div>
+
+</div>
+
+</section>
+
+<div class="notice">
+
+<strong>Secure wallet:</strong>
+
+Your balance and transactions are now stored on the GOAL$GAMBIT server
+and can no longer be changed from your browser.
+
+Withdrawals carry a 5% processing fee.
+Your M-Pesa number is required for both deposit and withdrawal requests.
+
+</div>
+
+</main>
+
+<script src="../js/api.js"></script>
+
+<script>
+
+if (!GG.requireLogin()) {
+    throw new Error("Not logged in");
+}
+
+if (new URLSearchParams(location.search).get("returnTo") === "tournaments.html") {
+    document.getElementById("returnBanner").hidden = false;
+}
+
+
+var TYPE_LABELS = {
+
+    deposit: "Deposit",
+
+    withdrawal: "Withdrawal",
+
+    withdrawal_fee: "Withdrawal Fee",
+
+    stake_lock: "Stake Locked",
+
+    stake_refund: "Stake Refund",
+
+    match_refund: "Match Refund",
+
+    match_winnings: "Match Winnings",
+
+    match_loss: "Match Loss"
+
+};
+
+
+var currentBalance = 0;
+
+
+function showMessage(id, text) {
+
+    document.getElementById(id).textContent = text;
+
+}
+
+
+function updateBalance(animate) {
+
+    var el =
+        document.getElementById("balance");
+
+    el.textContent =
+        GG.formatMoney(currentBalance);
+
+
+    localStorage.setItem(
+        "goalGambitBalance",
+        currentBalance.toFixed(2)
+    );
+
+
+    if (animate) {
+
+        el.classList.remove("updated");
+
+        void el.offsetWidth;
+
+        el.classList.add("updated");
+
+    }
+
+}
+
+
+async function loadWallet(animate) {
+
+    var result =
+        await GG.api("/api/wallet");
+
+
+    if (
+        result.ok &&
+        result.data.wallet
+    ) {
+
+        currentBalance =
+            Number(
+                result.data.wallet.balance || 0
+            );
+
+        updateBalance(animate);
+
+    }
+
+}
+
+
+async function loadTransactions() {
+
+    var list =
+        document.getElementById(
+            "transactionList"
+        );
+
+
+    var result =
+        await GG.api(
+            "/api/wallet/transactions?limit=50"
+        );
+
+
+    if (!result.ok) {
+
+        list.innerHTML =
+            '<div class="empty">Could not load transactions.</div>';
+
+        return;
+
+    }
+
+
+    var transactions =
+        result.data.transactions || [];
+
+
+    if (!transactions.length) {
+
+        list.innerHTML =
+            '<div class="empty">No transactions yet.</div>';
+
+        return;
+
+    }
+
+
+    list.innerHTML =
+        transactions.map(
+            function(t) {
+
+                var className =
+                    "withdrawal";
+
+
+                if (
+                    t.type === "deposit" ||
+                    t.type === "match_winnings" ||
+                    t.type === "stake_refund" ||
+                    t.type === "match_refund"
+                ) {
+
+                    className = "deposit";
+
+                }
+
+
+                if (
+                    t.type === "match_loss" ||
+                    t.type === "stake_lock"
+                ) {
+
+                    className = "match-loss";
+
+                }
+
+
+                var label =
+                    TYPE_LABELS[t.type] ||
+                    t.type;
+
+
+                var status =
+                    t.status &&
+                    t.status !== "completed"
+                        ? " (" + t.status + ")"
+                        : "";
+
+
+                return (
+                    '<div class="transaction">' +
+
+                    '<div class="' +
+                    className +
+                    '">' +
+                    GG.escapeHTML(
+                        label + status
+                    ) +
+                    '</div>' +
+
+                    '<div>' +
+                    GG.formatMoney(t.amount) +
+                    '</div>' +
+
+                    '<div>' +
+                    GG.escapeHTML(
+                        new Date(
+                            t.createdAt
+                        ).toLocaleString()
+                    ) +
+                    '</div>' +
+
+                    '</div>'
+                );
+
+            }
+        ).join("");
+
+}
+
+
+function normalizePhone(phone) {
+
+    phone =
+        String(phone || "")
+        .replace(/\s+/g, "")
+        .trim();
+
+
+    if (/^07\d{8}$/.test(phone)) {
+        return "254" + phone.slice(1);
+    }
+
+
+    if (/^011\d{7}$/.test(phone)) {
+        return "254" + phone.slice(1);
+    }
+
+
+    if (/^07420\d{5}$/.test(phone)) {
+        return "254" + phone.slice(1);
+    }
+
+
+    if (/^2547\d{8}$/.test(phone)) {
+        return phone;
+    }
+
+
+    if (/^25411\d{7}$/.test(phone)) {
+        return phone;
+    }
+
+
+    if (/^2547420\d{5}$/.test(phone)) {
+        return phone;
+    }
+
+
+    return null;
+
+}
+
+
+/*
+======================================================
+REAL M-PESA STK PUSH DEPOSIT
+======================================================
+*/
+
+async function deposit() {
+
+    var amountInput =
+        document.getElementById(
+            "depositAmount"
+        );
+
+
+    var phoneInput =
+        document.getElementById(
+            "depositPhone"
+        );
+
+
+    var button =
+        document.getElementById(
+            "depositButton"
+        );
+
+
+    var amount =
+        Number(amountInput.value);
+
+
+    var phone =
+        normalizePhone(
+            phoneInput.value
+        );
+
+
+    if (
+        !Number.isFinite(amount) ||
+        amount < 1
+    ) {
+
+        showMessage(
+            "depositMessage",
+            "Enter a valid deposit amount."
+        );
+
+        amountInput.focus();
+
+        return;
+
+    }
+
+
+    if (!phone) {
+
+        showMessage(
+            "depositMessage",
+            "Enter a valid Kenyan M-Pesa number."
+        );
+
+        phoneInput.focus();
+
+        return;
+
+    }
+
+
+    button.disabled = true;
+
+    button.textContent =
+        "Sending STK Push...";
+
+
+    showMessage(
+        "depositMessage",
+        "Sending payment request to your phone..."
+    );
+
+
+    try {
+
+        var result =
+            await GG.api(
+                "/api/mpesa/stk-push",
+                {
+                    method: "POST",
+
+                    body: {
+                        amount: Math.floor(amount),
+                        phone: phone
+                    }
+                }
+            );
+
+
+        if (!result.ok) {
+
+            showMessage(
+                "depositMessage",
+                result.data &&
+                result.data.message
+                    ? result.data.message
+                    : "M-Pesa payment request failed."
+            );
+
+            return;
+
+        }
+
+
+        showMessage(
+            "depositMessage",
+            "STK Push sent. Check your phone and enter your M-Pesa PIN to complete the deposit."
+        );
+
+
+        amountInput.value = "";
+
+
+        /*
+        The wallet is NOT credited here.
+        The backend credits it only after
+        Safaricom confirms the payment through
+        the callback.
+        */
+
+        var attempts = 0;
+
+        var refreshTimer =
+            setInterval(
+                async function() {
+
+                    attempts++;
+
+
+                    await loadWallet(true);
+
+                    await loadTransactions();
+
+
+                    if (attempts >= 12) {
+
+                        clearInterval(
+                            refreshTimer
+                        );
+
+                    }
+
+                },
+                5000
+            );
+
+
+    } catch (error) {
+
+        console.error(
+            "STK Push error:",
+            error
+        );
+
+
+        showMessage(
+            "depositMessage",
+            "Unable to connect to the M-Pesa service."
+        );
+
+    } finally {
+
+        button.disabled = false;
+
+        button.textContent =
+            "Deposit Funds";
+
+    }
+
+}
+
+
+/*
+======================================================
+WITHDRAWAL
+======================================================
+*/
+
+async function withdraw() {
+
+    var input =
+        document.getElementById(
+            "withdrawAmount"
+        );
+
+
+    var messageId =
+        "withdrawMessage";
+
+
+    var amount =
+        Number(input.value);
+
+
+    var phoneInput =
+        document.getElementById(
+            "withdrawPhone"
+        );
+
+
+    var phone =
+        phoneInput.value.trim();
+
+
+    if (
+        !amount ||
+        amount <= 0
+    ) {
+
+        showMessage(
+            messageId,
+            "Enter a valid amount."
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !normalizePhone(phone)
+    ) {
+
+        showMessage(
+            messageId,
+            "Enter a valid Kenyan M-Pesa number."
+        );
+
+        phoneInput.focus();
+
+        return;
+
+    }
+
+
+    showMessage(
+        messageId,
+        "Processing..."
+    );
+
+
+    var result =
+        await GG.api(
+            "/api/wallet/withdraw",
+            {
+                method: "POST",
+
+                body: {
+                    amount: amount,
+                    phone: phone
+                }
+            }
+        );
+
+
+    if (!result.ok) {
+
+        showMessage(
+            messageId,
+            result.data &&
+            result.data.message
+                ? result.data.message
+                : "Withdrawal request failed."
+        );
+
+        return;
+
+    }
+
+
+    showMessage(
+        messageId,
+        result.data.message ||
+        "Withdrawal request submitted."
+    );
+
+
+    input.value = "";
+
+    phoneInput.value = "";
+
+
+    if (result.data.wallet) {
+
+        currentBalance =
+            Number(
+                result.data.wallet.balance || 0
+            );
+
+        updateBalance(true);
+
+    }
+
+
+    loadTransactions();
+
+}
+
+
+loadWallet(false);
+
+loadTransactions();
+
+
+window.addEventListener(
+    "pageshow",
+    function() {
+
+        loadWallet(false);
+
+        loadTransactions();
+
+    }
+);
+
+
+document.addEventListener(
+    "visibilitychange",
+    function() {
+
+        if (!document.hidden) {
+
+            loadWallet(false);
+
+            loadTransactions();
+
+        }
+
+    }
+);
+
+</script>
+
+</body>
+
+</html>

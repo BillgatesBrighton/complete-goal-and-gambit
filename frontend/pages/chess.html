@@ -1,0 +1,1543 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Chess Dashboard</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #080808;
+    color: #ffffff;
+    min-height: 100vh;
+}
+
+a {
+    text-decoration: none;
+    color: inherit;
+}
+
+button {
+    font-family: inherit;
+}
+
+
+/* =========================================================
+   NAVBAR
+========================================================= */
+
+.navbar {
+    height: 74px;
+    padding: 0 6%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0b0b0b;
+    border-bottom: 1px solid #202020;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.brand {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+.brand span {
+    color: #f4bd20;
+}
+
+.back-button {
+    padding: 10px 16px;
+    border: 1px solid #292929;
+    border-radius: 10px;
+    color: #aaa;
+    transition: 0.2s;
+}
+
+.back-button:hover {
+    border-color: #f4bd20;
+    color: #ffffff;
+}
+
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+main {
+    width: min(1100px, 92%);
+    margin: auto;
+    padding: 42px 0 70px;
+}
+
+
+/* =========================================================
+   USER BOX
+========================================================= */
+
+.user-box {
+    background: linear-gradient(145deg, #171717, #0d0d0d);
+    border: 1px solid #292929;
+    border-radius: 20px;
+    padding: 25px 28px;
+    margin-bottom: 35px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+}
+
+.small-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #777;
+    text-transform: uppercase;
+}
+
+.username {
+    font-size: 27px;
+    font-weight: 800;
+    margin-top: 8px;
+}
+
+.balance-box {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid #292929;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+}
+
+.balance-amount {
+    font-size: 25px;
+    font-weight: 900;
+    color: #f4bd20;
+    margin-top: 5px;
+    transition: 0.25s;
+}
+
+.balance-amount.updated {
+    animation: balancePop 0.45s ease;
+}
+
+@keyframes balancePop {
+
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.12);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+
+}
+
+.wallet-button {
+    background: #f4bd20;
+    color: #090909;
+    padding: 11px 16px;
+    border-radius: 10px;
+    font-weight: 800;
+    transition: 0.2s;
+}
+
+.wallet-button:hover {
+    background: #ffd34f;
+    transform: translateY(-2px);
+}
+
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero-title {
+    margin-bottom: 30px;
+}
+
+.hero-title h1 {
+    font-size: 42px;
+    margin: 7px 0;
+}
+
+.hero-title p {
+    color: #888;
+    line-height: 1.6;
+}
+
+
+/* =========================================================
+   SECTIONS
+========================================================= */
+
+.section {
+    margin-top: 34px;
+}
+
+.section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    margin-bottom: 17px;
+}
+
+.section-head h2 {
+    font-size: 22px;
+    margin-top: 5px;
+}
+
+.section-head p {
+    color: #666;
+    font-size: 13px;
+}
+
+
+/* =========================================================
+   GRID
+========================================================= */
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 17px;
+}
+
+
+/* =========================================================
+   CARDS
+========================================================= */
+
+.card {
+    background: linear-gradient(145deg, #151515, #0d0d0d);
+    border: 1px solid #262626;
+    border-radius: 18px;
+    padding: 25px;
+    min-height: 290px;
+    transition: 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-4px);
+    border-color: #f4bd20;
+}
+
+.icon {
+    font-size: 30px;
+    margin-bottom: 18px;
+}
+
+.card h3 {
+    font-size: 21px;
+    margin-bottom: 8px;
+}
+
+.card p {
+    color: #888;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 14px;
+}
+
+
+/* =========================================================
+   STAKES
+========================================================= */
+
+.stakes-title {
+    color: #777;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+.stakes {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.stake {
+    background: #111;
+    border: 1px solid #303030;
+    color: #f4bd20;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+
+/* =========================================================
+   GAME INFO
+========================================================= */
+
+.game-info {
+    color: #999;
+    font-size: 12px;
+    line-height: 1.6;
+    margin-bottom: 15px;
+}
+
+.game-info strong {
+    color: #f4bd20;
+}
+
+
+/* =========================================================
+   BUTTON
+========================================================= */
+
+.game-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 11px 15px;
+    border: none;
+    border-radius: 10px;
+    background: #f4bd20;
+    color: #090909;
+    font-weight: 800;
+    font-size: 13px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.game-button:hover {
+    background: #ffd34f;
+}
+
+
+/* =========================================================
+   STATS
+========================================================= */
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+}
+
+.stat {
+    background: linear-gradient(145deg, #151515, #0d0d0d);
+    border: 1px solid #262626;
+    border-radius: 15px;
+    padding: 20px;
+}
+
+.stat-value {
+    font-size: 25px;
+    font-weight: 900;
+    margin-top: 8px;
+}
+
+.stat-label {
+    color: #777;
+    font-size: 12px;
+}
+
+.win {
+    color: #55d66f;
+    font-weight: 800;
+}
+
+.loss {
+    color: #ff5d5d;
+    font-weight: 800;
+}
+
+.draw {
+    color: #f4bd20;
+    font-weight: 800;
+}
+
+
+/* =========================================================
+   RECORDS
+========================================================= */
+
+.records {
+    background: linear-gradient(145deg, #151515, #0d0d0d);
+    border: 1px solid #262626;
+    border-radius: 18px;
+    overflow: hidden;
+}
+
+.record {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 10px;
+    padding: 15px 18px;
+    border-bottom: 1px solid #242424;
+    font-size: 13px;
+}
+
+.record:last-child {
+    border-bottom: none;
+}
+
+.record-header {
+    color: #777;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.empty-records {
+    padding: 25px;
+    color: #777;
+    text-align: center;
+}
+
+
+/* =========================================================
+   STATUS
+========================================================= */
+
+.status-message {
+    margin-top: 15px;
+    padding: 13px 15px;
+    border: 1px solid #292929;
+    background: #101010;
+    border-radius: 10px;
+    color: #777;
+    font-size: 13px;
+    line-height: 1.5;
+    display: none;
+}
+
+.status-message.show {
+    display: block;
+}
+
+
+/* =========================================================
+   FOOTER
+========================================================= */
+
+.footer {
+    margin-top: 45px;
+    text-align: center;
+    color: #555;
+    font-size: 12px;
+}
+
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 700px) {
+
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .hero-title h1 {
+        font-size: 34px;
+    }
+
+    .navbar {
+        padding: 0 4%;
+    }
+
+    .balance-box {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .record {
+        grid-template-columns: 1fr 1fr;
+    }
+
+}
+
+
+/* Chess dashboard background image */
+body {
+    background:
+        linear-gradient(rgba(5,5,5,0.78), rgba(5,5,5,0.9)),
+        url("../images/chess-logo.png") center / cover fixed no-repeat !important;
+}
+</style>
+
+</head>
+
+
+<body>
+
+
+<!-- =======================================================
+     NAVBAR
+======================================================= -->
+
+<header class="navbar">
+
+<a href="index.html" class="brand">
+GOAL<span>$</span>GAMBIT
+</a>
+
+<a href="chat.html" class="back-button" style="margin-right:8px;">CHAT</a>
+<a href="index.html" class="back-button">
+← Home
+</a>
+
+<a href="#" class="back-button" onclick="GG.logout();return false;">
+Log out
+</a>
+
+</header>
+
+
+<main>
+
+
+<!-- =======================================================
+     PLAYER ACCOUNT
+======================================================= -->
+
+<section class="user-box">
+
+<div class="small-label">
+Chess Player
+</div>
+
+<div class="username" id="username" data-gg="username">
+Player
+</div>
+
+<div class="small-label" style="margin-top:12px;">
+Chess Rating
+</div>
+
+<div class="username" style="font-size:26px;color:#f4bd20;" data-gg="rating">
+1200
+</div>
+
+<div class="balance-box">
+
+<div>
+
+<div class="small-label">
+Account Balance
+</div>
+
+<div class="balance-amount" id="balance" data-gg="balance">
+KES 0.00
+</div>
+
+</div>
+
+<a href="wallet.html" class="wallet-button">
+💳 Deposit / Withdraw
+</a>
+
+</div>
+
+<div id="accountStatus" class="status-message"></div>
+
+</section>
+
+
+<!-- =======================================================
+     HERO
+======================================================= -->
+
+<section class="hero-title">
+
+<div class="small-label">
+Chess Competition
+</div>
+
+<h1>
+Choose your battlefield.
+</h1>
+
+<p>
+Enter a chess tournament or play ranked chess.
+Choose your format and compete at your level.
+</p>
+
+</section>
+
+
+<!-- =======================================================
+     CHESS RECORD
+======================================================= -->
+
+<section class="section">
+
+<div class="section-head">
+
+<div>
+
+<div class="small-label">
+03
+</div>
+
+<h2>
+📊 Your Chess Record
+</h2>
+
+</div>
+
+</div>
+
+
+<div class="stats">
+
+<div class="stat">
+
+<div class="stat-label">
+Games Played
+</div>
+
+<div class="stat-value" id="gamesPlayed">
+0
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div class="stat-label">
+Wins
+</div>
+
+<div class="stat-value win" id="wins">
+0
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div class="stat-label">
+Draws
+</div>
+
+<div class="stat-value draw" id="draws">
+0
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div class="stat-label">
+Losses
+</div>
+
+<div class="stat-value loss" id="losses">
+0
+</div>
+
+</div>
+
+</div>
+
+</section>
+
+
+<!-- =======================================================
+     GAMES PLAYED
+======================================================= -->
+
+<section class="section">
+
+<div class="section-head">
+
+<div>
+
+<div class="small-label">
+04
+</div>
+
+<h2>
+📜 Games Played
+</h2>
+
+</div>
+
+</div>
+
+
+<div class="records" id="records">
+
+<div class="record record-header">
+
+<div>
+Game
+</div>
+
+<div>
+Mode
+</div>
+
+<div>
+Result
+</div>
+
+<div>
+Date
+</div>
+
+</div>
+
+<div class="empty-records">
+No games recorded yet.
+</div>
+
+</div>
+
+</section>
+
+
+<!-- =======================================================
+     CHESS TOURNAMENTS
+======================================================= -->
+
+<section class="section">
+
+<div class="section-head">
+
+<div>
+
+<div class="small-label">
+01
+</div>
+
+<h2>
+🏆 Chess Tournaments
+</h2>
+
+</div>
+
+<p>
+Fixed tournament time controls
+</p>
+
+</div>
+
+
+<div class="grid">
+
+
+<!-- =====================================================
+     RAPID TOURNAMENT
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+⚡
+</div>
+
+<h3>
+Rapid Tournament
+</h3>
+
+<p>
+Enter a structured rapid chess tournament
+and compete through multiple rounds.
+</p>
+
+<div class="stakes-title">
+Tournament Entry Levels
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Format:</strong>
+Swiss tournament
+
+<br>
+
+<strong>Time control:</strong>
+10 + 5 FIXED
+
+</div>
+
+<a href="rapid.html" class="game-button">
+
+Enter Rapid Tournament
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+<!-- =====================================================
+     BLITZ TOURNAMENT
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+🔥
+</div>
+
+<h3>
+Blitz Tournament
+</h3>
+
+<p>
+Fast-paced tournament chess where
+time pressure and accuracy matter.
+</p>
+
+<div class="stakes-title">
+Tournament Entry Levels
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Format:</strong>
+Swiss tournament
+
+<br>
+
+<strong>Time control:</strong>
+3 + 2 FIXED
+
+</div>
+
+<a href="blitz.html" class="game-button">
+
+Enter Blitz Tournament
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+<!-- =====================================================
+     BULLET TOURNAMENT
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+💨
+</div>
+
+<h3>
+Bullet Tournament
+</h3>
+
+<p>
+Ultra-fast tournament chess for players
+who can make decisions under extreme time pressure.
+</p>
+
+<div class="stakes-title">
+Tournament Entry Levels
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Format:</strong>
+Swiss tournament
+
+<br>
+
+<strong>Time control:</strong>
+1 + 1 FIXED
+
+</div>
+
+<a href="bullet.html" class="game-button">
+
+Enter Bullet Tournament
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+</div>
+
+</section>
+
+
+<!-- =======================================================
+     RANKED GAMES
+======================================================= -->
+
+<section class="section">
+
+<div class="section-head">
+
+<div>
+
+<div class="small-label">
+02
+</div>
+
+<h2>
+🎯 Ranked Games
+</h2>
+
+</div>
+
+<p>
+Choose your clock on the next page
+</p>
+
+</div>
+
+
+<div class="grid">
+
+
+<!-- =====================================================
+     RAPID RANKED
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+⚡
+</div>
+
+<h3>
+Rapid Ranked
+</h3>
+
+<p>
+Play ranked rapid games and build
+your competitive record.
+</p>
+
+<div class="stakes-title">
+Available Stakes
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Time controls:</strong>
+
+<br>
+
+10:00 • 10 + 5 • 10 + 15 • 15 + 10
+
+</div>
+
+<a href="rapid-ranked.html" class="game-button">
+
+Play Rapid
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+<!-- =====================================================
+     BLITZ RANKED
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+🔥
+</div>
+
+<h3>
+Blitz Ranked
+</h3>
+
+<p>
+Test your speed and decision-making
+in ranked blitz games.
+</p>
+
+<div class="stakes-title">
+Available Stakes
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Time controls:</strong>
+
+<br>
+
+3:00 • 3 + 2 • 5:00
+
+</div>
+
+<a href="blitz-ranked.html" class="game-button">
+
+Play Blitz
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+<!-- =====================================================
+     BULLET RANKED
+===================================================== -->
+
+<article class="card">
+
+<div class="icon">
+💨
+</div>
+
+<h3>
+Bullet Ranked
+</h3>
+
+<p>
+Challenge yourself in rapid-fire
+ranked bullet games.
+</p>
+
+<div class="stakes-title">
+Available Stakes
+</div>
+
+<div class="stakes">
+
+<div class="stake">
+KSh 20
+</div>
+
+<div class="stake">
+KSh 50
+</div>
+
+<div class="stake">
+KSh 100
+</div>
+
+</div>
+
+<div class="game-info">
+
+<strong>Time controls:</strong>
+
+<br>
+
+1:00 • 1 + 1 • 2:00 • 2 + 1
+
+</div>
+
+<a href="bullet-ranked.html" class="game-button">
+
+Play Bullet
+
+<span>
+→
+</span>
+
+</a>
+
+</article>
+
+
+</div>
+
+</section>
+
+
+<!-- =======================================================
+     FOOTER
+======================================================= -->
+
+<div class="footer">
+
+GOAL$GAMBIT • Chess Dashboard
+
+</div>
+
+
+</main>
+
+
+<script src="../js/api.js"></script>
+<script>
+
+/* =========================================================
+   GOAL$GAMBIT CHESS DASHBOARD
+========================================================= */
+
+
+/* =========================================================
+   ACCOUNT
+========================================================= */
+
+function getAccount() {
+
+    try {
+
+        return JSON.parse(
+            localStorage.getItem(
+                "goalGambitAccount"
+            ) || "null"
+        );
+
+    }
+
+    catch (error) {
+
+        return null;
+
+    }
+
+}
+
+
+function getSavedUsername() {
+
+    const account =
+        getAccount();
+
+
+    if (
+        account &&
+        account.username
+    ) {
+
+        return account.username;
+
+    }
+
+
+    const directUsername =
+        localStorage.getItem(
+            "goalGambitUsername"
+        );
+
+
+    if (directUsername) {
+
+        return directUsername;
+
+    }
+
+
+    return "Player";
+
+}
+
+
+const currentUsername =
+    getSavedUsername();
+
+
+document.getElementById(
+    "username"
+).textContent =
+    currentUsername;
+
+
+/* =========================================================
+   LOCAL BALANCE DISPLAY
+========================================================= */
+
+function getLocalBalance() {
+
+    const balance =
+        Number(
+            localStorage.getItem(
+                "goalGambitBalance"
+            ) || 0
+        );
+
+
+    return Number.isFinite(balance)
+        ? balance
+        : 0;
+
+}
+
+
+function renderBalance(
+    balance,
+    animate = false
+) {
+
+    const balanceElement =
+        document.getElementById(
+            "balance"
+        );
+
+
+    const safeBalance =
+        Number(balance);
+
+
+    balanceElement.textContent =
+        "KSh " +
+        (
+            Number.isFinite(
+                safeBalance
+            )
+                ? safeBalance
+                : 0
+        ).toLocaleString(
+            "en-KE",
+            {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }
+        );
+
+
+    if (animate) {
+
+        balanceElement.classList.remove(
+            "updated"
+        );
+
+
+        void balanceElement.offsetWidth;
+
+
+        balanceElement.classList.add(
+            "updated"
+        );
+
+    }
+
+}
+
+
+function updateBalance(
+    animate = false
+) {
+
+    renderBalance(
+        getLocalBalance(),
+        animate
+    );
+
+}
+
+
+/* =========================================================
+   SAFE TEXT
+========================================================= */
+
+function createCell(
+    text,
+    className = ""
+) {
+
+    const cell =
+        document.createElement(
+            "div"
+        );
+
+
+    if (className) {
+
+        cell.className =
+            className;
+
+    }
+
+
+    cell.textContent =
+        text == null
+            ? ""
+            : String(text);
+
+
+    return cell;
+
+}
+
+
+/* =========================================================
+   LOCAL GAME RECORDS
+========================================================= */
+
+function getLocalRecords() {
+
+    try {
+
+        const records =
+            JSON.parse(
+                localStorage.getItem(
+                    "goalGambitGameRecords"
+                ) || "[]"
+            );
+
+
+        return Array.isArray(records)
+            ? records
+            : [];
+
+    }
+
+    catch (error) {
+
+        return [];
+
+    }
+
+}
+
+
+function renderRecords() {
+
+    const container =
+        document.getElementById(
+            "records"
+        );
+
+
+    if (!container) {
+        return;
+    }
+
+
+    container.innerHTML = "";
+
+
+    const header =
+        document.createElement(
+            "div"
+        );
+
+
+    header.className =
+        "record record-header";
+
+
+    header.appendChild(
+        createCell("Game")
+    );
+
+    header.appendChild(
+        createCell("Mode")
+    );
+
+    header.appendChild(
+        createCell("Result")
+    );
+
+    header.appendChild(
+        createCell("Date")
+    );
+
+
+    container.appendChild(
+        header
+    );
+
+
+    const records =
+        getLocalRecords();
+
+
+    if (records.length === 0) {
+
+        const empty =
+            document.createElement(
+                "div"
+            );
+        empty.className = "empty-records";
+        empty.textContent = "No games recorded yet.";
+        container.appendChild(empty);
+        return;
+    }
+
+    records.slice(0, 50).forEach(function (record) {
+        const row = document.createElement("div");
+        row.className = "record";
+        row.appendChild(createCell(record.game || "Chess"));
+        row.appendChild(createCell(record.mode || "-"));
+        row.appendChild(createCell(record.result || "-"));
+        row.appendChild(createCell(
+            record.date ? new Date(record.date).toLocaleDateString() : "-"
+        ));
+        container.appendChild(row);
+    });
+}
+
+
+/* =========================================================
+   STATS
+========================================================= */
+
+function renderStats() {
+    const records = getLocalRecords();
+    const count = function (name) {
+        return records.filter(function (r) {
+            return String(r.result).toLowerCase() === name;
+        }).length;
+    };
+    const set = function (id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+    set("gamesPlayed", records.length);
+    set("wins", count("win"));
+    set("draws", count("draw"));
+    set("losses", count("loss"));
+}
+
+
+/* =========================================================
+   SERVER DATA (username, rating, balance, game history)
+========================================================= */
+
+async function loadServerRecords() {
+    const result = await GG.api("/api/chess/history/mine");
+    if (result.ok && Array.isArray(result.data.games)) {
+        localStorage.setItem(
+            "goalGambitGameRecords",
+            JSON.stringify(result.data.games)
+        );
+    }
+    renderRecords();
+    renderStats();
+}
+
+async function refreshDashboard() {
+    const user = await GG.initDashboard("chess");
+    if (!user) return;
+    updateBalance();
+    await loadServerRecords();
+}
+
+refreshDashboard();
+
+window.addEventListener("pageshow", function (event) {
+    if (event.persisted) refreshDashboard();
+});
+
+</script>
+
+</body>
+
+</html>

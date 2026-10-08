@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GOAL$GAMBIT | eFootball Tournaments</title>
+<style>
+:root{color-scheme:dark;--bg:#050505;--panel:#101010;--line:#292929;--gold:#f4bd20;--muted:#aaa;--green:#52c788}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:#fff;font-family:Arial,Helvetica,sans-serif;min-height:100vh}
+a{color:inherit}
+.navbar{min-height:68px;padding:12px max(18px,calc((100vw - 1120px)/2));display:flex;align-items:center;justify-content:space-between;gap:18px;background:#090909;border-bottom:1px solid #242424}
+.brand{font-weight:900;letter-spacing:.4px;text-decoration:none;color:var(--gold);white-space:nowrap}
+.nav-links{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.nav-links a{color:#bbb;text-decoration:none;font-size:14px}
+.nav-links a:hover,.nav-links a.active{color:var(--gold)}
+main{width:min(1120px,calc(100% - 36px));margin:42px auto 80px}
+.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:24px}
+.eyebrow{color:var(--gold);font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase;margin:0 0 9px}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 10px}
+.intro p{max-width:680px;color:var(--muted);line-height:1.6;margin:0}
+.wallet-link,.join{display:inline-flex;justify-content:center;align-items:center;border:0;border-radius:10px;background:var(--gold);color:#111;font-weight:900;text-decoration:none;padding:12px 16px;white-space:nowrap}
+.notice{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0;padding:14px 16px;border:1px solid #5b4712;border-radius:12px;background:#171205;color:#eee;line-height:1.5}
+.notice.error{border-color:#743b37;background:#21110f}
+.notice.success{border-color:#286a4c;background:#0e1d16}
+.notice a{color:var(--gold);font-weight:800;white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;display:flex;flex-direction:column;min-height:255px}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.tier{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1.2px;font-weight:900}
+.state{border:1px solid #315e45;color:var(--green);border-radius:999px;padding:5px 9px;font-size:11px;font-weight:800;white-space:nowrap}
+.state.closed{border-color:#555;color:#aaa}
+h2{font-size:22px;margin:12px 0 6px}
+.date{color:#888;font-size:13px;margin:0 0 18px}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:auto;padding:14px 0;border-top:1px solid #252525}
+.fact span{display:block;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:.7px;margin-bottom:5px}
+.fact strong{font-size:16px}
+.progress{height:7px;border-radius:10px;background:#262626;overflow:hidden;margin:0 0 8px}
+.progress span{display:block;height:100%;background:var(--gold);border-radius:10px}
+.capacity{display:flex;justify-content:space-between;color:#999;font-size:12px;margin-bottom:16px}
+.card-help{color:#aaa;font-size:13px;line-height:1.5;margin:0 0 14px}
+.join{width:100%;cursor:pointer}
+.join:hover:not(:disabled),.wallet-link:hover{filter:brightness(1.08)}
+.join:disabled{background:#292929;color:#aaa;cursor:default}
+.table-wrap{margin:14px 0 16px;border-top:1px solid #252525;padding-top:12px;overflow:auto}
+.table-wrap h3{font-size:12px;color:var(--gold);margin:0 0 8px}
+.standings{width:100%;border-collapse:collapse;font-size:12px}
+.standings th,.standings td{padding:7px 5px;text-align:left;border-bottom:1px solid #242424;color:#bbb}
+.standings th{color:#777;font-size:10px;text-transform:uppercase}
+.standings td:last-child,.standings th:last-child{text-align:right;color:#fff}
+.standings .you td{color:var(--gold)}
+.loading,.empty{padding:28px;border:1px dashed #383838;border-radius:14px;color:#aaa;text-align:center;line-height:1.6}
+.empty a{color:var(--gold)}
+@media(max-width:720px){.navbar{align-items:flex-start;flex-direction:column}.nav-links{gap:12px}.intro{align-items:flex-start;flex-direction:column}.wallet-link{width:100%}.notice{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<header class="navbar">
+  <a id="dashboardLink" class="brand" href="dashboard.html">GOAL$GAMBIT</a>
+  <nav class="nav-links" aria-label="Competition navigation">
+    <a href="ranked.html">Ranked</a>
+    <a href="leagues.html">Leagues</a>
+    <a class="active" href="tournaments.html" aria-current="page">Tournaments</a>
+    <a href="chat.html">Chat</a>
+    <a href="wallet.html">Wallet</a>
+  </nav>
+</header>
+<main>
+  <section class="intro">
+    <div>
+      <p class="eyebrow">eFootball competition</p>
+      <h1>Choose a tournament</h1>
+      <p>See the entry fee and available places before you join. Entry fees are moved to your locked wallet balance when your place is confirmed.</p>
+    </div>
+    <a class="wallet-link" href="wallet.html?returnTo=tournaments.html">Open Wallet</a>
+  </section>
+  <div id="notice" class="notice" role="status" aria-live="polite" style="display:none"></div>
+  <div id="loading" class="loading">Loading available tournaments...</div>
+  <section id="cards" class="grid" aria-label="Available tournaments"></section>
+  <div id="empty" class="empty" style="display:none">There are no tournaments to show right now. Try <a href="ranked.html">ranked matchmaking</a> or check back later.</div>
+</main>
+<script src="../js/api.js"></script>
+<script>
+"use strict";
+if (GG.requireLogin()) initializeTournamentPage();
+
+const notice = document.getElementById("notice");
+const cards = document.getElementById("cards");
+const loading = document.getElementById("loading");
+const empty = document.getElementById("empty");
+
+function escape(value) {
+  return GG.escapeHTML(value);
+}
+
+function showNotice(message, kind, offerWallet) {
+  notice.className = "notice" + (kind ? " " + kind : "");
+  notice.innerHTML = "<span>" + escape(message) + "</span>" +
+    (offerWallet ? '<a href="wallet.html?returnTo=tournaments.html">Open Wallet</a>' : "");
+  notice.style.display = "flex";
+}
+
+function hideNotice() {
+  notice.style.display = "none";
+  notice.textContent = "";
+}
+
+function formatDate(value) {
+  if (!value) return "Start time to be announced";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Start time to be announced";
+  return "Starts " + date.toLocaleString();
+}
+
+function tournamentCard(tournament) {
+  const id = Number(tournament.id);
+  const players = Math.max(0, Number(tournament.players) || 0);
+  const capacity = Math.max(1, Number(tournament.max_players) || 16);
+  const remaining = Math.max(0, capacity - players);
+  const joined = tournament.joined === true;
+  const isOpen = String(tournament.status || "").toLowerCase() === "open";
+  const canJoin = isOpen && remaining > 0 && !joined;
+  const fee = Number(tournament.entry_fee) || 0;
+  const feeLabel = fee > 0 ? "KSh " + fee.toLocaleString("en-KE") : "Free";
+  const progress = Math.min(100, Math.round(players / capacity * 100));
+  const badge = joined ? "Entered" : !isOpen ? "Closed" : remaining === 0 ? "Full" : "Open";
+  const badgeClass = joined || canJoin ? "state" : "state closed";
+  const buttonText = joined ? "Find tournament match" : canJoin ? "Join tournament" : remaining === 0 && isOpen ? "Tournament full" : "Registration closed";
+  const feeText = fee > 0
+    ? "The entry fee is locked from your available wallet balance when you join."
+    : "Your entry is saved to your account when you join.";
+  return '<article class="card" data-tournament-card="' + id + '">' +
+    '<div class="card-top"><span class="tier">' + escape(tournament.tier || "eFootball") + '</span>' +
+    '<span class="' + badgeClass + '">' + escape(badge) + '</span></div>' +
+    '<h2>' + escape(tournament.name || "Tournament") + '</h2>' +
+    '<p class="date">' + escape(formatDate(tournament.starts_at)) + '</p>' +
+    '<div class="facts"><div class="fact"><span>Entry fee</span><strong>' + escape(feeLabel) + '</strong></div>' +
+    '<div class="fact"><span>Places left</span><strong>' + remaining + ' of ' + capacity + '</strong></div></div>' +
+    '<div class="progress" aria-label="' + players + ' of ' + capacity + ' places filled"><span data-tournament-progress style="width:' + progress + '%"></span></div>' +
+    '<div class="capacity"><span data-tournament-count>' + players + ' entered</span><span>' + capacity + ' places</span></div>' +
+    '<p class="card-help">' + (joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
+    '<div class="table-wrap"><h3>LIVE STANDINGS</h3><table class="standings"><thead><tr><th>#</th><th>Player</th><th>Pts</th></tr></thead><tbody data-standings-for="' + id + '"><tr><td colspan="3">Loading current standings…</td></tr></tbody></table></div>' +
+    '<button class="join" type="button" ' + (joined ? 'data-play-id="' + id + '"' : 'data-join-id="' + id + '"') + (joined ? (isOpen ? "" : " disabled") : (canJoin ? "" : " disabled")) + '>' + escape(joined && !isOpen ? "Tournament is closed" : buttonText) + '</button>' +
+    '</article>';
+}
+
+async function loadTournaments(preserveNotice) {
+  if (!preserveNotice) hideNotice();
+  loading.style.display = "block";
+  empty.style.display = "none";
+  cards.innerHTML = "";
+
+  const result = await GG.api("/api/tournaments");
+  loading.style.display = "none";
+
+  if (!result.ok) {
+    showNotice(result.data.message || "Could not load tournaments. Please try again.", "error", false);
+    return;
+  }
+
+  const tournaments = Array.isArray(result.data.tournaments) ? result.data.tournaments : [];
+  if (!tournaments.length) {
+    empty.style.display = "block";
+    return;
+  }
+
+  cards.innerHTML = tournaments.map(tournamentCard).join("");
+  cards.querySelectorAll("[data-join-id]").forEach(function(button) {
+    button.addEventListener("click", function() {
+      joinTournament(button.dataset.joinId, button);
+    });
+  });
+  cards.querySelectorAll("[data-play-id]").forEach(function(button) {
+    button.addEventListener("click", function() {
+      startTournamentMatch(button.dataset.playId, button);
+    });
+  });
+  refreshTournamentStandings();
+}
+
+async function refreshTournamentStandings() {
+  if (document.hidden) return;
+  const bodies = Array.from(cards.querySelectorAll("[data-standings-for]"));
+  const responses = await Promise.all(bodies.map(function(body) {
+    return GG.api("/api/tournaments/" + encodeURIComponent(body.dataset.standingsFor) + "/status", {noRedirect:true});
+  }));
+  responses.forEach(function(response, index) {
+    const body = bodies[index];
+    if (!body.isConnected) return;
+    if (!response.ok) {
+      body.innerHTML = '<tr><td colspan="3">Standings temporarily unavailable.</td></tr>';
+      return;
+    }
+    const tournament = response.data.tournament || {};
+    const card = body.closest("[data-tournament-card]");
+    if (card) {
+      const players = Number(tournament.players || 0);
+      const capacity = Math.max(1, Number(tournament.max_players || 16));
+      const progress = card.querySelector("[data-tournament-progress]");
+      const count = card.querySelector("[data-tournament-count]");
+      if (progress) progress.style.width = Math.min(100, Math.round(players / capacity * 100)) + "%";
+      if (count) count.textContent = players + " entered";
+    }
+    const rows = Array.isArray(response.data.standings) ? response.data.standings : [];
+    const me = String(localStorage.getItem("goalGambitUsername") || "").toLowerCase();
+    body.innerHTML = rows.length ? rows.map(function(row, rank) {
+      return '<tr class="' + (me && String(row.username).toLowerCase() === me ? "you" : "") + '"><td>' + (rank + 1) + '</td><td>' + escape(row.username) + '</td><td>' + Number(row.points || 0) + '</td></tr>';
+    }).join("") : '<tr><td colspan="3">No verified results yet.</td></tr>';
+  });
+}
+
+async function joinTournament(id, button) {
+  button.disabled = true;
+  button.textContent = "Joining...";
+  hideNotice();
+
+  const result = await GG.api("/api/tournaments/" + encodeURIComponent(id) + "/join", {
+    method: "POST",
+    body: {}
+  });
+
+  if (!result.ok) {
+    const message = result.data.message || "Could not join this tournament.";
+    const needsWallet = /insufficient.*balance/i.test(message);
+    showNotice(message, "error", needsWallet);
+    await loadTournaments(true);
+    return;
+  }
+
+  await loadTournaments(true);
+  showNotice(result.data.message || "Your tournament entry is confirmed.", "success", false);
+}
+
+async function startTournamentMatch(id, button) {
+  button.disabled = true;
+  button.textContent = "Finding opponent…";
+  hideNotice();
+  const result = await GG.api("/api/efootball/matches", {
+    method: "POST",
+    body: { mode: "tournament", tournament_id: Number(id), stake: 0 }
+  });
+  if (!result.ok || !result.data.match) {
+    showNotice(result.data.message || "Could not start tournament matchmaking.", "error", false);
+    await loadTournaments(true);
+    return;
+  }
+  location.href = "match-hub.html?fixture=" + encodeURIComponent(result.data.match.id) +
+    "&tournament=" + encodeURIComponent(id);
+}
+
+async function initializeTournamentPage() {
+  const profile = await GG.api("/api/me");
+  if (!profile.ok || !profile.data.user) {
+    loading.style.display = "none";
+    showNotice(profile.data.message || "Could not load your account. Please try again.", "error", false);
+    return;
+  }
+
+  const game = String(profile.data.user.game || "").toLowerCase();
+  if (game === "chess") {
+    location.replace("chess.html");
+    return;
+  }
+  document.getElementById("dashboardLink").href = GG.gameHome(game);
+  await loadTournaments(false);
+}
+
+setInterval(refreshTournamentStandings, 5000);
+document.addEventListener("visibilitychange", function() {
+  if (!document.hidden) refreshTournamentStandings();
+});
+</script>
+</body>
+</html>

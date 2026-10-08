@@ -1,0 +1,904 @@
+/* =========================================
+   GOAL$GAMBIT
+   PROFESSIONAL CHESS BOARD
+   ========================================= */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    background: #0d0d0d;
+}
+
+body {
+    min-height: 100vh;
+    background: #0d0d0d;
+    color: #f5f5f5;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+
+/* =========================================
+   TOP BAR
+   ========================================= */
+
+.topbar {
+    height: 68px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 0 24px;
+
+    background: #151515;
+    border-bottom: 1px solid #292929;
+}
+
+.brand {
+    color: #ffffff;
+    text-decoration: none;
+
+    font-size: 23px;
+    font-weight: 900;
+    letter-spacing: 1px;
+}
+
+.brand span {
+    color: #d4af37;
+}
+
+.game-heading {
+    text-align: center;
+}
+
+#gameMode {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+#gameStatus {
+    display: block;
+
+    margin-top: 4px;
+
+    color: #999999;
+
+    font-size: 12px;
+}
+
+.top-button {
+    min-width: 70px;
+    min-height: 42px;
+
+    padding: 8px 14px;
+
+    border: 1px solid #3a3a3a;
+    border-radius: 7px;
+
+    background: #222222;
+    color: #ffffff;
+
+    font-weight: 700;
+
+    cursor: pointer;
+}
+
+.top-button:hover {
+    background: #303030;
+}
+
+
+/* =========================================
+   MAIN LAYOUT
+   ========================================= */
+
+.game-layout {
+    width: min(1250px, 96%);
+
+    margin: 25px auto;
+
+    display: grid;
+
+    grid-template-columns:
+        minmax(400px, 760px)
+        330px;
+
+    gap: 24px;
+
+    align-items: start;
+}
+
+
+/* =========================================
+   CHESS SECTION
+   ========================================= */
+
+.chess-section {
+    min-width: 0;
+}
+
+
+/* =========================================
+   PLAYER BAR
+   ========================================= */
+
+.player-bar {
+    min-height: 68px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 9px 13px;
+
+    margin-bottom: 7px;
+
+    background: #181818;
+
+    border: 1px solid #2b2b2b;
+
+    border-radius: 8px;
+}
+
+.player-info {
+    display: flex;
+    align-items: center;
+
+    gap: 11px;
+}
+
+.player-avatar {
+    width: 42px;
+    height: 42px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 50%;
+
+    font-size: 25px;
+}
+
+.black-avatar {
+    background: #292929;
+    color: #ffffff;
+}
+
+.white-avatar {
+    background: #eeeeee;
+    color: #111111;
+}
+
+.player-name {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.player-rating {
+    margin-top: 4px;
+
+    color: #888888;
+
+    font-size: 12px;
+}
+
+
+/* =========================================
+   CLOCK
+   ========================================= */
+
+.clock {
+    min-width: 108px;
+
+    padding: 9px 12px;
+
+    border: 1px solid #3a3a3a;
+    border-radius: 7px;
+
+    background: #080808;
+
+    color: #eeeeee;
+
+    text-align: center;
+
+    font-family: "Courier New", monospace;
+
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.clock.active {
+    border-color: #d4af37;
+    color: #d4af37;
+}
+
+
+/* =========================================
+   BOARD
+   ========================================= */
+
+.board-wrapper {
+    width: 100%;
+}
+
+.chess-board {
+    width: 100%;
+
+    aspect-ratio: 1 / 1;
+
+    display: grid;
+
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+
+    overflow: hidden;
+
+    border: 5px solid #090909;
+
+    border-radius: 3px;
+
+    background: #b58863;
+
+    box-shadow:
+        0 12px 35px rgba(0, 0, 0, 0.45);
+}
+
+
+/* =========================================
+   SQUARES
+   ========================================= */
+
+.square {
+    position: relative;
+
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    cursor: pointer;
+
+    user-select: none;
+}
+
+.square.light {
+    background: #f0d9b5;
+}
+
+.square.dark {
+    background: #b58863;
+}
+
+
+/* =========================================
+   PIECES
+   ========================================= */
+
+.piece {
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    position: relative;
+    z-index: 2;
+
+    font-family:
+        "DejaVu Sans",
+        "Segoe UI Symbol",
+        "Noto Sans Symbols 2",
+        sans-serif;
+
+    font-size: clamp(30px, 7vw, 68px);
+
+    line-height: 1;
+
+    cursor: grab;
+}
+
+.white-piece {
+    color: #ffffff;
+
+    text-shadow:
+        1px 1px 1px #111111,
+        -1px -1px 1px #111111,
+        1px -1px 1px #111111,
+        -1px 1px 1px #111111;
+}
+
+.black-piece {
+    color: #111111;
+
+    text-shadow:
+        1px 1px 1px #eeeeee,
+        -1px -1px 1px #eeeeee,
+        1px -1px 1px #eeeeee,
+        -1px 1px 1px #eeeeee;
+}
+
+
+/* =========================================
+   SELECTED SQUARE
+   ========================================= */
+
+.square.selected {
+    box-shadow:
+        inset 0 0 0 4px #d4af37;
+}
+
+
+/* =========================================
+   LAST MOVE
+   ========================================= */
+
+.square.last-move {
+    box-shadow:
+        inset 0 0 0 999px rgba(212, 175, 55, 0.20);
+}
+
+
+/* =========================================
+   MOVE DOT
+   ========================================= */
+
+.square.possible-move::after {
+    content: "";
+
+    position: absolute;
+
+    width: 22%;
+    aspect-ratio: 1 / 1;
+
+    border-radius: 50%;
+
+    background: rgba(20, 20, 20, 0.35);
+
+    z-index: 1;
+}
+
+
+/* =========================================
+   GAME CONTROLS
+   ========================================= */
+
+.game-controls {
+    display: flex;
+
+    gap: 9px;
+
+    margin-top: 10px;
+}
+
+.control-button {
+    flex: 1;
+
+    min-height: 44px;
+
+    border: 1px solid #353535;
+    border-radius: 7px;
+
+    background: #202020;
+
+    color: #ffffff;
+
+    font-size: 14px;
+    font-weight: 700;
+
+    cursor: pointer;
+}
+
+.control-button:hover {
+    background: #2b2b2b;
+}
+
+.control-button.resign {
+    background: #351919;
+    border-color: #5b2929;
+}
+
+.control-button.resign:hover {
+    background: #482020;
+}
+
+
+/* =========================================
+   TOOLBOX
+   ========================================= */
+
+.toolbox {
+    display: flex;
+    flex-direction: column;
+
+    gap: 14px;
+}
+
+.tool-card {
+    background: #171717;
+
+    border: 1px solid #2c2c2c;
+
+    border-radius: 9px;
+
+    padding: 16px;
+}
+
+.card-title {
+    padding-bottom: 11px;
+
+    margin-bottom: 5px;
+
+    border-bottom: 1px solid #292929;
+
+    color: #d4af37;
+
+    font-size: 12px;
+    font-weight: 800;
+
+    letter-spacing: 1.2px;
+}
+
+
+/* =========================================
+   MATCH INFORMATION
+   ========================================= */
+
+.info-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    min-height: 40px;
+
+    border-bottom: 1px solid #252525;
+
+    font-size: 13px;
+}
+
+.info-item:last-child {
+    border-bottom: none;
+}
+
+.info-item span {
+    color: #888888;
+}
+
+.info-item strong {
+    color: #eeeeee;
+}
+
+
+/* =========================================
+   SIDE PLAYERS
+   ========================================= */
+
+.side-player {
+    display: flex;
+    align-items: center;
+
+    gap: 10px;
+
+    padding: 10px 0;
+
+    border-bottom: 1px solid #252525;
+}
+
+.side-player:last-child {
+    border-bottom: none;
+}
+
+.mini-avatar {
+    width: 36px;
+    height: 36px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 50%;
+
+    font-size: 21px;
+}
+
+.side-player-text {
+    display: flex;
+    flex-direction: column;
+
+    gap: 3px;
+
+    min-width: 0;
+}
+
+.side-player-text strong {
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+
+    font-size: 13px;
+}
+
+.side-player-text span {
+    color: #777777;
+
+    font-size: 11px;
+}
+
+
+/* =========================================
+   MOVE LIST
+   ========================================= */
+
+.moves-card {
+    min-height: 230px;
+}
+
+.move-list {
+    max-height: 250px;
+
+    overflow-y: auto;
+}
+
+.empty-moves {
+    padding: 30px 5px;
+
+    text-align: center;
+
+    color: #666666;
+
+    font-size: 13px;
+}
+
+.move-row {
+    display: grid;
+
+    grid-template-columns: 35px 1fr 1fr;
+
+    padding: 8px 4px;
+
+    border-bottom: 1px solid #242424;
+
+    font-size: 13px;
+}
+
+.move-number {
+    color: #666666;
+}
+
+.move-white,
+.move-black {
+    color: #eeeeee;
+}
+
+
+/* =========================================
+   DRAW PANEL
+   ========================================= */
+
+.draw-panel {
+    padding: 14px;
+
+    border: 1px solid #806d2d;
+
+    border-radius: 8px;
+
+    background: #211d0d;
+
+    text-align: center;
+}
+
+.draw-message {
+    margin-bottom: 12px;
+
+    color: #dddddd;
+
+    font-size: 13px;
+}
+
+.draw-actions {
+    display: flex;
+
+    gap: 8px;
+}
+
+.draw-actions button {
+    flex: 1;
+
+    min-height: 42px;
+
+    border: none;
+    border-radius: 6px;
+
+    cursor: pointer;
+
+    font-weight: 700;
+}
+
+#acceptDrawButton {
+    background: #d4af37;
+    color: #111111;
+}
+
+#declineDrawButton {
+    background: #333333;
+    color: #ffffff;
+}
+
+
+/* =========================================
+   HIDDEN
+   ========================================= */
+
+.hidden {
+    display: none !important;
+}
+
+
+/* =========================================
+   GAME OVER MODAL
+   ========================================= */
+
+.modal {
+    position: fixed;
+
+    inset: 0;
+
+    z-index: 1000;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 20px;
+
+    background: rgba(0, 0, 0, 0.78);
+}
+
+.modal-box {
+    width: min(420px, 100%);
+
+    padding: 30px;
+
+    border: 1px solid #393939;
+    border-radius: 12px;
+
+    background: #181818;
+
+    text-align: center;
+}
+
+.modal-piece {
+    margin-bottom: 10px;
+
+    color: #d4af37;
+
+    font-size: 52px;
+}
+
+.modal-box h2 {
+    margin-bottom: 9px;
+
+    font-size: 24px;
+}
+
+.modal-box p {
+    margin-bottom: 22px;
+
+    color: #999999;
+
+    font-size: 14px;
+}
+
+.dashboard-button {
+    width: 100%;
+
+    min-height: 45px;
+
+    border: none;
+    border-radius: 7px;
+
+    background: #d4af37;
+
+    color: #111111;
+
+    font-size: 14px;
+    font-weight: 800;
+
+    cursor: pointer;
+}
+
+
+/* =========================================
+   MOBILE
+   ========================================= */
+
+@media (max-width: 900px) {
+
+    .game-layout {
+        grid-template-columns: 1fr;
+
+        width: min(700px, 96%);
+    }
+
+    .toolbox {
+        display: grid;
+
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .moves-card,
+    .draw-panel {
+        grid-column: 1 / -1;
+    }
+}
+
+
+@media (max-width: 600px) {
+
+    .topbar {
+        height: 60px;
+
+        padding: 0 10px;
+    }
+
+    .brand {
+        font-size: 17px;
+    }
+
+    #gameMode {
+        font-size: 12px;
+    }
+
+    #gameStatus {
+        font-size: 10px;
+    }
+
+    .top-button {
+        min-width: 55px;
+        min-height: 38px;
+
+        padding: 6px 9px;
+
+        font-size: 11px;
+    }
+
+    .game-layout {
+        width: 100%;
+
+        margin: 8px auto;
+
+        gap: 10px;
+    }
+
+    .player-bar {
+        border-radius: 0;
+
+        padding: 8px 10px;
+
+        min-height: 61px;
+    }
+
+    .player-avatar {
+        width: 36px;
+        height: 36px;
+
+        font-size: 21px;
+    }
+
+    .player-name {
+        font-size: 13px;
+    }
+
+    .player-rating {
+        font-size: 10px;
+    }
+
+    .clock {
+        min-width: 85px;
+
+        padding: 7px 8px;
+
+        font-size: 20px;
+    }
+
+    .chess-board {
+        border-width: 3px;
+
+        border-radius: 0;
+    }
+
+    .piece {
+        font-size: clamp(27px, 10vw, 50px);
+    }
+
+    .game-controls {
+        padding: 0 8px;
+    }
+
+    .toolbox {
+        display: flex;
+
+        width: 94%;
+
+        margin: 0 auto;
+    }
+}
+
+/* Live chess feedback */
+.chess-board {
+    border: 7px solid #15120b;
+    border-radius: 12px;
+    box-shadow: 0 18px 45px #0009, 0 0 0 1px #d4af3740;
+    background: #b58863;
+}
+
+.square {
+    border: 0;
+    padding: 0;
+    transition: filter .12s ease, box-shadow .12s ease, background-color .12s ease;
+}
+
+.square:hover { filter: brightness(1.08); }
+.square:focus-visible { outline: 3px solid #f4bd20; outline-offset: -4px; z-index: 4; }
+.piece-glyph {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    font-family: "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+    font-size: clamp(30px, 7vw, 68px);
+    line-height: 1;
+    filter: drop-shadow(0 2px 1px #0008);
+    transition: transform .12s ease;
+}
+.square:hover .piece-glyph { transform: translateY(-2px); }
+.white-piece { color: #fff; text-shadow: 1px 1px 2px #111, -1px -1px 1px #111; }
+.black-piece { color: #181818; text-shadow: 1px 1px 1px #f4e2c5, -1px -1px 1px #f4e2c5; }
+.square.possible-capture { box-shadow: inset 0 0 0 5px #b32626aa; }
+.square.in-check { background: #db625c !important; box-shadow: inset 0 0 0 4px #8e1e1a; }
+.square.last-move { box-shadow: inset 0 0 0 999px #f4bd2033; }
+.square.selected { box-shadow: inset 0 0 0 4px #f4bd20, inset 0 0 0 999px #f4bd2033; }
+.coord-rank,.coord-file {
+    position: absolute;
+    z-index: 3;
+    color: #111b;
+    font: 800 clamp(8px,1vw,11px)/1 Arial,sans-serif;
+    pointer-events: none;
+}
+.coord-rank { top: 3px; left: 4px; }
+.coord-file { bottom: 3px; right: 4px; }
+.square.dark .coord-rank,.square.dark .coord-file { color: #fffC; }
+.status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 44px;
+    margin: 9px 0 0;
+    padding: 9px 12px;
+    border: 1px solid #34301e;
+    border-radius: 10px;
+    background: linear-gradient(100deg,#1d1a10,#151515);
+    color: #e8d796;
+    font-size: 13px;
+}
+.status-bar.waiting { color: #c6c6c6; border-color: #333; }
+.status-bar.ready { border-color: #8d711e; }
+.clock.active { box-shadow: 0 0 18px #d4af3730; }
+.clock.critical { color: #ff7777; border-color: #d34d4d; animation: clockPulse .7s infinite alternate; }
+.control-button:disabled { opacity: .45; cursor: not-allowed; }
+.move-row { grid-template-columns: 35px 1fr 1fr; border-radius: 6px; }
+.move-row:nth-child(even) { background: #ffffff08; }
+.move-white,.move-black { padding-left: 6px; }
+@keyframes clockPulse { to { background:#301313; box-shadow:0 0 18px #ff3d3d44; } }

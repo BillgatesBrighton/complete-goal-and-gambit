@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#080808"><title>GOAL$GAMBIT | Result Reviews</title>
+<style>
+:root{color-scheme:dark;--gold:#f4bd20;--line:#2d2d2d;--muted:#aaa;--red:#ff7777;--green:#81d8a3}*{box-sizing:border-box}body{margin:0;background:#080808;color:#f8f8f8;font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}.wrap{max-width:1200px;margin:auto;padding:18px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}.top h1{font-size:clamp(21px,4vw,30px);margin:0}a{color:var(--gold);text-decoration:none}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;background:#111;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}.notice{color:var(--muted)}.btn{border:1px solid #484848;background:#191919;color:#fff;padding:9px 12px;border-radius:9px;cursor:pointer}.btn.gold{background:var(--gold);border:0;color:#111;font-weight:850}.btn.red{border-color:#743737;color:#ff9b9b}.btn:disabled{opacity:.45;cursor:not-allowed}.cases{display:grid;gap:14px}.case{background:#111;border:1px solid var(--line);border-radius:16px;padding:16px}.case h2{margin:0;font-size:19px}.case-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.tag{color:#e9cd76;border:1px solid #75601e;background:#201a0a;padding:4px 9px;border-radius:999px;font-size:11px}.status{color:#bbb}.meta{color:var(--muted);font-size:13px;margin:8px 0}.details{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:8px;margin:12px 0}.detail{background:#090909;border:1px solid #292929;border-radius:9px;padding:9px;font-size:12px;color:#999}.detail strong{display:block;color:#eee;margin-top:4px;overflow-wrap:anywhere}.evidence{display:grid;grid-template-columns:minmax(260px,1fr) minmax(250px,1fr);gap:14px;align-items:start;margin-top:13px}.shot{width:100%;max-height:390px;object-fit:contain;display:block;background:#080808;border:1px solid #292929;border-radius:10px}.ocr{padding:12px;background:#090909;border:1px solid #292929;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;color:#ccc;font-size:12px}.form{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}.form label{color:#aaa;font-size:12px}.form input,.form textarea{display:block;width:100%;background:#090909;color:#fff;border:1px solid #393939;border-radius:9px;padding:10px;margin-top:4px}.form textarea{grid-column:1/-1;min-height:65px;resize:vertical}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.empty{padding:32px;text-align:center;color:#999;border:1px dashed #393939;border-radius:14px}.error{color:var(--red)}.success{color:var(--green)}@media(max-width:760px){.evidence{grid-template-columns:1fr}.details{grid-template-columns:1fr 1fr}.toolbar{align-items:flex-start;flex-direction:column}}@media(max-width:420px){.form{grid-template-columns:1fr}.form textarea{grid-column:auto}}
+</style></head><body><main class="wrap"><header class="top"><h1>⚖ Result Reviews</h1><a href="admin.html">← Admin Dashboard</a></header>
+<div class="toolbar"><div><strong>Match evidence</strong><div id="notice" class="notice" role="status" aria-live="polite">Loading review cases…</div></div><button id="reload" class="btn" type="button">Refresh</button></div>
+<section id="cases" class="cases" aria-live="polite"></section></main>
+<script src="../js/api.js"></script><script>
+(function(){
+"use strict";if(!GG.requireLogin())return;
+var $=function(id){return document.getElementById(id)},esc=GG.escapeHTML,objectUrls=[];
+function note(text,kind){$("notice").textContent=text;$("notice").className="notice"+(kind?" "+kind:"")}
+function fmtScore(a,b){return a==null||b==null?"—":String(a)+" - "+String(b)}
+function renderCase(c){
+ var pending=["pending_screenshot","submitted","review_required","rejected"].indexOf(c.status)!==-1&&c.match_status!=="completed";
+ var title="Match #"+c.match_id+" · "+(c.mode||"eFootball");
+ var sub=esc(c.creator_username||"Creator")+" vs "+esc(c.opponent_username||"Opponent");
+ var html='<article class="case" data-case="'+Number(c.id)+'"><div class="case-head"><div><h2>'+esc(title)+'</h2><div class="meta">'+sub+(c.league?" · "+esc(c.league)+" league":"")+'</div></div><span class="tag">'+esc(c.status.replace(/_/g," "))+'</span></div>';
+ html+='<div class="details"><div class="detail">Match state<strong>'+esc(c.match_status)+'</strong></div><div class="detail">Creator report<strong>'+esc(fmtScore(c.creator_submitted_score,c.creator_submitted_opponent_score))+'</strong></div><div class="detail">Opponent report<strong>'+esc(fmtScore(c.opponent_submitted_score,c.opponent_submitted_opponent_score))+'</strong></div><div class="detail">OCR check<strong>'+esc(c.score_check||"not run")+'</strong></div></div>';
+ html+='<div class="evidence"><div>'+(c.screenshot_available?'<img class="shot" data-image="'+Number(c.id)+'" alt="Private match screenshot loading">':'<div class="empty">No screenshot uploaded yet.</div>')+'</div><div><strong>OCR text and score candidates</strong><pre class="ocr">'+esc(c.screenshot_ocr_text||"No OCR result.")+'</pre><div class="meta">Detected: '+esc(JSON.stringify(c.detected_score_candidates||[]))+'</div></div></div>';
+ if(pending&&c.screenshot_available){
+  html+='<div class="form"><label>Creator score<input inputmode="numeric" type="number" min="0" max="99" data-creator-score></label><label>Opponent score<input inputmode="numeric" type="number" min="0" max="99" data-opponent-score></label><label style="grid-column:1/-1">Admin note<textarea maxlength="1000" data-note placeholder="What the screenshot shows, including any name or orientation differences"></textarea></label></div><div class="actions"><button type="button" class="btn gold" data-resolve="'+Number(c.id)+'">Resolve from screenshot</button><button type="button" class="btn red" data-reject="'+Number(c.id)+'">Reject evidence · keep funds on hold</button></div>';
+ } else if(c.review_note) html+='<div class="meta">Review note: '+esc(c.review_note)+'</div>';
+ html+='</article>';return html;
+}
+async function load(){
+ note("Loading review cases…");
+ objectUrls.forEach(URL.revokeObjectURL);objectUrls=[];
+ var r=await GG.api("/api/admin/result-verifications");
+ if(!r.ok){note(r.data.message||"Could not load review cases.","error");return}
+ var list=r.data.verifications||[];
+ $("cases").innerHTML=list.length?list.map(renderCase).join(""):'<div class="empty">No result review cases.</div>';
+ await Promise.all(Array.from(document.querySelectorAll("img[data-image]")).map(async function(img){
+  var id=img.dataset.image;
+  try{var response=await fetch(GG.API_BASE+"/api/admin/result-verifications/"+encodeURIComponent(id)+"/screenshot",{headers:{Authorization:"Bearer "+GG.getToken()}});if(!response.ok)throw new Error("Could not load screenshot.");var url=URL.createObjectURL(await response.blob());objectUrls.push(url);img.src=url}catch(e){img.replaceWith(Object.assign(document.createElement("div"),{className:"empty",textContent:e.message}))}
+ }));
+ document.querySelectorAll("[data-resolve]").forEach(function(btn){btn.onclick=function(){review(Number(btn.dataset.resolve),btn,"resolve")}});
+ document.querySelectorAll("[data-reject]").forEach(function(btn){btn.onclick=function(){review(Number(btn.dataset.reject),btn,"reject")}});
+ note(list.length+" review record"+(list.length===1?"":"s")+" loaded.");
+}
+async function review(id,button,decision){
+ var card=button.closest(".case"),body={decision:decision,note:card.querySelector("[data-note]")?.value||""};
+ if(decision==="resolve"){
+  body.creatorScore=Number(card.querySelector("[data-creator-score]").value);
+  body.opponentScore=Number(card.querySelector("[data-opponent-score]").value);
+  if(!Number.isInteger(body.creatorScore)||!Number.isInteger(body.opponentScore)){note("Enter both scores shown on the screenshot.","error");return}
+  if(!window.confirm("Settle match #"+card.dataset.case+" using these creator/opponent scores?"))return;
+ }else if(!window.confirm("Reject this evidence and keep all match funds locked?"))return;
+ button.disabled=true;note("Saving admin decision…");
+ var r=await GG.api("/api/admin/result-verifications/"+id+"/review",{method:"POST",body:body});
+ if(!r.ok){button.disabled=false;note(r.data.message||"Could not save decision.","error");return}
+ note(r.data.message||"Decision saved.","success");await load();
+}
+$("reload").addEventListener("click",load);load();
+})();
+</script></body></html>

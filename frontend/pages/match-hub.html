@@ -1,0 +1,3275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Match Hub</title>
+
+<style>
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+body{
+    font-family:Arial,Helvetica,sans-serif;
+    background:#050505;
+    color:#fff;
+    min-height:100vh;
+}
+
+nav{
+    height:70px;
+    background:#090909;
+    border-bottom:1px solid #242424;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 6%;
+}
+
+.logo{
+    color:#d4af37;
+    font-size:22px;
+    font-weight:bold;
+    letter-spacing:1px;
+}
+
+.nav-links{
+    display:flex;
+    gap:25px;
+}
+
+.nav-links a{
+    color:#ddd;
+    text-decoration:none;
+    font-size:14px;
+}
+
+.nav-links a:hover{
+    color:#d4af37;
+}
+
+.dashboard-btn{
+    border:1px solid #d4af37;
+    color:#d4af37 !important;
+    padding:9px 16px;
+    border-radius:6px;
+    text-decoration:none;
+}
+
+.container{
+    width:92%;
+    max-width:950px;
+    margin:35px auto 120px;
+}
+
+.header{
+    text-align:center;
+    margin-bottom:28px;
+}
+
+.header h1{
+    color:#d4af37;
+    font-size:34px;
+    margin-bottom:8px;
+}
+
+.header p{
+    color:#999;
+    line-height:1.5;
+}
+
+.card{
+    background:#0c0c0c;
+    border:1px solid #292929;
+    border-radius:12px;
+    padding:25px;
+    margin-bottom:20px;
+}
+
+.section-title{
+    color:#d4af37;
+    font-size:19px;
+    font-weight:bold;
+    margin-bottom:10px;
+}
+
+.description{
+    color:#999;
+    font-size:14px;
+    line-height:1.65;
+}
+
+.match-status{
+    text-align:center;
+}
+
+.status-label{
+    color:#888;
+    font-size:12px;
+    text-transform:uppercase;
+    letter-spacing:1.5px;
+    margin-bottom:9px;
+}
+
+.status{
+    color:#d4af37;
+    font-size:23px;
+    font-weight:bold;
+}
+
+.loading{
+    display:inline-block;
+    width:9px;
+    height:9px;
+    background:#d4af37;
+    border-radius:50%;
+    margin-left:7px;
+    animation:pulse 1s infinite;
+}
+
+@keyframes pulse{
+    50%{opacity:.2;}
+}
+
+.match-info{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:12px;
+    margin-top:22px;
+}
+
+.info-box{
+    background:#111;
+    border:1px solid #222;
+    border-radius:8px;
+    padding:15px;
+    text-align:center;
+}
+
+.info-box span{
+    display:block;
+    color:#777;
+    font-size:11px;
+    margin-bottom:7px;
+}
+
+.info-box strong{
+    color:#fff;
+    font-size:14px;
+}
+
+.players{
+    display:grid;
+    grid-template-columns:1fr 90px 1fr;
+    align-items:center;
+    gap:15px;
+    margin-top:22px;
+}
+
+.player{
+    background:#111;
+    border:1px solid #252525;
+    padding:22px 15px;
+    text-align:center;
+    border-radius:10px;
+}
+
+.player.you{
+    border-color:#d4af37;
+}
+
+.player-name{
+    font-size:19px;
+    font-weight:bold;
+    margin-bottom:7px;
+    word-break:break-word;
+}
+
+.player-role{
+    color:#888;
+    font-size:12px;
+}
+
+.vs{
+    text-align:center;
+    color:#d4af37;
+    font-size:21px;
+    font-weight:bold;
+}
+
+.role-banner{
+    padding:15px;
+    border-radius:8px;
+    margin-top:18px;
+    text-align:center;
+    background:#161208;
+    border:1px solid #554715;
+    color:#d4af37;
+    font-weight:bold;
+    font-size:13px;
+}
+
+input[type="text"],
+input[type="number"]{
+    width:100%;
+    padding:14px;
+    background:#080808;
+    border:1px solid #333;
+    color:#fff;
+    border-radius:7px;
+    outline:none;
+    font-size:16px;
+}
+
+input:focus{
+    border-color:#d4af37;
+}
+
+button{
+    border:none;
+    cursor:pointer;
+    font-weight:bold;
+}
+
+.primary-btn{
+    width:100%;
+    padding:14px;
+    margin-top:12px;
+    background:#d4af37;
+    color:#050505;
+    border-radius:7px;
+    font-size:15px;
+}
+
+.primary-btn:hover{
+    background:#f0cf55;
+}
+
+.primary-btn:disabled{
+    opacity:.55;
+    cursor:not-allowed;
+}
+
+.secondary-btn{
+    width:100%;
+    padding:13px;
+    margin-top:12px;
+    background:transparent;
+    color:#d4af37;
+    border:1px solid #d4af37;
+    border-radius:7px;
+    font-size:14px;
+}
+
+.secondary-btn:hover{
+    background:#171308;
+}
+
+.danger-btn{
+    width:100%;
+    padding:13px;
+    margin-top:12px;
+    background:#180b0b;
+    color:#ff7373;
+    border:1px solid #652525;
+    border-radius:7px;
+}
+
+.code-area{
+    margin-top:20px;
+}
+
+.label{
+    color:#aaa;
+    font-size:13px;
+    margin-bottom:8px;
+}
+
+.received-code{
+    background:#111;
+    border:1px solid #d4af37;
+    border-radius:8px;
+    padding:20px;
+    margin-top:18px;
+    text-align:center;
+}
+
+.received-code small{
+    color:#999;
+    display:block;
+    margin-bottom:8px;
+}
+
+.received-code strong{
+    color:#d4af37;
+    font-size:29px;
+    letter-spacing:4px;
+    word-break:break-all;
+}
+
+.ready-status{
+    text-align:center;
+    color:#999;
+    margin-top:12px;
+    font-size:13px;
+}
+
+.ready-status span{
+    color:#d4af37;
+    font-weight:bold;
+}
+
+.score-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:15px;
+    margin-top:20px;
+}
+
+.score-card{
+    background:#111;
+    border:1px solid #252525;
+    border-radius:9px;
+    padding:16px;
+}
+
+.score-card.mine{
+    border-color:#d4af37;
+}
+
+.score-card h3{
+    color:#fff;
+    font-size:15px;
+    margin-bottom:12px;
+}
+
+.result-preview{
+    margin-top:18px;
+    background:#111;
+    border:1px solid #292929;
+    border-radius:9px;
+    padding:18px;
+    text-align:center;
+}
+
+.result-score{
+    color:#d4af37;
+    font-size:31px;
+    font-weight:bold;
+    margin:8px 0;
+}
+
+.result-state{
+    font-weight:bold;
+    font-size:15px;
+}
+
+.success{
+    color:#73df9b !important;
+}
+
+.error{
+    color:#ff7373 !important;
+}
+
+.warning{
+    color:#ffbd66;
+}
+
+.muted{
+    color:#888;
+}
+
+.verification-grid{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:10px;
+    margin-top:20px;
+}
+
+.verify-box{
+    background:#111;
+    border:1px solid #252525;
+    border-radius:8px;
+    padding:14px;
+    text-align:center;
+}
+
+.verify-box span{
+    display:block;
+    color:#777;
+    font-size:11px;
+    margin-bottom:7px;
+}
+
+.verify-box strong{
+    color:#fff;
+    font-size:16px;
+}
+
+.upload-area{
+    margin-top:20px;
+    border:1px dashed #554715;
+    background:#100e08;
+    border-radius:10px;
+    padding:25px;
+    text-align:center;
+}
+
+.upload-icon{
+    font-size:30px;
+    margin-bottom:8px;
+}
+
+.upload-area h3{
+    color:#d4af37;
+    font-size:17px;
+    margin-bottom:7px;
+}
+
+.upload-area p{
+    color:#888;
+    font-size:13px;
+    line-height:1.5;
+}
+
+.file-input{
+    display:none;
+}
+
+.upload-btn{
+    display:inline-block;
+    margin-top:15px;
+    padding:12px 20px;
+    background:#d4af37;
+    color:#050505;
+    border-radius:7px;
+    font-weight:bold;
+    cursor:pointer;
+    font-size:13px;
+}
+
+.preview-wrap{
+    display:none;
+    margin-top:20px;
+    text-align:center;
+}
+
+.preview-wrap.show{
+    display:block;
+}
+
+.preview-wrap img{
+    max-width:100%;
+    max-height:500px;
+    border-radius:9px;
+    border:1px solid #333;
+}
+
+.preview-title{
+    color:#d4af37;
+    font-size:13px;
+    margin-bottom:10px;
+}
+
+.verification-status{
+    margin-top:18px;
+    padding:16px;
+    border-radius:8px;
+    background:#111;
+    border:1px solid #292929;
+    text-align:center;
+}
+
+.verification-status strong{
+    display:block;
+    font-size:19px;
+    margin-bottom:7px;
+}
+
+.stats-grid{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:10px;
+    margin-top:18px;
+}
+
+.stat{
+    background:#111;
+    border:1px solid #252525;
+    padding:15px 10px;
+    border-radius:8px;
+    text-align:center;
+}
+
+.stat span{
+    display:block;
+    color:#777;
+    font-size:11px;
+    margin-bottom:6px;
+}
+
+.stat strong{
+    color:#d4af37;
+    font-size:18px;
+}
+
+.notification-box{
+    background:#101010;
+    border:1px solid #292929;
+    border-radius:8px;
+    padding:16px;
+    margin-top:18px;
+}
+
+.notification-box p{
+    color:#999;
+    font-size:13px;
+    line-height:1.5;
+}
+
+.hidden{
+    display:none !important;
+}
+
+.match-indicator{
+    position:fixed;
+    right:18px;
+    bottom:18px;
+    width:290px;
+    background:#0b0b0b;
+    border:1px solid #d4af37;
+    border-radius:10px;
+    padding:14px;
+    z-index:1000;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);
+}
+
+.match-indicator-title{
+    color:#d4af37;
+    font-weight:bold;
+    font-size:13px;
+    margin-bottom:5px;
+}
+
+.match-indicator-text{
+    color:#bbb;
+    font-size:12px;
+    margin-bottom:10px;
+}
+
+.match-indicator button{
+    width:100%;
+    padding:9px;
+    background:#d4af37;
+    border-radius:5px;
+}
+
+@media(max-width:760px){
+
+    nav{
+        padding:0 4%;
+    }
+
+    .nav-links{
+        display:none;
+    }
+
+    .container{
+        width:94%;
+    }
+
+    .match-info{
+        grid-template-columns:1fr 1fr;
+    }
+
+    .players{
+        grid-template-columns:1fr;
+    }
+
+    .vs{
+        margin:-4px 0;
+    }
+
+    .verification-grid,
+    .stats-grid{
+        grid-template-columns:1fr 1fr;
+    }
+}
+
+@media(max-width:520px){
+
+    .match-info{
+        grid-template-columns:1fr;
+    }
+
+    .score-grid{
+        grid-template-columns:1fr;
+    }
+
+    .verification-grid,
+    .stats-grid{
+        grid-template-columns:1fr 1fr;
+    }
+
+    .header h1{
+        font-size:28px;
+    }
+
+    .match-indicator{
+        width:calc(100% - 30px);
+        right:15px;
+        bottom:15px;
+    }
+}
+</style>
+<script src="../js/api.js"></script>
+</head>
+
+<body>
+
+<nav>
+
+    <div class="logo">
+        GOAL$GAMBIT
+    </div>
+
+    <div class="nav-links">
+        <a href="konami.html">Dashboard</a>
+        <a href="ranked.html">Ranked</a>
+        <a href="leagues.html">Leagues</a>
+        <a href="tournaments.html">Tournaments</a>
+    </div>
+
+    <a class="dashboard-btn" href="konami.html">
+        Dashboard
+    </a>
+
+</nav>
+
+
+<div class="container">
+
+    <div class="header">
+        <h1>Match Hub</h1>
+        <p>
+            Your central control room for the GOAL$GAMBIT eFootball match.
+        </p>
+    </div>
+
+
+    <!-- =====================================================
+         MATCH STATUS
+    ====================================================== -->
+
+    <div class="card match-status">
+
+        <div class="status-label">
+            Match Status
+        </div>
+
+        <div class="status" id="matchStatus">
+            Finding Opponent
+            <span class="loading"></span>
+        </div>
+
+        <div class="match-info">
+
+            <div class="info-box">
+                <span>MODE</span>
+                <strong id="matchMode">—</strong>
+            </div>
+
+            <div class="info-box">
+                <span>LEAGUE</span>
+                <strong id="matchLeague">—</strong>
+            </div>
+
+            <div class="info-box">
+                <span>STAKE</span>
+                <strong id="matchStake">—</strong>
+            </div>
+
+            <div class="info-box">
+                <span>MATCH ID</span>
+                <strong id="matchId">—</strong>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         PLAYERS
+    ====================================================== -->
+
+    <div class="card">
+
+        <div class="section-title">
+            Match Players
+        </div>
+
+        <div class="players">
+
+            <div class="player you">
+
+                <div class="player-name" id="yourName">
+                    You
+                </div>
+
+                <div class="player-role">
+                    Your GOAL$GAMBIT Account
+                </div>
+
+            </div>
+
+            <div class="vs">
+                VS
+            </div>
+
+            <div class="player">
+
+                <div class="player-name" id="opponentName">
+                    Searching...
+                </div>
+
+                <div class="player-role">
+                    Opponent
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         AUTOMATIC PAIRING
+    ====================================================== -->
+
+    <div class="card" id="pairingCard">
+
+        <div class="section-title">
+            Automatic Pairing
+        </div>
+
+        <p class="description">
+            Once two players are matched, GOAL$GAMBIT randomly selects
+            one player to create and send the eFootball room code.
+            That same player will also be responsible for submitting
+            the match screenshot.
+        </p>
+
+        <div class="role-banner" id="pairingMessage">
+            Searching for another player...
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         ROOM CODE
+    ====================================================== -->
+
+    <div class="card hidden" id="roomCodeCard">
+
+        <div class="section-title">
+            eFootball Room Code
+        </div>
+
+        <p class="description">
+            The room is created inside eFootball. GOAL$GAMBIT only
+            transfers the room code between the two matched players.
+        </p>
+
+
+        <!-- SENDER -->
+
+        <div id="senderArea" class="hidden">
+
+            <div class="role-banner">
+                YOU ARE THE CODE SENDER
+            </div>
+
+            <div class="code-area">
+
+                <div class="label">
+                    Enter the actual eFootball room code
+                </div>
+
+                <input
+                    type="text"
+                    id="roomCode"
+                    maxlength="50"
+                    placeholder="Enter eFootball room code"
+                    autocomplete="off"
+                >
+
+                <button
+                    class="primary-btn"
+                    onclick="sendRoomCode()"
+                >
+                    SEND CODE TO OPPONENT
+                </button>
+
+            </div>
+
+            <p class="description warning" style="margin-top:10px;">
+                Check the code carefully before sending it.
+            </p>
+
+        </div>
+
+
+        <!-- RECEIVER -->
+
+        <div id="receiverArea" class="hidden">
+
+            <div class="role-banner">
+                WAITING FOR ROOM CODE
+            </div>
+
+            <div
+                class="received-code hidden"
+                id="receivedCodeBox"
+            >
+
+                <small>
+                    ROOM CODE RECEIVED
+                </small>
+
+                <strong id="receivedCode">
+                    ------
+                </strong>
+
+            </div>
+
+            <p
+                class="description"
+                id="receiverWaiting"
+                style="margin-top:15px;text-align:center;"
+            >
+                Your opponent is creating the room.
+            </p>
+
+        </div>
+
+
+        <button
+            class="secondary-btn"
+            onclick="openEfootball()"
+        >
+            OPEN eFOOTBALL
+        </button>
+
+    </div>
+
+
+    <!-- =====================================================
+         READY CHECK
+    ====================================================== -->
+
+    <div class="card hidden" id="readyCard">
+
+        <div class="section-title">
+            Ready Check
+        </div>
+
+        <p class="description">
+            Join the room in eFootball, then confirm that you are ready.
+            Both players must confirm before the match begins.
+        </p>
+
+        <button
+            class="primary-btn"
+            id="readyButton"
+            onclick="toggleReady()"
+        >
+            I'M READY
+        </button>
+
+        <div class="ready-status">
+
+            You:
+            <span id="yourReady">
+                Not Ready
+            </span>
+
+            &nbsp; | &nbsp;
+
+            Opponent:
+            <span id="opponentReady">
+                Waiting
+            </span>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         MATCH RESULT
+    ====================================================== -->
+
+    <div class="card hidden" id="resultCard">
+
+        <div class="section-title">
+            Enter Match Result
+        </div>
+
+        <p class="description">
+            Both players must independently enter what they saw on
+            the final eFootball result screen. This allows GOAL$GAMBIT
+            to compare the two submissions.
+        </p>
+
+        <div class="score-grid">
+
+            <div class="score-card mine">
+
+                <h3>
+                    Your Submission
+                </h3>
+
+                <div class="label">
+                    Your score
+                </div>
+
+                <input
+                    type="number"
+                    id="yourScore"
+                    min="0"
+                    max="99"
+                    placeholder="0"
+                >
+
+                <div class="label" style="margin-top:14px;">
+                    Opponent's score
+                </div>
+
+                <input
+                    type="number"
+                    id="opponentScore"
+                    min="0"
+                    max="99"
+                    placeholder="0"
+                >
+
+                <button
+                    class="primary-btn"
+                    onclick="submitResult()"
+                >
+                    SUBMIT MY RESULT
+                </button>
+
+            </div>
+
+
+            <div class="score-card">
+
+                <h3>
+                    Verification
+                </h3>
+
+                <p class="description">
+                    Your opponent enters their own result separately.
+                    GOAL$GAMBIT then compares both submissions.
+                </p>
+
+                <div
+                    class="result-preview"
+                    id="resultPreview"
+                >
+
+                    <div class="muted">
+                        No result submitted yet.
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         RESULT AGREEMENT
+    ====================================================== -->
+
+    <div
+        class="card hidden"
+        id="agreementCard"
+    >
+
+        <div class="section-title">
+            Result Comparison
+        </div>
+
+        <div class="result-preview">
+
+            <div class="muted">
+                CONFIRMED MATCH SCORE
+            </div>
+
+            <div
+                class="result-score"
+                id="confirmedScore"
+            >
+                — : —
+            </div>
+
+            <div
+                id="agreementStatus"
+                class="result-state"
+            >
+                Waiting for comparison...
+            </div>
+
+        </div>
+
+        <div class="verification-grid">
+
+            <div class="verify-box">
+                <span>GOALS FOR</span>
+                <strong id="goalsFor">—</strong>
+            </div>
+
+            <div class="verify-box">
+                <span>GOALS AGAINST</span>
+                <strong id="goalsAgainst">—</strong>
+            </div>
+
+            <div class="verify-box">
+                <span>GOAL DIFFERENCE</span>
+                <strong id="goalDifference">—</strong>
+            </div>
+
+            <div class="verify-box">
+                <span>POINTS</span>
+                <strong id="pointsEarned">—</strong>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         SCREENSHOT VERIFICATION
+    ====================================================== -->
+
+    <div
+        class="card hidden"
+        id="screenshotCard"
+    >
+
+        <div class="section-title">
+            Match Screenshot Verification
+        </div>
+
+        <p class="description">
+            The player selected by GOAL$GAMBIT as the room-code sender
+            is also assigned to submit the final match screenshot.
+            The screenshot provides visual evidence of the result.
+        </p>
+
+        <div
+            class="role-banner"
+            id="screenshotRole"
+        >
+            WAITING FOR SCREENSHOT ASSIGNMENT
+        </div>
+
+
+        <div
+            class="upload-area"
+            id="uploadArea"
+        >
+
+            <div class="upload-icon">
+                📸
+            </div>
+
+            <h3>
+                Upload Final Match Screenshot
+            </h3>
+
+            <p>
+                Upload the final eFootball result screen showing the
+                completed score.
+            </p>
+
+            <label
+                for="screenshotInput"
+                class="upload-btn"
+            >
+                CHOOSE SCREENSHOT
+            </label>
+
+            <input
+                class="file-input"
+                type="file"
+                id="screenshotInput"
+                accept="image/*"
+                onchange="handleScreenshot(event)"
+            >
+
+        </div>
+
+
+        <div
+            class="preview-wrap"
+            id="previewWrap"
+        >
+
+            <div class="preview-title">
+                SCREENSHOT PREVIEW
+            </div>
+
+            <img
+                id="screenshotPreview"
+                alt="Match screenshot preview"
+            >
+
+        </div>
+
+
+        <div
+            class="verification-status"
+            id="verificationStatus"
+        >
+
+            <strong class="warning">
+                WAITING FOR SCREENSHOT
+            </strong>
+
+            <p class="description">
+                Screenshot analysis will be connected to the verification
+                system when the backend is added.
+            </p>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         VERIFICATION SUMMARY
+    ====================================================== -->
+
+    <div
+        class="card hidden"
+        id="verificationCard"
+    >
+
+        <div class="section-title">
+            Match Verification
+        </div>
+
+        <div class="verification-grid">
+
+            <div class="verify-box">
+                <span>ENTERED SCORE</span>
+                <strong id="enteredVerification">
+                    —
+                </strong>
+            </div>
+
+            <div class="verify-box">
+                <span>SCREENSHOT SCORE</span>
+                <strong id="imageVerification">
+                    Pending
+                </strong>
+            </div>
+
+            <div class="verify-box">
+                <span>GOAL DIFFERENCE</span>
+                <strong id="verificationGD">
+                    —
+                </strong>
+            </div>
+
+            <div class="verify-box">
+                <span>STATUS</span>
+                <strong id="verificationResult">
+                    Pending
+                </strong>
+            </div>
+
+        </div>
+
+        <div
+            class="verification-status"
+            id="verificationMessage"
+        >
+
+            <strong>
+                Screenshot uploaded
+            </strong>
+
+            <p class="description">
+                The screenshot is stored locally for this prototype.
+                Actual score extraction and image verification will
+                be connected later through the backend.
+            </p>
+
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         DISPUTE
+    ====================================================== -->
+
+    <div
+        class="card hidden"
+        id="disputeCard"
+    >
+
+        <div class="section-title">
+            Result Verification Required
+        </div>
+
+        <p class="description">
+            The submitted results do not currently agree. The match
+            should not be settled automatically.
+        </p>
+
+        <div class="role-banner error">
+            RESULT DISPUTED
+        </div>
+
+        <button
+            class="danger-btn"
+            onclick="requestReview()"
+        >
+            REQUEST ADMIN REVIEW
+        </button>
+
+    </div>
+
+
+    <!-- =====================================================
+         NOTIFICATIONS
+    ====================================================== -->
+
+    <div class="card">
+
+        <div class="section-title">
+            Browser Notifications
+        </div>
+
+        <p class="description">
+            Enable notifications so GOAL$GAMBIT can alert you when
+            your opponent sends the room code, becomes ready, or
+            submits a result.
+        </p>
+
+        <button
+            class="secondary-btn"
+            onclick="enableNotifications()"
+            id="notificationButton"
+        >
+            ENABLE CHROME NOTIFICATIONS
+        </button>
+
+        <div
+            class="notification-box"
+            id="notificationStatus"
+        >
+            <p>
+                Notifications are currently not enabled.
+            </p>
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =========================================================
+     ACTIVE MATCH INDICATOR
+========================================================== -->
+
+<div
+    class="match-indicator"
+    id="matchIndicator"
+>
+
+    <div class="match-indicator-title">
+        ⚽ ACTIVE MATCH
+    </div>
+
+    <div
+        class="match-indicator-text"
+        id="indicatorText"
+    >
+        Match Hub active
+    </div>
+
+    <button onclick="scrollToMatch()">
+        RETURN TO MATCH
+    </button>
+
+</div>
+
+
+<script>
+
+/*
+==============================================================
+GOAL$GAMBIT MATCH HUB
+==============================================================
+
+FRONTEND PROTOTYPE
+
+Supported:
+- Ranked
+- Bronze League
+- Silver League
+- Gold League
+- Tournament
+- Random code sender
+- Random screenshot sender
+- Room code
+- Independent result submission
+- Result comparison
+- Goal difference
+- Points calculation
+- Screenshot upload and preview
+- Dispute workflow
+- Notifications
+- Persistent match indicator
+
+IMPORTANT:
+
+This version DOES NOT pretend that screenshot OCR is real yet.
+
+The browser can:
+    1. accept the screenshot
+    2. preview it
+    3. store prototype information
+    4. compare manually entered scores
+
+Later backend:
+    screenshot
+        ↓
+    OCR / image analysis
+        ↓
+    score extraction
+        ↓
+    result verification
+        ↓
+    database
+        ↓
+    league standings
+
+==============================================================
+*/
+
+
+let currentMatch =
+    JSON.parse(
+        localStorage.getItem("goalGambitCurrentMatch")
+    ) || null;
+
+
+let currentUser =
+    localStorage.getItem("goalGambitUsername") ||
+    "Player";
+
+
+let pollingTimer = null;
+
+
+/* ============================================================
+   INITIALIZE
+============================================================ */
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+
+        loadMatch();
+
+        updateNotificationStatus();
+
+        pollingTimer =
+            setInterval(
+                checkMatchState,
+                2500
+            );
+
+    }
+);
+
+
+/* ============================================================
+   LOAD MATCH
+============================================================ */
+
+function loadMatch(){
+
+    if(!currentMatch){
+
+        document.getElementById(
+            "matchStatus"
+        ).textContent =
+            "No Active Match";
+
+
+        document.getElementById(
+            "pairingMessage"
+        ).textContent =
+            "Return to Ranked, Leagues or Tournaments and start a match.";
+
+        return;
+    }
+
+
+    document.getElementById(
+        "yourName"
+    ).textContent =
+        currentMatch.player ||
+        currentUser;
+
+
+    document.getElementById(
+        "opponentName"
+    ).textContent =
+        currentMatch.opponent ||
+        "Searching...";
+
+
+    document.getElementById(
+        "matchMode"
+    ).textContent =
+        currentMatch.mode ||
+        "eFootball";
+
+
+    document.getElementById(
+        "matchLeague"
+    ).textContent =
+        currentMatch.league ||
+        "—";
+
+
+    document.getElementById(
+        "matchStake"
+    ).textContent =
+        currentMatch.stake
+            ? "KSh " + currentMatch.stake
+            : "—";
+
+
+    document.getElementById(
+        "matchId"
+    ).textContent =
+        currentMatch.id ||
+        "—";
+
+
+    updateInterface();
+
+}
+
+
+/* ============================================================
+   UPDATE INTERFACE
+============================================================ */
+
+function updateInterface(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    const opponentFound =
+        currentMatch.opponent &&
+        currentMatch.opponent !== "Opponent" &&
+        currentMatch.opponent !== "Searching...";
+
+
+    if(!opponentFound){
+
+        document.getElementById(
+            "matchStatus"
+        ).innerHTML =
+            'Finding Opponent <span class="loading"></span>';
+
+
+        document.getElementById(
+            "pairingMessage"
+        ).textContent =
+            "Searching for another player in your bracket...";
+
+        return;
+    }
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "Opponent Found";
+
+
+    assignMatchRoles();
+
+
+    document
+        .getElementById("roomCodeCard")
+        .classList.remove("hidden");
+
+
+    document
+        .getElementById("readyCard")
+        .classList.remove("hidden");
+
+
+    if(currentMatch.matchStarted === true){
+
+        document
+            .getElementById("resultCard")
+            .classList.remove("hidden");
+
+    }
+
+
+    if(
+        currentMatch.playerResult ||
+        currentMatch.opponentResult
+    ){
+
+        document
+            .getElementById("screenshotCard")
+            .classList.remove("hidden");
+
+    }
+
+
+    updateSenderReceiver();
+
+    updateReadyStatus();
+
+    updateResultPreview();
+
+    updateAgreement();
+
+    updateIndicator();
+
+}
+
+
+/* ============================================================
+   ASSIGN RANDOM ROLES
+============================================================ */
+
+function assignMatchRoles(){
+
+    if(currentMatch.codeSender){
+        updateRoleMessage();
+        return;
+    }
+
+
+    /*
+        Prototype:
+
+        Randomly select one of the two players.
+
+        The same player becomes:
+            CODE SENDER
+            SCREENSHOT SENDER
+
+        In production this decision must be made server-side.
+    */
+
+
+    const player =
+        currentMatch.player ||
+        currentUser;
+
+
+    const opponent =
+        currentMatch.opponent;
+
+
+    if(!opponent){
+        return;
+    }
+
+
+    const sender =
+        Math.random() < 0.5
+            ? player
+            : opponent;
+
+
+    currentMatch.codeSender =
+        sender;
+
+
+    currentMatch.screenshotSender =
+        sender;
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    updateRoleMessage();
+
+}
+
+
+/* ============================================================
+   ROLE MESSAGE
+============================================================ */
+
+function updateRoleMessage(){
+
+    const sender =
+        currentMatch.codeSender;
+
+
+    const isMe =
+        sender === currentUser ||
+        sender === currentMatch.player;
+
+
+    const message =
+        document.getElementById(
+            "pairingMessage"
+        );
+
+
+    if(isMe){
+
+        message.textContent =
+            "You were randomly selected to send the room code and submit the match screenshot.";
+
+    }else{
+
+        message.textContent =
+            `${sender} was randomly selected to send the room code and submit the match screenshot.`;
+
+    }
+
+
+    const screenshotRole =
+        document.getElementById(
+            "screenshotRole"
+        );
+
+
+    if(isMe){
+
+        screenshotRole.textContent =
+            "YOU ARE THE SCREENSHOT SENDER";
+
+    }else{
+
+        screenshotRole.textContent =
+            "YOUR OPPONENT IS THE SCREENSHOT SENDER";
+
+    }
+
+}
+
+
+/* ============================================================
+   IS CURRENT USER SENDER?
+============================================================ */
+
+function isSender(){
+
+    if(!currentMatch){
+        return false;
+    }
+
+
+    return (
+        currentMatch.codeSender === currentUser ||
+        currentMatch.codeSender === currentMatch.player
+    );
+
+}
+
+
+/* ============================================================
+   SENDER / RECEIVER
+============================================================ */
+
+function updateSenderReceiver(){
+
+    const sender =
+        document.getElementById(
+            "senderArea"
+        );
+
+
+    const receiver =
+        document.getElementById(
+            "receiverArea"
+        );
+
+
+    if(isSender()){
+
+        sender.classList.remove("hidden");
+        receiver.classList.add("hidden");
+
+    }else{
+
+        sender.classList.add("hidden");
+        receiver.classList.remove("hidden");
+
+    }
+
+
+    if(currentMatch.roomCode){
+
+        if(!isSender()){
+
+            showReceivedCode(
+                currentMatch.roomCode
+            );
+
+        }
+
+    }
+
+}
+
+
+/* ============================================================
+   SEND ROOM CODE
+============================================================ */
+
+function sendRoomCode(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    const input =
+        document.getElementById(
+            "roomCode"
+        );
+
+
+    const code =
+        input.value.trim();
+
+
+    if(!code){
+
+        alert(
+            "Please enter the actual eFootball room code."
+        );
+
+        input.focus();
+
+        return;
+    }
+
+
+    currentMatch.roomCode =
+        code;
+
+
+    currentMatch.codeSent =
+        true;
+
+
+    currentMatch.codeSentAt =
+        new Date().toISOString();
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "ROOM CODE SENT";
+
+
+    document.getElementById(
+        "senderArea"
+    ).innerHTML = `
+
+        <div class="role-banner">
+            ✓ ROOM CODE SENT
+        </div>
+
+        <div class="received-code">
+
+            <small>
+                YOUR ROOM CODE
+            </small>
+
+            <strong>
+                ${escapeHTML(code)}
+            </strong>
+
+        </div>
+
+        <p
+            class="description"
+            style="margin-top:15px;text-align:center;"
+        >
+            Your opponent has been notified.
+        </p>
+
+    `;
+
+
+    notifyUser(
+        "GOAL$GAMBIT",
+        "Room code sent successfully."
+    );
+
+}
+
+
+/* ============================================================
+   SHOW RECEIVED CODE
+============================================================ */
+
+function showReceivedCode(code){
+
+    document
+        .getElementById(
+            "receivedCodeBox"
+        )
+        .classList.remove("hidden");
+
+
+    document.getElementById(
+        "receivedCode"
+    ).textContent =
+        code;
+
+
+    document.getElementById(
+        "receiverWaiting"
+    ).textContent =
+        "Room code received. Join the room in eFootball.";
+
+
+    document.getElementById(
+        "receiverWaiting"
+    ).classList.add("success");
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "CODE RECEIVED";
+
+}
+
+
+/* ============================================================
+   OPEN eFOOTBALL
+============================================================ */
+
+function openEfootball(){
+
+    window.open(
+        "https://www.konami.com/efootball/",
+        "_blank"
+    );
+
+}
+
+
+/* ============================================================
+   READY
+============================================================ */
+
+async function toggleReady(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    currentMatch.playerReady =
+        true;
+
+
+    currentMatch.readyAt =
+        new Date().toISOString();
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    document.getElementById(
+        "readyButton"
+    ).textContent =
+        "✓ YOU ARE READY";
+
+
+    document.getElementById(
+        "readyButton"
+    ).disabled =
+        true;
+
+
+    document.getElementById(
+        "yourReady"
+    ).textContent =
+        "READY";
+
+
+    notifyUser(
+        "GOAL$GAMBIT",
+        "You are marked as ready."
+    );
+
+
+    if(
+        currentMatch.opponentReady === true
+    ){
+
+        startMatch();
+
+    }
+
+}
+
+
+/* ============================================================
+   READY STATUS
+============================================================ */
+
+function updateReadyStatus(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    document.getElementById(
+        "yourReady"
+    ).textContent =
+        currentMatch.playerReady
+            ? "READY"
+            : "Not Ready";
+
+
+    document.getElementById(
+        "opponentReady"
+    ).textContent =
+        currentMatch.opponentReady
+            ? "READY"
+            : "Waiting";
+
+
+    if(
+        currentMatch.playerReady &&
+        currentMatch.opponentReady
+    ){
+
+        startMatch();
+
+    }
+
+}
+
+
+/* ============================================================
+   START MATCH
+============================================================ */
+
+function startMatch(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    if(currentMatch.matchStarted){
+        return;
+    }
+
+
+    currentMatch.matchStarted =
+        true;
+
+
+    currentMatch.matchStartedAt =
+        new Date().toISOString();
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "MATCH IN PROGRESS";
+
+
+    document
+        .getElementById("resultCard")
+        .classList.remove("hidden");
+
+
+    notifyUser(
+        "GOAL$GAMBIT",
+        "Your match has started."
+    );
+
+}
+
+
+/* ============================================================
+   SUBMIT RESULT
+============================================================ */
+
+async function submitResult(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    const yourInput =
+        document.getElementById(
+            "yourScore"
+        );
+
+
+    const opponentInput =
+        document.getElementById(
+            "opponentScore"
+        );
+
+
+    if(
+        yourInput.value === "" ||
+        opponentInput.value === ""
+    ){
+
+        alert(
+            "Please enter both scores."
+        );
+
+        return;
+    }
+
+
+    const yourScore =
+        Number(yourInput.value);
+
+
+    const opponentScore =
+        Number(opponentInput.value);
+
+
+    if(
+        !Number.isInteger(yourScore) ||
+        !Number.isInteger(opponentScore)
+    ){
+
+        alert(
+            "Scores must be whole numbers."
+        );
+
+        return;
+    }
+
+
+    if(
+        yourScore < 0 ||
+        opponentScore < 0
+    ){
+
+        alert(
+            "Scores cannot be negative."
+        );
+
+        return;
+    }
+
+
+    if(currentMatch.backendId){
+        const server = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/result", {
+            method: "POST",
+            body: { yourScore: yourScore, opponentScore: opponentScore }
+        });
+        if(!server.ok){
+            alert(server.data.message || "The server could not accept this result.");
+            return;
+        }
+        currentMatch.serverMatch = server.data.match || null;
+        currentMatch.status = server.data.match && server.data.match.status || (server.data.disputed ? "disputed" : "playing");
+        currentMatch.resultSubmitted = true;
+        localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+        document.getElementById("matchStatus").textContent = server.data.disputed ? "RESULT DISPUTED · ADMIN REVIEW" : server.data.verificationRequired ? "SCREENSHOT REQUIRED" : "RESULT SUBMITTED · WAITING FOR OPPONENT";
+        if (server.data.verificationRequired) {
+            document.getElementById("screenshotCard").classList.remove("hidden");
+            document.getElementById("verificationCard").classList.remove("hidden");
+            document.getElementById("uploadArea").style.display = server.data.match && server.data.match.youMustUploadScreenshot ? "block" : "none";
+            document.getElementById("screenshotRole").textContent = server.data.match && server.data.match.youMustUploadScreenshot ? "YOU WERE SELECTED TO UPLOAD THE SCREENSHOT" : "WAITING FOR THE SELECTED PLAYER TO UPLOAD THE SCREENSHOT";
+            document.getElementById("verificationMessage").innerHTML = "<strong>" + escapeHTML(server.data.message) + "</strong><p class=\"description\">Standings stay unchanged until verification or admin resolution.</p>";
+        }
+        if (server.data.disputed) document.getElementById("disputeCard").classList.remove("hidden");
+        notifyUser("GOAL$GAMBIT", server.data.message || "Your eFootball result has been submitted to the server.");
+        if(server.data.match) alertIfLoser(server.data.match);
+        return;
+    }
+
+    alert("This match is not linked to the server. Local-only score submissions are disabled.");
+    return;
+
+    let result;
+
+
+    if(yourScore > opponentScore){
+
+        result = "WIN";
+
+    }else if(yourScore < opponentScore){
+
+        result = "LOSS";
+
+    }else{
+
+        result = "DRAW";
+
+    }
+
+
+    currentMatch.playerResult = {
+
+        player:
+            currentMatch.player ||
+            currentUser,
+
+        yourScore:
+            yourScore,
+
+        opponentScore:
+            opponentScore,
+
+        result:
+            result,
+
+        submittedAt:
+            new Date().toISOString()
+
+    };
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    document
+        .getElementById("screenshotCard")
+        .classList.remove("hidden");
+
+
+    document
+        .getElementById("verificationCard")
+        .classList.remove("hidden");
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "RESULT SUBMITTED";
+
+
+    updateResultPreview();
+
+    updateAgreement();
+
+
+    notifyUser(
+        "GOAL$GAMBIT",
+        "Your result has been submitted."
+    );
+
+}
+
+
+/* ============================================================
+   RESULT PREVIEW
+============================================================ */
+
+function updateResultPreview(){
+
+    const box =
+        document.getElementById(
+            "resultPreview"
+        );
+
+
+    if(
+        !currentMatch ||
+        !currentMatch.playerResult
+    ){
+
+        box.innerHTML =
+            `
+            <div class="muted">
+                No result submitted yet.
+            </div>
+            `;
+
+        return;
+    }
+
+
+    const result =
+        currentMatch.playerResult;
+
+
+    box.innerHTML = `
+
+        <div class="muted">
+            YOUR SUBMITTED RESULT
+        </div>
+
+        <div class="result-score">
+            ${result.yourScore} : ${result.opponentScore}
+        </div>
+
+        <div class="${
+            result.result === "WIN"
+                ? "success"
+                : result.result === "LOSS"
+                    ? "error"
+                    : "warning"
+        }">
+
+            ${result.result}
+
+        </div>
+
+        <p
+            class="description"
+            style="margin-top:8px;"
+        >
+            Waiting for the opponent's independent submission.
+        </p>
+
+    `;
+
+}
+
+
+/* ============================================================
+   COMPARE BOTH RESULTS
+============================================================ */
+
+function updateAgreement(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    const mine =
+        currentMatch.playerResult;
+
+
+    const opponent =
+        currentMatch.opponentResult;
+
+
+    if(!mine){
+        return;
+    }
+
+
+    document
+        .getElementById("agreementCard")
+        .classList.remove("hidden");
+
+
+    if(!opponent){
+
+        document.getElementById(
+            "agreementStatus"
+        ).textContent =
+            "WAITING FOR OPPONENT RESULT";
+
+
+        document.getElementById(
+            "agreementStatus"
+        ).className =
+            "result-state warning";
+
+
+        return;
+    }
+
+
+    const sameScore =
+        mine.yourScore ===
+            opponent.opponentScore
+        &&
+        mine.opponentScore ===
+            opponent.yourScore;
+
+
+    if(sameScore){
+
+        settlePrototypeResult(
+            mine
+        );
+
+    }else{
+
+        showDispute();
+
+    }
+
+}
+
+
+/* ============================================================
+   SETTLE MATCH RESULT
+============================================================ */
+
+function settlePrototypeResult(result){
+
+    const gf =
+        result.yourScore;
+
+
+    const ga =
+        result.opponentScore;
+
+
+    const gd =
+        gf - ga;
+
+
+    let points = 0;
+
+
+    if(gf > ga){
+
+        points = 3;
+
+    }else if(gf === ga){
+
+        points = 1;
+
+    }
+
+
+    document.getElementById(
+        "confirmedScore"
+    ).textContent =
+        `${gf} : ${ga}`;
+
+
+    document.getElementById(
+        "agreementStatus"
+    ).textContent =
+        "RESULTS MATCH ✓";
+
+
+    document.getElementById(
+        "agreementStatus"
+    ).className =
+        "result-state success";
+
+
+    document.getElementById(
+        "goalsFor"
+    ).textContent =
+        gf;
+
+
+    document.getElementById(
+        "goalsAgainst"
+    ).textContent =
+        ga;
+
+
+    document.getElementById(
+        "goalDifference"
+    ).textContent =
+        gd > 0
+            ? "+" + gd
+            : gd;
+
+
+    document.getElementById(
+        "pointsEarned"
+    ).textContent =
+        points;
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "RESULT MATCHED";
+
+
+    currentMatch.status =
+        "result_matched";
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+}
+
+
+/* ============================================================
+   DISPUTE
+============================================================ */
+
+function showDispute(){
+
+    document
+        .getElementById("disputeCard")
+        .classList.remove("hidden");
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "RESULT DISPUTED";
+
+
+    document.getElementById(
+        "agreementStatus"
+    ).textContent =
+        "RESULTS DO NOT MATCH";
+
+
+    document.getElementById(
+        "agreementStatus"
+    ).className =
+        "result-state error";
+
+}
+
+
+/* ============================================================
+   ADMIN REVIEW
+============================================================ */
+
+function requestReview(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    currentMatch.status =
+        "admin_review";
+
+
+    currentMatch.reviewRequestedAt =
+        new Date().toISOString();
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(currentMatch)
+    );
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "ADMIN REVIEW";
+
+
+    alert(
+        "This match has been marked for admin review."
+    );
+
+}
+
+
+/* ============================================================
+   SCREENSHOT
+============================================================ */
+
+function handleScreenshot(event){
+
+    const file =
+        event.target.files[0];
+
+
+    if(!file){
+        return;
+    }
+
+
+    if(!file.type.startsWith("image/")){
+
+        alert(
+            "Please select an image file."
+        );
+
+        return;
+    }
+
+
+    /*
+        Make sure the screenshot sender is the person
+        currently uploading it.
+    */
+
+    if(
+        currentMatch &&
+        currentMatch.screenshotSender &&
+        !isSender()
+    ){
+
+        alert(
+            "Only the player selected as the screenshot sender should upload the match screenshot."
+        );
+
+        event.target.value = "";
+
+        return;
+    }
+
+
+    const reader =
+        new FileReader();
+
+
+    reader.onload =
+        function(e){
+
+            const imageData =
+                e.target.result;
+
+
+            document.getElementById(
+                "screenshotPreview"
+            ).src =
+                imageData;
+
+
+            document
+                .getElementById("previewWrap")
+                .classList.add("show");
+
+
+            currentMatch.screenshotUploaded =
+                true;
+
+
+            currentMatch.screenshotUploadedAt =
+                new Date().toISOString();
+
+
+            /*
+                Prototype only.
+
+                We store the image in localStorage only if
+                the browser allows it. Large screenshots can
+                exceed localStorage limits, so failure is safe.
+            */
+
+            try{
+
+                currentMatch.screenshotPreview =
+                    imageData;
+
+
+                localStorage.setItem(
+                    "goalGambitCurrentMatch",
+                    JSON.stringify(currentMatch)
+                );
+
+            }catch(error){
+
+                console.warn(
+                    "Screenshot too large for localStorage.",
+                    error
+                );
+
+            }
+
+
+            document.getElementById(
+                "verificationStatus"
+            ).innerHTML = `
+
+                <strong class="success">
+                    SCREENSHOT UPLOADED ✓
+                </strong>
+
+                <p class="description">
+                    The screenshot has been received by this prototype.
+                    Automatic image score extraction will be added when
+                    the backend verification system is connected.
+                </p>
+
+            `;
+
+
+            updateVerificationPanel();
+
+        };
+
+
+    reader.readAsDataURL(file);
+
+}
+
+
+/* ============================================================
+   VERIFICATION PANEL
+============================================================ */
+
+function updateVerificationPanel(){
+
+    if(!currentMatch){
+        return;
+    }
+
+
+    const panel =
+        document.getElementById(
+            "verificationCard"
+        );
+
+
+    if(
+        currentMatch.playerResult ||
+        currentMatch.screenshotUploaded
+    ){
+
+        panel.classList.remove("hidden");
+
+    }
+
+
+    if(currentMatch.playerResult){
+
+        const result =
+            currentMatch.playerResult;
+
+
+        document.getElementById(
+            "enteredVerification"
+        ).textContent =
+            `${result.yourScore} - ${result.opponentScore}`;
+
+
+        document.getElementById(
+            "verificationGD"
+        ).textContent =
+            result.yourScore -
+            result.opponentScore;
+
+    }
+
+
+    if(currentMatch.screenshotUploaded){
+
+        document.getElementById(
+            "imageVerification"
+        ).textContent =
+            "Pending OCR";
+
+
+        document.getElementById(
+            "verificationResult"
+        ).textContent =
+            "Awaiting AI";
+
+    }
+
+}
+
+
+/* ============================================================
+   NOTIFICATIONS
+============================================================ */
+
+async function enableNotifications(){
+
+    if(!("Notification" in window)){
+
+        updateNotificationBox(
+            "This browser does not support notifications.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    const permission =
+        await Notification.requestPermission();
+
+
+    if(permission === "granted"){
+
+        updateNotificationBox(
+            "Chrome notifications are enabled for GOAL$GAMBIT.",
+            "success"
+        );
+
+
+        document.getElementById(
+            "notificationButton"
+        ).textContent =
+            "✓ NOTIFICATIONS ENABLED";
+
+
+        notifyUser(
+            "GOAL$GAMBIT",
+            "Notifications are now enabled."
+        );
+
+    }else{
+
+        updateNotificationBox(
+            "Notifications were not allowed. You can enable them in Chrome site settings.",
+            "error"
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   NOTIFICATION STATUS
+============================================================ */
+
+function updateNotificationStatus(){
+
+    if(!("Notification" in window)){
+
+        updateNotificationBox(
+            "Browser notifications are not supported.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if(Notification.permission === "granted"){
+
+        updateNotificationBox(
+            "Chrome notifications are enabled.",
+            "success"
+        );
+
+
+        document.getElementById(
+            "notificationButton"
+        ).textContent =
+            "✓ NOTIFICATIONS ENABLED";
+
+    }
+
+}
+
+
+/* ============================================================
+   NOTIFICATION BOX
+============================================================ */
+
+function updateNotificationBox(
+    message,
+    type
+){
+
+    document.getElementById(
+        "notificationStatus"
+    ).innerHTML =
+
+        `<p class="${type || ""}">
+            ${escapeHTML(message)}
+        </p>`;
+
+}
+
+
+/* ============================================================
+   USER NOTIFICATION
+============================================================ */
+
+function notifyUser(
+    title,
+    body
+){
+
+    if(
+        "Notification" in window &&
+        Notification.permission === "granted"
+    ){
+
+        const notification =
+            new Notification(
+                title,
+                {
+                    body:body,
+                    icon:"images/chess-logo.png"
+                }
+            );
+
+
+        notification.onclick =
+            () => {
+
+                window.focus();
+
+                notification.close();
+
+                scrollToMatch();
+
+            };
+
+    }
+
+}
+
+
+/* ============================================================
+   LOCAL MATCH STATE CHECK
+============================================================ */
+
+function checkMatchState(){
+
+    const stored =
+        localStorage.getItem(
+            "goalGambitCurrentMatch"
+        );
+
+
+    if(!stored){
+        return;
+    }
+
+
+    try{
+
+        const latest =
+            JSON.parse(stored);
+
+
+        if(
+            JSON.stringify(latest) !==
+            JSON.stringify(currentMatch)
+        ){
+
+            const hadCode =
+                currentMatch &&
+                currentMatch.roomCode;
+
+
+            currentMatch =
+                latest;
+
+
+            loadMatch();
+
+
+            if(
+                !hadCode &&
+                currentMatch.roomCode
+            ){
+
+                notifyUser(
+                    "GOAL$GAMBIT",
+                    "Your opponent has sent the eFootball room code."
+                );
+
+            }
+
+        }
+
+    }catch(error){
+
+        console.error(
+            "Match state error:",
+            error
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   ACTIVE MATCH INDICATOR
+============================================================ */
+
+function updateIndicator(){
+
+    const text =
+        document.getElementById(
+            "indicatorText"
+        );
+
+
+    if(!currentMatch){
+
+        text.textContent =
+            "No active match.";
+
+        return;
+    }
+
+
+    text.textContent =
+        `${currentMatch.mode || "eFootball"} • ${
+            currentMatch.opponent || "Finding opponent..."
+        }`;
+
+}
+
+
+/* ============================================================
+   RETURN TO MATCH
+============================================================ */
+
+function scrollToMatch(){
+
+    window.scrollTo({
+        top:0,
+        behavior:"smooth"
+    });
+
+}
+
+
+/* ============================================================
+   ESCAPE HTML
+============================================================ */
+
+function escapeHTML(value){
+
+    return String(value)
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+
+}
+
+
+/* ============================================================
+   PAGE EXIT
+============================================================ */
+
+window.addEventListener(
+    "beforeunload",
+    () => {
+
+        if(pollingTimer){
+
+            clearInterval(
+                pollingTimer
+            );
+
+        }
+
+    }
+);
+
+</script>
+
+<script>
+/* =========================================================
+   MATCH HUB - SERVER SYNC
+   The server is the source of truth for: who the opponent is,
+   who sends the room code, the room code itself, ready state,
+   the final score and the winner. The browser just displays it.
+========================================================= */
+
+function lossAlertKey(id) { return "goalGambitLossAlert_" + id; }
+
+async function handleScreenshot(event) {
+    const input = event.target;
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!currentMatch || !currentMatch.backendId) {
+        alert("This match is not connected to the server yet.");
+        input.value = "";
+        return;
+    }
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size > 8 * 1024 * 1024) {
+        alert("Choose a JPEG, PNG, or WebP screenshot no larger than 8 MB.");
+        input.value = "";
+        return;
+    }
+    if (!currentMatch.screenshotSender || !isSender()) {
+        alert("Only the selected room-code sender may upload this match screenshot.");
+        input.value = "";
+        return;
+    }
+
+    const preview = document.getElementById("screenshotPreview");
+    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    preview.dataset.objectUrl = URL.createObjectURL(file);
+    preview.src = preview.dataset.objectUrl;
+    document.getElementById("previewWrap").classList.add("show");
+    document.getElementById("screenshotCard").classList.remove("hidden");
+    const status = document.getElementById("verificationMessage");
+    if (status) status.innerHTML = "<strong>Uploading screenshot…</strong><p class=\"description\">The server will check the score and route uncertain results to admin review.</p>";
+
+    const form = new FormData();
+    form.append("screenshot", file, file.name);
+    const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/audit/screenshot", {
+        method: "POST",
+        body: form
+    });
+    if (!result.ok) {
+        if (status) status.innerHTML = "<strong class=\"error\">Upload failed</strong><p class=\"description\">" + escapeHTML(result.data.message || "Try again.") + "</p>";
+        input.value = "";
+        return;
+    }
+
+    currentMatch.screenshotUploaded = true;
+    currentMatch.verificationStatus = result.data.verified ? "verified" : "review_required";
+    currentMatch.status = result.data.verified ? "completed" : "disputed";
+    localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+    document.getElementById("verificationCard").classList.remove("hidden");
+    document.getElementById("imageVerification").textContent = result.data.verified ? "Score matched" : "Admin review";
+    document.getElementById("verificationResult").textContent = result.data.verified ? "VERIFIED" : "ON HOLD";
+    document.getElementById("matchStatus").textContent = result.data.verified ? "RESULT VERIFIED" : "ADMIN REVIEW";
+    if (status) status.innerHTML = "<strong class=\"" + (result.data.verified ? "success" : "warning") + "\">" + escapeHTML(result.data.message || "Screenshot received.") + "</strong><p class=\"description\">" + (result.data.verified ? "The result and standings are now updated." : "Funds and standings remain unchanged until an admin resolves the dispute.") + "</p>";
+    if (!result.data.verified) document.getElementById("disputeCard").classList.remove("hidden");
+    notifyUser("GOAL$GAMBIT", result.data.message || "Screenshot received.");
+    await syncFromServer();
+}
+
+// Shows "Enda train" once to the player who lost the match.
+function alertIfLoser(serverMatch) {
+    if (!serverMatch || !serverMatch.youLost) return;
+    const key = lossAlertKey(serverMatch.id);
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+    alert("Enda train");
+}
+
+async function syncFromServer() {
+    if (!currentMatch || !currentMatch.backendId) return;
+    const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId), { noRedirect: true });
+    if (!r.ok) return;
+    const m = r.data.match;
+    const before = JSON.stringify(currentMatch);
+
+    currentMatch.player = m.yourName || currentMatch.player;
+    currentMatch.opponent = m.opponentFound ? m.opponentName : "Opponent";
+    currentMatch.stake = Number(m.stake_amount || 0);
+    currentMatch.league = m.league || currentMatch.league || null;
+    currentMatch.codeSender = m.youAreSender ? currentMatch.player : currentMatch.opponent;
+    currentMatch.screenshotSender = currentMatch.codeSender;
+    currentMatch.roomCode = m.room_code || null;
+    currentMatch.codeSent = !!m.codeSent;
+    currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
+    currentMatch.verificationStatus = m.verificationStatus || null;
+    currentMatch.playerReady = !!m.yourReady;
+    currentMatch.opponentReady = !!m.opponentReady;
+    currentMatch.status = m.status;
+    if (m.status === "active" || (m.yourReady && m.opponentReady)) currentMatch.matchStarted = true;
+    currentMatch.resultSubmitted = !!(m.youAreCreator ? m.creator_submitted : m.opponent_submitted);
+    currentMatch.serverMatch = m;
+    if (m.status === "disputed") currentMatch.status = "disputed";
+    if (m.status === "cancelled") currentMatch.status = "completed";
+
+    if (["awaiting_verification", "disputed"].includes(m.status) || m.verificationStatus) {
+        document.getElementById("screenshotCard").classList.remove("hidden");
+        document.getElementById("verificationCard").classList.remove("hidden");
+        document.getElementById("uploadArea").style.display = m.youMustUploadScreenshot && !m.screenshotSubmitted ? "block" : "none";
+        document.getElementById("screenshotRole").textContent = m.youMustUploadScreenshot ? "YOU WERE SELECTED TO UPLOAD THE SCREENSHOT" : "WAITING FOR THE SELECTED PLAYER TO UPLOAD THE SCREENSHOT";
+        if (m.screenshotSubmitted) {
+            document.getElementById("verificationResult").textContent = m.verificationStatus === "verified" ? "VERIFIED" : "ADMIN REVIEW";
+            document.getElementById("imageVerification").textContent = m.verificationStatus === "verified" ? "Score matched" : "Review required";
+        }
+        if (m.status === "disputed") document.getElementById("disputeCard").classList.remove("hidden");
+    }
+
+    if (JSON.stringify(currentMatch) !== before) {
+        localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+        loadMatch();
+    }
+
+    const resultCard = document.getElementById("resultCard");
+    if (resultCard) resultCard.classList.toggle("hidden", m.status !== "playing" || currentMatch.resultSubmitted);
+    if (currentMatch.resultSubmitted && m.status === "awaiting_verification") {
+        const yourScore = Number(m.youAreCreator ? m.creator_submitted_score : m.opponent_submitted_score);
+        const opponentScore = Number(m.youAreCreator ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score);
+        document.getElementById("enteredVerification").textContent = yourScore + " - " + opponentScore;
+        document.getElementById("verificationGD").textContent = yourScore - opponentScore;
+    }
+
+    if (m.status === "completed") {
+        const label = document.getElementById("matchStatus");
+        if (label) label.textContent = m.verificationStatus === "verified" ? "RESULT VERIFIED" : "RESULT SETTLED";
+        alertIfLoser(m);
+    }
+    if (m.status === "awaiting_verification") document.getElementById("matchStatus").textContent = "SCREENSHOT REQUIRED";
+    if (m.status === "disputed") document.getElementById("matchStatus").textContent = "ADMIN REVIEW · RESULT ON HOLD";
+}
+
+// Deterministic roles: the server decides who sends the code.
+function assignMatchRoles() {
+    updateRoleMessage();
+}
+
+async function sendRoomCode() {
+    if (!currentMatch || !currentMatch.backendId) return;
+    const input = document.getElementById("roomCode");
+    const code = input.value.trim();
+    if (!code) {
+        alert("Please enter the actual eFootball room code.");
+        input.focus();
+        return;
+    }
+    const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/roomcode", {
+        method: "POST",
+        body: { code: code }
+    });
+    if (!r.ok) {
+        alert(r.data.message || "Could not send the room code.");
+        return;
+    }
+    const sent = r.data.match.room_code || code;
+    currentMatch.roomCode = sent;
+    currentMatch.codeSent = true;
+    localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+    document.getElementById("matchStatus").textContent = "ROOM CODE SENT";
+    document.getElementById("senderArea").innerHTML =
+        '<div class="role-banner">✓ ROOM CODE SENT</div>' +
+        '<div class="received-code"><small>YOUR ROOM CODE</small><strong>' + escapeHTML(sent) + '</strong></div>' +
+        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code.</p>';
+    notifyUser("GOAL$GAMBIT", "Room code sent successfully.");
+}
+
+async function toggleReady() {
+    if (!currentMatch || !currentMatch.backendId) return;
+    const button = document.getElementById("readyButton");
+    button.disabled = true;
+    const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/ready", {
+        method: "POST",
+        body: { ready: true }
+    });
+    if (!r.ok) {
+        button.disabled = false;
+        alert(r.data.message || "Could not mark you as ready.");
+        return;
+    }
+    button.textContent = "✓ YOU ARE READY";
+    document.getElementById("yourReady").textContent = "READY";
+    notifyUser("GOAL$GAMBIT", "You are marked as ready.");
+    await syncFromServer();
+}
+
+// A league fixture opens the hub with ?league=Bronze|Silver|Gold.
+// The entry fee was already paid when joining the league, so the
+// match itself has no extra stake. Only league members can play.
+async function startLeagueMatch(league) {
+    const r = await GG.api("/api/efootball/matches", {
+        method: "POST",
+        body: { mode: "league-" + league.toLowerCase(), league: league, stake: 0 }
+    });
+    if (!r.ok) {
+        alert(r.data.message || "Could not start your league match.");
+        location.href = "leagues.html";
+        return;
+    }
+    const sm = r.data.match;
+    currentMatch = {
+        id: "GG-" + sm.id,
+        backendId: sm.id,
+        game: "eFootball",
+        mode: league + " League",
+        league: league,
+        stake: 0,
+        player: sm.yourName || currentUser,
+        opponent: sm.opponentFound ? sm.opponentName : "Opponent",
+        status: sm.status,
+        resultSubmitted: false,
+        createdAt: sm.created_at
+    };
+    localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+    loadMatch();
+    syncFromServer();
+}
+
+document.addEventListener("DOMContentLoaded", async function () {
+    if (!GG.requireLogin()) return;
+    const params = new URLSearchParams(location.search);
+    const league = params.get("league");
+    const fixtureId = params.get("fixture");
+    if (fixtureId) {
+        const fr = await GG.api("/api/efootball/matches/" + encodeURIComponent(fixtureId), { noRedirect:true });
+        if (fr.ok && fr.data.match) {
+            const sm = fr.data.match;
+            currentMatch = { id:"GG-"+sm.id, backendId:sm.id, game:"eFootball", mode:sm.league ? sm.league+" League" : "League", league:sm.league||null, stake:Number(sm.stake_amount||0), player:sm.yourName||currentUser, opponent:sm.opponentFound?sm.opponentName:"Opponent", status:sm.status, resultSubmitted:!!(sm.youAreCreator?sm.creator_submitted:sm.opponent_submitted), createdAt:sm.created_at };
+            localStorage.setItem("goalGambitCurrentMatch",JSON.stringify(currentMatch));
+            loadMatch();
+        }
+    } else if (league && ["Bronze", "Silver", "Gold"].indexOf(league) !== -1) {
+        const stale = !currentMatch || currentMatch.status === "completed" || currentMatch.league !== league;
+        if (stale) await startLeagueMatch(league);
+    } else if (!currentMatch || currentMatch.status === "completed") {
+        // Resume an unfinished match that was started on another page/device.
+        const active = await GG.api("/api/efootball/matches/active", { noRedirect: true });
+        if (active.ok && active.data.match) {
+            const sm = active.data.match;
+            currentMatch = {
+                id: "GG-" + sm.id, backendId: sm.id, game: "eFootball",
+                mode: sm.league ? sm.league + " League" : (sm.mode || "ranked").charAt(0).toUpperCase() + (sm.mode || "ranked").slice(1),
+                league: sm.league || null, stake: Number(sm.stake_amount || 0),
+                player: sm.yourName || currentUser, opponent: sm.opponentFound ? sm.opponentName : "Opponent",
+                status: sm.status, resultSubmitted: false, createdAt: sm.created_at
+            };
+            localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+            loadMatch();
+        }
+    }
+    syncFromServer();
+    setInterval(syncFromServer, 2500);
+});
+</script>
+</body>
+
+</html>

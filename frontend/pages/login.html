@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT | Log In</title>
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+
+<header class="navbar">
+
+    <a href="index.html" class="brand">
+
+        <span class="brand-icon">
+            ♛
+        </span>
+
+        <span>
+            GOAL$GAMBIT
+        </span>
+
+    </a>
+
+
+    <nav class="desktop-nav">
+
+        <a href="index.html">
+            Home
+        </a>
+
+        <a href="how-it-works.html">
+            How It Works
+        </a>
+
+        <a href="leaderboard.html">
+            Leaderboard
+        </a>
+
+    </nav>
+
+
+    <div class="nav-actions">
+
+        <a href="login.html" class="login-button">
+            Log In
+        </a>
+
+        <a href="signup.html" class="signup-button">
+            Create Account
+        </a>
+
+    </div>
+
+</header>
+
+
+
+<main>
+
+    <section class="final-section">
+
+        <span class="section-label">
+            WELCOME BACK
+        </span>
+
+
+        <h2>
+
+            Log in to
+
+            <span>
+                GOAL$GAMBIT.
+            </span>
+
+        </h2>
+
+
+        <p>
+            Continue to your player account.
+        </p>
+
+
+
+        <form
+            id="loginForm"
+            style="max-width:500px;margin:35px auto;text-align:left;"
+        >
+
+
+            <label for="username">
+                Username
+            </label>
+
+
+            <input
+                type="text"
+                id="username"
+                name="username"
+                placeholder="Enter your username"
+                required
+                autocomplete="username"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+
+
+            <label for="password">
+                Password
+            </label>
+
+
+            <input
+                type="password"
+                id="password"
+                name="password"
+                placeholder="Enter your password"
+                required
+                autocomplete="current-password"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+
+
+            <button
+                type="submit"
+                class="primary-button large"
+                style="border:0;cursor:pointer;width:100%;"
+            >
+
+                Log In
+
+                <b>
+                    →
+                </b>
+
+            </button>
+
+
+        </form>
+
+
+
+        <p
+            id="loginMessage"
+            style="color:#f4bd20;"
+        ></p>
+
+
+        <p>
+
+            Don't have an account?
+
+            <a
+                href="signup.html"
+                class="text-link"
+            >
+                Create one
+            </a>
+
+        </p>
+
+
+    </section>
+
+</main>
+
+
+
+<footer>
+
+    <div class="footer-column">
+
+        <h4>
+            Support
+        </h4>
+
+
+        <a href="contact.html">
+            Contact
+        </a>
+
+
+        <a href="terms.html">
+            Terms
+        </a>
+
+
+        <a href="privacy.html">
+            Privacy
+        </a>
+
+    </div>
+
+</footer>
+
+
+
+<script src="../js/api.js"></script>
+<script>
+if (GG.getToken()) {
+    location.replace("dashboard.html");
+}
+
+document.getElementById("loginForm").addEventListener("submit", async function (event) {
+    event.preventDefault();
+
+    var message = document.getElementById("loginMessage");
+    var button = event.target.querySelector("button[type=submit]");
+    var username = document.getElementById("username").value.trim();
+    var password = document.getElementById("password").value;
+
+    message.textContent = "";
+    button.disabled = true;
+
+    var result = await GG.api("/api/auth/login", {
+        method: "POST",
+        body: { username: username, password: password },
+        noRedirect: true
+    });
+
+    button.disabled = false;
+
+    if (!result.ok) {
+        message.textContent = result.data.message || "Login failed.";
+        return;
+    }
+
+    // The game (Chess / Konami / Both) is stored on the account, so the
+    // right dashboard opens on any device.
+    GG.saveSession(result.data.token, result.data.user, result.data.user.game);
+    location.replace("dashboard.html");
+});
+</script>
+
+
+
+</body>
+
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GOAL$GAMBIT | Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { display:flex; align-items:center; justify-content:center; min-height:100vh; text-align:center; }
+        p { color: var(--muted, #aaa); }
+        .loading { color:#f4bd20; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1 class="loading">Opening your dashboard…</h1>
+        <p id="msg">Checking your account type.</p>
+        <p><a href="login.html" class="text-link" id="fallback" style="display:none;">Back to log in</a></p>
+    </main>
+
+<script src="../js/api.js"></script>
+<script>
+/*
+ * GOAL$GAMBIT DASHBOARD DISPATCHER
+ *
+ * Database value users.game is the source of truth:
+ *   chess  -> chess.html
+ *   konami -> konami.html
+ *   both   -> both.html
+ */
+(async function () {
+    if (!GG.requireLogin()) return;
+
+    var result = await GG.api("/api/me", { noRedirect: true });
+
+    if (!result.ok || !result.data.user) {
+        document.getElementById("msg").textContent =
+            result.data.message || "Could not load your account.";
+        document.getElementById("fallback").style.display = "inline";
+        return;
+    }
+
+    var game = String(result.data.user.game || "").trim().toLowerCase();
+
+    if (game !== "chess" && game !== "konami" && game !== "both") {
+        GG.clearSession();
+        document.getElementById("msg").textContent =
+            "Your account has an invalid game selection. Please log in again.";
+        document.getElementById("fallback").style.display = "inline";
+        return;
+    }
+
+    // Refresh the local session from the actual database account.
+    GG.saveSession(result.data.token || GG.getToken(), result.data.user, game);
+
+    location.replace(GG.gameHome(game));
+})();
+</script>
+</body>
+</html>

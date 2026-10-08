@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080808">
+  <title>GOAL$GAMBIT | eFootball</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#080808;color:#fff;font:16px/1.6 Arial,Helvetica,sans-serif}
+    main{width:min(520px,100%);padding:32px;border:1px solid #292929;border-radius:18px;background:#111;text-align:center}
+    h1{margin:0 0 12px;color:#f4bd20;font-size:clamp(26px,6vw,38px)}
+    p{margin:0;color:#aaa}
+    a{display:inline-block;margin-top:22px;padding:11px 16px;border-radius:9px;background:#f4bd20;color:#111;font-weight:800;text-decoration:none}
+  </style>
+</head>
+<body>
+  <main aria-live="polite">
+    <h1>Opening your dashboard</h1>
+    <p id="message">Checking your account and sending you to the right game.</p>
+    <a id="loginLink" href="login.html" hidden>Sign in</a>
+  </main>
+  <script src="../js/api.js"></script>
+  <script>
+    "use strict";
+    (async function () {
+      if (!GG.requireLogin()) return;
+      const result = await GG.api("/api/me");
+      if (!result.ok || !result.data.user) {
+        document.getElementById("message").textContent =
+          result.data.message || "We could not load your account. Please sign in again.";
+        document.getElementById("loginLink").hidden = false;
+        return;
+      }
+      location.replace(GG.gameHome(result.data.user.game));
+    }());
+  </script>
+</body>
+</html>

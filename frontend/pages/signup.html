@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT | Create Account</title>
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<header class="navbar">
+
+    <a href="index.html" class="brand">
+
+        <span class="brand-icon">♛</span>
+
+        <span>
+            GOAL$GAMBIT
+        </span>
+
+    </a>
+
+    <nav class="desktop-nav">
+
+        <a href="index.html">
+            Home
+        </a>
+
+        <a href="how-it-works.html">
+            How It Works
+        </a>
+
+        <a href="leaderboard.html">
+            Leaderboard
+        </a>
+
+    </nav>
+
+    <div class="nav-actions">
+
+        <a href="login.html" class="login-button">
+            Log In
+        </a>
+
+        <a href="signup.html" class="signup-button">
+            Create Account
+        </a>
+
+    </div>
+
+</header>
+
+
+<main>
+
+    <section class="final-section">
+
+        <span class="section-label">
+            JOIN GOAL$GAMBIT
+        </span>
+
+        <h2>
+            Create your
+            <span>player account.</span>
+        </h2>
+
+        <p>
+            Choose the games you want to compete in.
+        </p>
+
+
+        <form
+            id="signupForm"
+            style="max-width:500px;margin:35px auto;text-align:left;"
+        >
+
+            <label for="username">
+                Username
+            </label>
+
+            <input
+                type="text"
+                id="username"
+                name="username"
+                placeholder="Choose a username"
+                required
+                autocomplete="username"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+
+            <label for="phone">
+                Phone Number
+            </label>
+
+            <input
+                type="tel"
+                id="phone"
+                name="phone"
+                placeholder="Enter your phone number"
+                required
+                inputmode="numeric"
+                autocomplete="tel"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+
+            <label for="password">
+                Password
+            </label>
+
+            <input
+                type="password"
+                id="password"
+                name="password"
+                placeholder="Create a password"
+                required
+                minlength="8"
+                autocomplete="new-password"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+
+            <label for="game">
+                Choose Your Game
+            </label>
+
+            <select
+                id="game"
+                name="game"
+                required
+                style="width:100%;padding:15px;margin:8px 0 25px;"
+            >
+
+                <option value="">
+                    Select a game
+                </option>
+
+                <option value="chess">
+                    Chess
+                </option>
+
+                <option value="konami">
+                    Konami eFootball
+                </option>
+
+                <option value="both">
+                    Both Chess & Konami eFootball
+                </option>
+
+            </select>
+
+
+            <div id="ratingBox" style="display:none;">
+
+                <label for="chessRating">
+                    Your Chess Rating
+                </label>
+
+                <input
+                    type="number"
+                    id="chessRating"
+                    name="chessRating"
+                    placeholder="e.g. 1200 (Chess.com / Lichess rating)"
+                    min="100"
+                    max="3000"
+                    step="1"
+                    inputmode="numeric"
+                    style="width:100%;padding:15px;margin:8px 0 8px;"
+                >
+
+                <small style="display:block;color:#9a9a9a;margin-bottom:25px;">
+                    Enter the rating you currently play at. It becomes your
+                    starting GOAL$GAMBIT chess rating (100 - 3000).
+                </small>
+
+            </div>
+
+
+            <button
+                type="submit"
+                class="primary-button large"
+                style="border:0;cursor:pointer;width:100%;"
+            >
+
+                Create Account
+
+                <b>
+                    →
+                </b>
+
+            </button>
+
+        </form>
+
+
+        <p
+            id="signupMessage"
+            style="color:#f4bd20;"
+        ></p>
+
+
+        <p>
+
+            Already have an account?
+
+            <a
+                href="login.html"
+                class="text-link"
+            >
+                Log In
+            </a>
+
+        </p>
+
+    </section>
+
+</main>
+
+
+<footer>
+
+    <div class="footer-column">
+
+        <h4>
+            Support
+        </h4>
+
+        <a href="contact.html">
+            Contact
+        </a>
+
+        <a href="terms.html">
+            Terms
+        </a>
+
+        <a href="privacy.html">
+            Privacy
+        </a>
+
+    </div>
+
+</footer>
+
+
+<script src="../js/api.js"></script>
+<script>
+if (GG.getToken()) {
+    location.replace("dashboard.html");
+}
+
+var gameSelect = document.getElementById("game");
+var ratingBox = document.getElementById("ratingBox");
+
+function syncRatingBox() {
+    var needsRating = gameSelect.value === "chess" || gameSelect.value === "both";
+    ratingBox.style.display = needsRating ? "block" : "none";
+}
+gameSelect.addEventListener("change", syncRatingBox);
+syncRatingBox();
+
+document.getElementById("signupForm").addEventListener("submit", async function (event) {
+    event.preventDefault();
+
+    var message = document.getElementById("signupMessage");
+    var button = event.target.querySelector("button[type=submit]");
+    var username = document.getElementById("username").value.trim();
+    var phone = document.getElementById("phone").value.trim();
+    var password = document.getElementById("password").value;
+    var game = gameSelect.value;
+    var ratingText = document.getElementById("chessRating").value.trim();
+
+    message.textContent = "";
+
+    if (!username || !phone || !password || !game) {
+        message.textContent = "Please complete all fields.";
+        return;
+    }
+
+    if (password.length < 8) {
+        message.textContent = "Password must be at least 8 characters.";
+        return;
+    }
+
+    var chessRating = null;
+    if (game === "chess" || game === "both") {
+        chessRating = Number(ratingText);
+        if (!ratingText || !Number.isInteger(chessRating) || chessRating < 100 || chessRating > 3000) {
+            message.textContent = "Enter your chess rating as a whole number between 100 and 3000.";
+            return;
+        }
+    }
+
+    button.disabled = true;
+
+    var result = await GG.api("/api/auth/register", {
+        method: "POST",
+        body: { username: username, phone: phone, password: password, game: game, chessRating: chessRating },
+        noRedirect: true
+    });
+
+    button.disabled = false;
+
+    if (!result.ok) {
+        message.textContent = result.data.message || "Could not create account.";
+        return;
+    }
+
+    GG.saveSession(result.data.token, result.data.user, game);
+    location.replace("dashboard.html");
+});
+</script>
+
+
+</body>
+</html>

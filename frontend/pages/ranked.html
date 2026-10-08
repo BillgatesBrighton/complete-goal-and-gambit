@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Ranked</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #050505;
+    color: #ffffff;
+    min-height: 100vh;
+}
+
+.navbar {
+    height: 70px;
+    background: #090909;
+    border-bottom: 1px solid #242424;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 0 7%;
+}
+
+.logo {
+    color: #d4af37;
+    font-size: 24px;
+    font-weight: 900;
+    letter-spacing: 1px;
+}
+
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.nav-links a {
+    color: #ffffff;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.nav-links a:hover {
+    color: #d4af37;
+}
+
+.container {
+    width: 92%;
+    max-width: 1000px;
+    margin: 55px auto 100px;
+}
+
+.hero {
+    text-align: center;
+    margin-bottom: 40px;
+}
+
+.hero-label {
+    color: #d4af37;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+
+.hero h1 {
+    font-size: 44px;
+    margin-bottom: 12px;
+}
+
+.hero p {
+    color: #999999;
+    max-width: 650px;
+    margin: auto;
+    line-height: 1.6;
+}
+
+.card {
+    background: #0b0b0b;
+    border: 1px solid #292929;
+    border-radius: 16px;
+    padding: 35px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.35);
+}
+
+.balance-box {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+
+    background: #101010;
+    border: 1px solid #252525;
+    border-radius: 10px;
+
+    padding: 18px 20px;
+    margin-bottom: 30px;
+}
+
+.balance-label {
+    color: #888888;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.balance-value {
+    color: #d4af37;
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.section-title {
+    font-size: 22px;
+    margin-bottom: 8px;
+}
+
+.section-description {
+    color: #888888;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 25px;
+}
+
+.stakes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 30px;
+}
+
+.stake-btn {
+    background: #111111;
+    color: #ffffff;
+
+    border: 1px solid #333333;
+    border-radius: 9px;
+
+    padding: 18px 10px;
+
+    font-size: 16px;
+    font-weight: bold;
+
+    cursor: pointer;
+    transition: .2s;
+}
+
+.stake-btn:hover {
+    border-color: #d4af37;
+    color: #d4af37;
+}
+
+.stake-btn.selected {
+    background: #d4af37;
+    color: #050505;
+    border-color: #d4af37;
+}
+
+.find-btn {
+    width: 100%;
+
+    background: #d4af37;
+    color: #050505;
+
+    border: none;
+    border-radius: 8px;
+
+    padding: 16px;
+
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: .5px;
+
+    cursor: pointer;
+}
+
+.find-btn:hover {
+    background: #f0cf55;
+}
+
+.find-btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
+.message {
+    display: none;
+
+    margin-top: 20px;
+
+    padding: 15px;
+
+    border-radius: 8px;
+
+    background: #111111;
+    border: 1px solid #333333;
+
+    text-align: center;
+
+    color: #cccccc;
+
+    line-height: 1.5;
+}
+
+.message.show {
+    display: block;
+}
+
+.flow {
+    margin-top: 35px;
+
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+
+    gap: 12px;
+}
+
+.flow-box {
+    background: #101010;
+    border: 1px solid #242424;
+    border-radius: 10px;
+    padding: 18px;
+}
+
+.flow-number {
+    color: #d4af37;
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.flow-title {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.flow-text {
+    color: #777777;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.rules {
+    margin-top: 35px;
+
+    background: #0e0e0e;
+    border: 1px solid #242424;
+    border-radius: 10px;
+
+    padding: 25px;
+}
+
+.rules h2 {
+    font-size: 20px;
+    margin-bottom: 15px;
+}
+
+.rules ul {
+    padding-left: 20px;
+}
+
+.rules li {
+    color: #999999;
+    margin-bottom: 9px;
+    line-height: 1.5;
+}
+
+.active-match {
+    position: fixed;
+
+    right: 20px;
+    bottom: 20px;
+
+    width: 290px;
+
+    background: #0b0b0b;
+    border: 1px solid #d4af37;
+
+    border-radius: 12px;
+
+    padding: 15px 17px;
+
+    box-shadow: 0 10px 40px rgba(0,0,0,.6);
+
+    z-index: 9999;
+
+    display: none;
+}
+
+.active-match.show {
+    display: block;
+}
+
+.active-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    margin-bottom: 8px;
+}
+
+.active-title {
+    color: #d4af37;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.active-close {
+    background: none;
+    border: none;
+    color: #777777;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+.active-opponent {
+    font-size: 13px;
+    margin-bottom: 7px;
+}
+
+.active-status {
+    color: #888888;
+    font-size: 11px;
+    margin-bottom: 12px;
+}
+
+.active-link {
+    display: block;
+
+    background: #d4af37;
+    color: #050505;
+
+    text-align: center;
+
+    padding: 9px;
+
+    border-radius: 6px;
+
+    text-decoration: none;
+
+    font-size: 12px;
+    font-weight: 900;
+}
+
+@media (max-width: 750px) {
+
+    .navbar {
+        padding: 0 5%;
+    }
+
+    .hero h1 {
+        font-size: 34px;
+    }
+
+    .card {
+        padding: 25px 20px;
+    }
+
+    .stakes {
+        grid-template-columns: 1fr;
+    }
+
+    .flow {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .balance-box {
+        gap: 15px;
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .active-match {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: auto;
+    }
+}
+
+@media (max-width: 450px) {
+
+    .flow {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+</style>
+
+<script src="../js/api.js"></script>
+
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="logo">
+        GOAL$GAMBIT
+    </div>
+
+    <div class="nav-links">
+
+        <a href="konami.html">
+            Dashboard
+        </a>
+
+    </div>
+
+</nav>
+
+
+<main class="container">
+
+    <section class="hero">
+
+        <div class="hero-label">
+            eFootball Competition
+        </div>
+
+        <h1>
+            Ranked Matches
+        </h1>
+
+        <p>
+            Choose your stake, enter the matchmaking queue
+            and take your match to eFootball. Your match room,
+            opponent and result are handled through the
+            GOAL$GAMBIT Match Hub.
+        </p>
+
+    </section>
+
+
+    <section class="card">
+
+        <div class="balance-box">
+
+            <div>
+
+                <div class="balance-label">
+                    Available Balance
+                </div>
+
+                <div
+                    class="balance-value"
+                    id="balance"
+                >
+                    KSh 0
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <h2 class="section-title">
+            Choose Your Stake
+        </h2>
+
+        <p class="section-description">
+            Select the amount you want to stake for this
+            ranked match.
+        </p>
+
+
+        <div class="stakes">
+
+            <button
+                class="stake-btn"
+                data-stake="20"
+                onclick="selectStake(20, this)"
+            >
+                KSh 20
+            </button>
+
+            <button
+                class="stake-btn"
+                data-stake="50"
+                onclick="selectStake(50, this)"
+            >
+                KSh 50
+            </button>
+
+            <button
+                class="stake-btn"
+                data-stake="100"
+                onclick="selectStake(100, this)"
+            >
+                KSh 100
+            </button>
+
+        </div>
+
+
+        <button
+            class="find-btn"
+            id="findBtn"
+            onclick="findMatch()"
+        >
+            FIND OPPONENT
+        </button>
+
+
+        <div
+            class="message"
+            id="message"
+        ></div>
+
+
+        <div class="flow">
+
+            <div class="flow-box">
+
+                <div class="flow-number">
+                    01
+                </div>
+
+                <div class="flow-title">
+                    Stake
+                </div>
+
+                <div class="flow-text">
+                    Choose your ranked entry amount.
+                </div>
+
+            </div>
+
+
+            <div class="flow-box">
+
+                <div class="flow-number">
+                    02
+                </div>
+
+                <div class="flow-title">
+                    Match
+                </div>
+
+                <div class="flow-text">
+                    GOAL$GAMBIT prepares your match.
+                </div>
+
+            </div>
+
+
+            <div class="flow-box">
+
+                <div class="flow-number">
+                    03
+                </div>
+
+                <div class="flow-title">
+                    Play
+                </div>
+
+                <div class="flow-text">
+                    Use the Match Hub to connect
+                    and play in eFootball.
+                </div>
+
+            </div>
+
+
+            <div class="flow-box">
+
+                <div class="flow-number">
+                    04
+                </div>
+
+                <div class="flow-title">
+                    Result
+                </div>
+
+                <div class="flow-text">
+                    Return to the Match Hub and
+                    submit your result.
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="rules">
+
+            <h2>
+                Ranked Match Rules
+            </h2>
+
+            <ul>
+
+                <li>
+                    Both players must play the assigned
+                    eFootball match.
+                </li>
+
+                <li>
+                    The match room code is provided through
+                    the GOAL$GAMBIT Match Hub.
+                </li>
+
+                <li>
+                    Players must submit their result after
+                    the match has finished.
+                </li>
+
+                <li>
+                    Results are compared between both
+                    players before settlement.
+                </li>
+
+                <li>
+                    One player may be randomly selected
+                    for screenshot verification.
+                </li>
+
+                <li>
+                    A disputed result is not automatically
+                    paid out.
+                </li>
+
+            </ul>
+
+        </div>
+
+    </section>
+
+</main>
+
+
+<div
+    class="active-match"
+    id="activeMatch"
+>
+
+    <div class="active-top">
+
+        <div class="active-title">
+            ⚽ ACTIVE MATCH
+        </div>
+
+        <button
+            class="active-close"
+            onclick="hideActiveMatch()"
+        >
+            ×
+        </button>
+
+    </div>
+
+
+    <div
+        class="active-opponent"
+        id="activeOpponent"
+    >
+        vs Opponent
+    </div>
+
+
+    <div
+        class="active-status"
+        id="activeStatus"
+    >
+        Match in progress
+    </div>
+
+
+    <a
+        href="match-hub.html"
+        class="active-link"
+    >
+        RETURN TO MATCH
+    </a>
+
+</div>
+
+
+<script>
+
+/* =========================================================
+   GOAL$GAMBIT | RANKED MATCHES
+   ========================================================= */
+
+const VALID_STAKES = [
+    20,
+    50,
+    100
+];
+
+
+/* =========================================================
+   ACCOUNT
+   ========================================================= */
+
+function getAccount() {
+
+    try {
+
+        return JSON.parse(
+            localStorage.getItem(
+                "goalGambitAccount"
+            )
+        ) || {};
+
+    } catch {
+
+        return {};
+
+    }
+
+}
+
+
+const account =
+    getAccount();
+
+
+const username =
+    account.username ||
+    localStorage.getItem(
+        "goalGambitUsername"
+    );
+
+
+/* =========================================================
+   MESSAGE
+   ========================================================= */
+
+function showMessage(message) {
+
+    const box =
+        document.getElementById(
+            "message"
+        );
+
+    box.textContent =
+        message;
+
+    box.classList.add(
+        "show"
+    );
+
+}
+
+
+/* =========================================================
+   BALANCE
+   ========================================================= */
+
+function updateBalanceDisplay() {
+
+    const localBalance =
+        Number(
+            localStorage.getItem(
+                "goalGambitBalance"
+            )
+        ) || 0;
+
+    document.getElementById(
+        "balance"
+    ).textContent =
+        "KSh " +
+        localBalance.toLocaleString();
+
+}
+
+
+updateBalanceDisplay();
+
+
+/* =========================================================
+   STAKE
+   ========================================================= */
+
+let selectedStake =
+    Number(
+        localStorage.getItem(
+            "goalGambitRankedStake"
+        )
+    );
+
+
+if (
+    !VALID_STAKES.includes(
+        selectedStake
+    )
+) {
+
+    selectedStake = 20;
+
+}
+
+
+function selectStake(
+    stake,
+    button
+) {
+
+    stake = Number(stake);
+
+    if (
+        !VALID_STAKES.includes(
+            stake
+        )
+    ) {
+
+        return;
+
+    }
+
+    selectedStake =
+        stake;
+
+
+    document
+        .querySelectorAll(
+            ".stake-btn"
+        )
+        .forEach(
+            function(btn) {
+
+                btn.classList.remove(
+                    "selected"
+                );
+
+            }
+        );
+
+
+    button.classList.add(
+        "selected"
+    );
+
+
+    localStorage.setItem(
+        "goalGambitRankedStake",
+        String(selectedStake)
+    );
+
+}
+
+
+document
+    .querySelectorAll(
+        ".stake-btn"
+    )
+    .forEach(
+        function(button) {
+
+            if (
+                Number(
+                    button.dataset.stake
+                ) === selectedStake
+            ) {
+
+                button.classList.add(
+                    "selected"
+                );
+
+            }
+
+        }
+    );
+
+
+/* =========================================================
+   FIND MATCH
+   ========================================================= */
+
+async function findMatch() {
+
+    const button =
+        document.getElementById(
+            "findBtn"
+        );
+
+
+    /*
+     * Make sure a JWT exists before sending
+     * the request.
+     */
+
+    const token =
+        localStorage.getItem(
+            "goalGambitToken"
+        );
+
+
+    if (!token) {
+
+        showMessage(
+            "Your login session is missing. Please log in again."
+        );
+
+        setTimeout(
+            function() {
+
+                window.location.href =
+                    "login.html";
+
+            },
+            1000
+        );
+
+        return;
+
+    }
+
+
+    if (!username) {
+
+        showMessage(
+            "Your account session could not be found. Please log in again."
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !VALID_STAKES.includes(
+            selectedStake
+        )
+    ) {
+
+        showMessage(
+            "Please select a valid stake."
+        );
+
+        return;
+
+    }
+
+
+    /*
+     * Check the real wallet when the shared
+     * API helper provides hasBalance().
+     */
+
+    try {
+
+        if (
+            typeof GG.hasBalance ===
+            "function"
+        ) {
+
+            const enough =
+                await GG.hasBalance(
+                    selectedStake
+                );
+
+            if (!enough) {
+
+                showMessage(
+                    "You do not have enough balance for a KSh " +
+                    selectedStake +
+                    " stake. Deposit into your wallet first."
+                );
+
+                return;
+
+            }
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            "Wallet balance check error:",
+            error
+        );
+
+        showMessage(
+            "Unable to verify your wallet balance."
+        );
+
+        return;
+
+    }
+
+
+    button.disabled =
+        true;
+
+    button.textContent =
+        "CREATING MATCH...";
+
+
+    showMessage(
+        "Creating your ranked match..."
+    );
+
+
+    let server;
+
+
+    try {
+
+        /*
+         * IMPORTANT:
+         *
+         * stake_amount is the backend field.
+         *
+         * GG.api() automatically attaches:
+         *
+         * Authorization:
+         * Bearer <goalGambitToken>
+         */
+
+        server =
+            await GG.api(
+                "/api/efootball/matches",
+                {
+                    method: "POST",
+
+                    body: {
+
+                        mode:
+                            "ranked",
+
+                        stake_amount:
+                            selectedStake
+
+                    },
+
+                    noRedirect:
+                        true
+                }
+            );
+
+    } catch (error) {
+
+        console.error(
+            "Ranked match request error:",
+            error
+        );
+
+        button.disabled =
+            false;
+
+        button.textContent =
+            "FIND OPPONENT";
+
+        showMessage(
+            "Unable to contact the GOAL$GAMBIT server."
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !server ||
+        !server.ok
+    ) {
+
+        button.disabled =
+            false;
+
+        button.textContent =
+            "FIND OPPONENT";
+
+
+        const message =
+            server &&
+            server.data &&
+            server.data.message
+                ? server.data.message
+                : "Unable to create your ranked match.";
+
+
+        showMessage(
+            message
+        );
+
+
+        /*
+         * If the backend explicitly says
+         * authentication failed, remove the
+         * invalid token.
+         */
+
+        const lower =
+            message.toLowerCase();
+
+
+        if (
+            lower.includes(
+                "authentication token"
+            ) ||
+            lower.includes(
+                "invalid token"
+            ) ||
+            lower.includes(
+                "token expired"
+            ) ||
+            lower.includes(
+                "unauthorized"
+            )
+        ) {
+
+            localStorage.removeItem(
+                "goalGambitToken"
+            );
+
+        }
+
+        return;
+
+    }
+
+
+    const sm =
+        server.data &&
+        server.data.match;
+
+
+    if (!sm) {
+
+        console.error(
+            "Unexpected match response:",
+            server.data
+        );
+
+        button.disabled =
+            false;
+
+        button.textContent =
+            "FIND OPPONENT";
+
+        showMessage(
+            "The server returned an unexpected response."
+        );
+
+        return;
+
+    }
+
+
+    /*
+     * Store the REAL backend match.
+     */
+
+    const match = {
+
+        id:
+            "GG-" +
+            sm.id,
+
+        backendId:
+            sm.id,
+
+        game:
+            "eFootball",
+
+        mode:
+            "Ranked",
+
+        stake:
+            Number(
+                sm.stake_amount
+            ),
+
+        player:
+            username,
+
+        opponent:
+            sm.opponent_username ||
+            "Opponent",
+
+        roomCode:
+            sm.room_code ||
+            "",
+
+        status:
+            sm.status ||
+            "waiting",
+
+        playerReady:
+            Boolean(
+                sm.creator_ready
+            ),
+
+        opponentReady:
+            Boolean(
+                sm.opponent_ready
+            ),
+
+        resultSubmitted:
+            false,
+
+        createdAt:
+            sm.created_at ||
+            new Date().toISOString()
+
+    };
+
+
+    localStorage.setItem(
+        "goalGambitCurrentMatch",
+        JSON.stringify(match)
+    );
+
+
+    localStorage.setItem(
+        "goalGambitRankedStake",
+        String(selectedStake)
+    );
+
+
+    showMessage(
+        "Match created successfully. Waiting for an opponent..."
+    );
+
+
+    setTimeout(
+        function() {
+
+            window.location.href =
+                "match-hub.html";
+
+        },
+        700
+    );
+
+}
+
+
+/* =========================================================
+   ACTIVE MATCH
+   ========================================================= */
+
+function loadActiveMatch() {
+
+    const saved =
+        localStorage.getItem(
+            "goalGambitCurrentMatch"
+        );
+
+
+    if (!saved) {
+        return;
+    }
+
+
+    try {
+
+        const match =
+            JSON.parse(
+                saved
+            );
+
+
+        if (!match) {
+            return;
+        }
+
+
+        if (
+            match.status ===
+            "completed"
+        ) {
+
+            return;
+
+        }
+
+
+        if (
+            window.location.pathname
+                .toLowerCase()
+                .includes(
+                    "match-hub"
+                )
+        ) {
+
+            return;
+
+        }
+
+
+        document.getElementById(
+            "activeOpponent"
+        ).textContent =
+            "vs " +
+            (
+                match.opponent ||
+                "Opponent"
+            );
+
+
+        document.getElementById(
+            "activeStatus"
+        ).textContent =
+            match.status ===
+            "waiting"
+                ? "Waiting for opponent"
+                : match.resultSubmitted
+                    ? "Result submitted"
+                    : "Match in progress";
+
+
+        document.getElementById(
+            "activeMatch"
+        ).classList.add(
+            "show"
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "Active match error:",
+            error
+        );
+
+        localStorage.removeItem(
+            "goalGambitCurrentMatch"
+        );
+
+    }
+
+}
+
+
+function hideActiveMatch() {
+
+    document.getElementById(
+        "activeMatch"
+    ).classList.remove(
+        "show"
+    );
+
+}
+
+
+loadActiveMatch();
+
+
+/* =========================================================
+   PAGE EVENTS
+   ========================================================= */
+
+window.addEventListener(
+    "pageshow",
+    function() {
+
+        updateBalanceDisplay();
+
+        loadActiveMatch();
+
+    }
+);
+
+
+window.addEventListener(
+    "focus",
+    function() {
+
+        updateBalanceDisplay();
+
+        loadActiveMatch();
+
+    }
+);
+
+</script>
+
+</body>
+
+</html>

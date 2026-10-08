@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT | Leaderboard</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header class="navbar">
+
+    <a href="index.html" class="brand">
+        <span class="brand-icon">♛</span>
+        <span>GOAL$GAMBIT</span>
+    </a>
+
+    <nav class="desktop-nav">
+        <a href="index.html">Home</a>
+        <a href="how-it-works.html">How It Works</a>
+        <a href="leaderboard.html" class="active">Leaderboard</a>
+    </nav>
+
+    <div class="nav-actions">
+        <a href="login.html" class="login-button">Log In</a>
+        <a href="signup.html" class="signup-button">Create Account</a>
+        <a href="dashboard.html" class="dashboard-button">Dashboard</a>
+    </div>
+
+    <button class="menu-button" id="menuButton">☰</button>
+
+</header>
+
+
+<div class="mobile-menu" id="mobileMenu">
+
+    <a href="index.html">Home</a>
+    <a href="how-it-works.html">How It Works</a>
+    <a href="leaderboard.html">Leaderboard</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="login.html">Log In</a>
+    <a href="signup.html" class="mobile-signup">Create Account</a>
+
+</div>
+
+
+<main>
+
+<section class="leaderboard-section">
+
+    <div class="section-heading">
+
+        <span class="section-label">
+            PLAYER RANKINGS
+        </span>
+
+        <h2>
+            GOAL$GAMBIT
+            <span>Leaderboard.</span>
+        </h2>
+
+        <p>
+            Track the players making their mark through competitive play.
+        </p>
+
+    </div>
+
+
+    <div class="leaderboard">
+
+        <div class="leaderboard-header">
+            <span>#</span>
+            <span>PLAYER</span>
+            <span>GAMES</span>
+            <span>WIN RATE</span>
+            <span>WINNINGS</span>
+        </div>
+
+
+        <div id="leaderboardRows"><div class="player-row"><span></span><div class="player-info"><strong>Loading...</strong></div></div></div>
+    </div>
+
+
+    <div class="final-actions">
+
+        <a href="signup.html" class="primary-button large">
+            Start Competing
+            <b>→</b>
+        </a>
+
+    </div>
+
+</section>
+
+</main>
+
+
+<footer>
+
+    <div class="footer-column">
+
+        <h4>Support</h4>
+
+        <a href="contact.html">Contact</a>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+
+    </div>
+
+</footer>
+
+
+<script src="../js/api.js"></script>
+<script src="script.js"></script>
+<script>
+var leaderboardRefreshing = false;
+async function refreshLeaderboard() {
+    if (leaderboardRefreshing || document.hidden) return;
+    leaderboardRefreshing = true;
+    var box = document.getElementById("leaderboardRows");
+    var result = await GG.api("/api/leaderboard?limit=20", { noRedirect: true });
+    leaderboardRefreshing = false;
+
+    if (!result.ok || !Array.isArray(result.data)) {
+        if (!box.dataset.loaded) box.innerHTML = '<div class="player-row"><span></span><div class="player-info"><strong>Leaderboard unavailable right now.</strong></div></div>';
+        return;
+    }
+    if (!result.data.length) {
+        box.dataset.loaded = "true";
+        box.innerHTML = '<div class="player-row"><span></span><div class="player-info"><strong>No ranked players yet. Be the first!</strong></div></div>';
+        return;
+    }
+
+    box.dataset.loaded = "true";
+    box.innerHTML = result.data.map(function (p, i) {
+        var games = Number(p.games || 0), wins = Number(p.wins || 0);
+        var rate = games ? Math.round(wins / games * 100) : 0;
+        var name = GG.escapeHTML(p.username);
+        var rank = String(i + 1).padStart(2, "0");
+        return '<div class="player-row">' +
+            '<span class="rank' + (i === 0 ? ' first' : '') + '">' + rank + '</span>' +
+            '<div class="player-info"><div class="avatar">' + name.slice(0, 2).toUpperCase() + '</div><strong>' + name + '</strong></div>' +
+            '<span>' + games + '</span><span>' + rate + '%</span>' +
+            '<strong class="winnings">' + GG.formatMoney(p.winnings) + '</strong></div>';
+    }).join("");
+}
+refreshLeaderboard();
+setInterval(refreshLeaderboard, 5000);
+document.addEventListener("visibilitychange", function () { if (!document.hidden) refreshLeaderboard(); });
+</script>
+
+</body>
+</html>

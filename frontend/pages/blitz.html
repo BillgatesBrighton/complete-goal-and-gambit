@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT - Blitz Tournament</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            min-height: 100vh;
+            background: #0d0d0d;
+            color: #fff;
+            font-family: Arial, Helvetica, sans-serif;
+            padding: 20px;
+        }
+
+        .container {
+            width: min(700px, 100%);
+            margin: auto;
+        }
+
+        .top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 25px;
+        }
+
+        .logo {
+            color: #fff;
+            text-decoration: none;
+            font-size: 22px;
+            font-weight: 900;
+        }
+
+        .logo span {
+            color: #d4af37;
+        }
+
+        .back {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .card {
+            background: #181818;
+            border: 1px solid #303030;
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 10px;
+            margin-bottom: 12px;
+            border-radius: 5px;
+            background: #30280f;
+            color: #d4af37;
+            font-size: 11px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        h1 {
+            font-size: 27px;
+            margin-bottom: 8px;
+        }
+
+        .description {
+            color: #888;
+            line-height: 1.5;
+            margin-bottom: 25px;
+        }
+
+        .fixed-time {
+            padding: 18px;
+            margin-bottom: 22px;
+            background: #111;
+            border: 1px solid #292929;
+            border-radius: 9px;
+            text-align: center;
+        }
+
+        .fixed-time span {
+            display: block;
+            color: #777;
+            font-size: 12px;
+            margin-bottom: 7px;
+        }
+
+        .fixed-time strong {
+            color: #d4af37;
+            font-size: 25px;
+        }
+
+        .section-title {
+            color: #d4af37;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+        }
+
+        .stakes {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .stake {
+            padding: 16px 10px;
+            background: #222;
+            border: 1px solid #383838;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .stake:hover {
+            background: #2b2b2b;
+        }
+
+        .stake.selected {
+            background: #30280f;
+            border-color: #d4af37;
+            color: #d4af37;
+        }
+
+        .stake strong {
+            display: block;
+            font-size: 16px;
+        }
+
+        .stake small {
+            display: block;
+            margin-top: 5px;
+            color: #888;
+            font-size: 11px;
+        }
+
+        .summary {
+            margin-top: 24px;
+            padding: 15px;
+            background: #111;
+            border: 1px solid #292929;
+            border-radius: 8px;
+        }
+
+        .summary-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #252525;
+        }
+
+        .summary-row:last-child {
+            border-bottom: none;
+        }
+
+        .summary-row span {
+            color: #888;
+        }
+
+        .join-button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            background: #d4af37;
+            color: #111;
+            font-size: 16px;
+            font-weight: 900;
+            cursor: pointer;
+        }
+
+        .join-button:hover {
+            background: #e5c45a;
+        }
+
+        .note {
+            margin-top: 14px;
+            color: #666;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 500px) {
+
+            body {
+                padding: 12px;
+            }
+
+            .card {
+                padding: 18px;
+            }
+
+            .stakes {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            h1 {
+                font-size: 23px;
+            }
+        }
+    </style>
+<script src="../js/api.js"></script>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="top">
+
+        <a href="chess.html" class="logo">
+            GOAL<span>$</span>GAMBIT
+        </a>
+
+        <a href="chess.html" class="back">
+            ← Back
+        </a>
+
+    </div>
+
+
+    <div class="card">
+
+        <span class="badge">
+            CHESS TOURNAMENT
+        </span>
+
+
+        <h1>
+            Blitz Tournament
+        </h1>
+
+
+        <p class="description">
+            Enter the Blitz tournament and compete against other
+            GOAL$GAMBIT players in fast-paced chess.
+        </p>
+
+
+        <div class="fixed-time">
+
+            <span>
+                FIXED TIME CONTROL
+            </span>
+
+            <strong>
+                3 + 2
+            </strong>
+
+        </div>
+
+
+        <div class="section-title">
+            TOURNAMENT ENTRY
+        </div>
+
+
+        <div class="stakes">
+
+            <button
+                class="stake selected"
+                data-stake="20"
+                type="button">
+
+                <strong>
+                    KSh 20
+                </strong>
+
+                <small>
+                    Entry fee
+                </small>
+
+            </button>
+
+
+            <button
+                class="stake"
+                data-stake="50"
+                type="button">
+
+                <strong>
+                    KSh 50
+                </strong>
+
+                <small>
+                    Entry fee
+                </small>
+
+            </button>
+
+
+            <button
+                class="stake"
+                data-stake="100"
+                type="button">
+
+                <strong>
+                    KSh 100
+                </strong>
+
+                <small>
+                    Entry fee
+                </small>
+
+            </button>
+
+        </div>
+
+
+        <div class="summary">
+
+            <div class="summary-row">
+                <span>Tournament</span>
+                <strong>Blitz</strong>
+            </div>
+
+            <div class="summary-row">
+                <span>Time</span>
+                <strong>3 + 2</strong>
+            </div>
+
+            <div class="summary-row">
+                <span>Entry</span>
+                <strong id="summaryStake">
+                    KSh 20
+                </strong>
+            </div>
+
+        </div>
+
+
+        <button
+            id="joinButton"
+            class="join-button"
+            type="button">
+
+            Join Tournament
+
+        </button>
+
+
+        <p class="note">
+            Tournament entry and prize settlement will be
+            handled securely by the GOAL$GAMBIT server.
+        </p>
+
+    </div>
+
+</div>
+
+
+<script>
+
+    let selectedStake = 20;
+
+
+    const stakeButtons =
+        document.querySelectorAll(".stake");
+
+
+    stakeButtons.forEach(function(button) {
+
+        button.addEventListener(
+            "click",
+            function() {
+
+                stakeButtons.forEach(
+                    function(item) {
+
+                        item.classList.remove(
+                            "selected"
+                        );
+
+                    }
+                );
+
+
+                button.classList.add(
+                    "selected"
+                );
+
+
+                selectedStake =
+                    Number(button.dataset.stake);
+
+
+                document.getElementById(
+                    "summaryStake"
+                ).textContent =
+                    "KSh " + selectedStake;
+
+            }
+        );
+
+    });
+
+
+    document.getElementById(
+        "joinButton"
+    ).addEventListener(
+        "click",
+        function() {
+
+            GG.guardedGo("board.html" +
+                "?mode=blitz-tournament" +
+                "&minutes=3" +
+                "&increment=2" +
+                "&stake=" +
+                encodeURIComponent(
+                    selectedStake
+                ), selectedStake, "chess");
+
+        }
+    );
+
+</script>
+
+</body>
+</html>

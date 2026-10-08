@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT | Compete. Win. Earn.</title>
+
+    <meta
+        name="description"
+        content="GOAL$GAMBIT brings competitive chess and eFootball players together to compete in skill-based matches."
+    >
+
+    <link rel="stylesheet" href="style.css">
+
+    <style>
+
+        /* =====================================
+           SUPPORT FOOTER
+        ====================================== */
+
+        footer {
+            padding: 80px 20px 55px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .footer-column {
+            width: 100%;
+            max-width: 760px;
+            padding: 45px 35px;
+            text-align: center;
+
+            background:
+                linear-gradient(
+                    145deg,
+                    rgba(255,255,255,0.045),
+                    rgba(255,255,255,0.015)
+                );
+
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 24px;
+
+            box-shadow:
+                0 25px 70px rgba(0,0,0,0.35),
+                inset 0 1px 0 rgba(255,255,255,0.05);
+
+            position: relative;
+            overflow: hidden;
+        }
+
+        .footer-column::before {
+            content: "";
+            position: absolute;
+
+            width: 180px;
+            height: 180px;
+
+            top: -100px;
+            left: 50%;
+
+            transform: translateX(-50%);
+
+            background: rgba(244,189,32,0.08);
+
+            filter: blur(45px);
+
+            pointer-events: none;
+        }
+
+        .footer-column h4 {
+            position: relative;
+
+            margin: 0 0 12px;
+
+            font-size: 13px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+
+            font-weight: 700;
+        }
+
+        .footer-column p {
+            position: relative;
+
+            max-width: 500px;
+
+            margin: 0 auto 28px;
+
+            color: #999;
+
+            line-height: 1.7;
+            font-size: 15px;
+        }
+
+        .footer-links {
+            position: relative;
+
+            display: flex;
+
+            justify-content: center;
+            align-items: center;
+
+            gap: 12px;
+
+            flex-wrap: wrap;
+        }
+
+        .footer-column a {
+            display: inline-flex;
+
+            align-items: center;
+            justify-content: center;
+
+            min-width: 90px;
+
+            padding: 11px 20px;
+
+            color: inherit;
+
+            text-decoration: none;
+
+            border: 1px solid rgba(255,255,255,0.10);
+
+            border-radius: 10px;
+
+            background: rgba(255,255,255,0.025);
+
+            transition:
+                transform 0.2s ease,
+                border-color 0.2s ease,
+                background 0.2s ease;
+        }
+
+        .footer-column a:hover {
+            transform: translateY(-2px);
+
+            border-color: rgba(244,189,32,0.65);
+
+            background: rgba(244,189,32,0.07);
+        }
+
+        .footer-help {
+            position: relative;
+
+            margin-top: 28px;
+
+            font-size: 13px;
+
+            color: #777;
+        }
+
+        .footer-help span {
+            color: #f4bd20;
+        }
+
+
+        /* =====================================
+           LIVE LEADERBOARD
+        ====================================== */
+
+        #leaderboardPreview {
+            width: 100%;
+        }
+
+        .leaderboard-loading,
+        .leaderboard-empty {
+            min-height: 140px;
+
+            display: flex;
+
+            flex-direction: column;
+
+            justify-content: center;
+            align-items: center;
+
+            gap: 8px;
+
+            padding: 35px 20px;
+
+            text-align: center;
+
+            color: #888;
+        }
+
+        .leaderboard-loading::before {
+            content: "";
+
+            width: 24px;
+            height: 24px;
+
+            border: 2px solid rgba(244,189,32,0.20);
+
+            border-top-color: #f4bd20;
+
+            border-radius: 50%;
+
+            animation:
+                leaderboardSpin
+                0.8s linear infinite;
+
+            margin-bottom: 8px;
+        }
+
+        .leaderboard-empty strong {
+            color: #ddd;
+
+            font-size: 15px;
+        }
+
+        .leaderboard-empty span {
+            color: #777;
+
+            font-size: 13px;
+        }
+
+        @keyframes leaderboardSpin {
+
+            to {
+                transform: rotate(360deg);
+            }
+
+        }
+
+
+        /* =====================================
+           MOBILE FOOTER
+        ====================================== */
+
+        @media (max-width: 600px) {
+
+            footer {
+                padding: 55px 16px 35px;
+            }
+
+            .footer-column {
+                padding: 35px 20px;
+
+                border-radius: 20px;
+            }
+
+            .footer-links {
+                gap: 8px;
+            }
+
+            .footer-column a {
+                min-width: 75px;
+
+                padding: 10px 15px;
+            }
+
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+
+    <!-- =====================================
+         NAVIGATION
+    ====================================== -->
+
+    <header class="navbar">
+
+        <a href="index.html" class="brand">
+
+            <span class="brand-icon">
+                ♛
+            </span>
+
+            <span>
+                GOAL$GAMBIT
+            </span>
+
+        </a>
+
+
+        <nav class="desktop-nav">
+
+            <a
+                href="index.html"
+                class="active"
+            >
+                Home
+            </a>
+
+            <a href="how-it-works.html">
+                How It Works
+            </a>
+
+            <a href="leaderboard.html">
+                Leaderboard
+            </a>
+
+        </nav>
+
+
+        <div class="nav-actions">
+
+            <a
+                href="login.html"
+                class="login-button"
+            >
+                Log In
+            </a>
+
+            <a
+                href="signup.html"
+                class="signup-button"
+            >
+                Create Account
+            </a>
+
+        </div>
+
+
+        <button
+            class="menu-button"
+            id="menuButton"
+            type="button"
+            aria-label="Open navigation menu"
+            aria-expanded="false"
+        >
+            ☰
+        </button>
+
+    </header>
+
+
+
+    <!-- =====================================
+         MOBILE NAVIGATION
+    ====================================== -->
+
+    <div
+        class="mobile-menu"
+        id="mobileMenu"
+    >
+
+        <a href="index.html">
+            Home
+        </a>
+
+        <a href="how-it-works.html">
+            How It Works
+        </a>
+
+        <a href="leaderboard.html">
+            Leaderboard
+        </a>
+
+        <a href="login.html">
+            Log In
+        </a>
+
+        <a
+            href="signup.html"
+            class="mobile-signup"
+        >
+            Create Account
+        </a>
+
+    </div>
+
+
+
+    <!-- =====================================
+         MAIN CONTENT
+    ====================================== -->
+
+    <main>
+
+
+        <!-- =====================================
+             HERO
+        ====================================== -->
+
+        <section class="hero">
+
+            <img
+                src="images/chess-efootball.jpg"
+                alt="Chess and eFootball competition"
+                class="hero-image"
+                onerror="this.style.display='none';"
+            >
+
+            <div class="hero-overlay"></div>
+
+
+            <div class="hero-content">
+
+                <div class="hero-badge">
+
+                    CHESS
+                    <span>×</span>
+                    KONAMI eFOOTBALL
+
+                </div>
+
+
+                <h1>
+
+                    YOUR SKILL.
+                    <br>
+
+                    <span>
+                        YOUR STAGE.
+                    </span>
+
+                </h1>
+
+
+                <p class="hero-main-text">
+
+                    Compete against real players,
+                    put your skills to the test,
+                    and compete for rewards.
+
+                </p>
+
+
+                <p class="hero-small-text">
+
+                    Play chess directly on GOAL$GAMBIT
+                    or compete through Konami eFootball.
+
+                </p>
+
+
+                <div class="hero-actions">
+
+                    <a
+                        href="signup.html"
+                        class="primary-button"
+                    >
+
+                        <span>
+                            Start Competing
+                        </span>
+
+                        <b>
+                            →
+                        </b>
+
+                    </a>
+
+
+                    <a
+                        href="how-it-works.html"
+                        class="secondary-button"
+                    >
+                        How It Works
+                    </a>
+
+                </div>
+
+
+                <div class="hero-note">
+
+                    <span>
+                        ●
+                    </span>
+
+                    Built for players who trust their skill.
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =====================================
+             CHESS × EFOOTBALL
+        ====================================== -->
+
+        <section class="games-section">
+
+            <div
+                style="
+                    position:relative;
+                    min-height:520px;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    text-align:center;
+                    overflow:hidden;
+                    border-radius:28px;
+
+                    background:
+                        linear-gradient(
+                            90deg,
+                            rgba(0,0,0,0.88),
+                            rgba(0,0,0,0.48),
+                            rgba(0,0,0,0.85)
+                        ),
+                        url('images/chess-efootball.jpg')
+                        center/cover no-repeat;
+
+                    border:1px solid rgba(244,189,32,0.25);
+
+                    box-shadow:
+                        0 25px 70px rgba(0,0,0,0.40);
+                "
+            >
+
+                <div
+                    style="
+                        max-width:800px;
+                        padding:60px 25px;
+                        position:relative;
+                        z-index:2;
+                    "
+                >
+
+                    <span class="section-label">
+
+                        CHESS × KONAMI eFOOTBALL
+
+                    </span>
+
+
+                    <h2
+                        style="
+                            margin:20px 0;
+                            font-size:clamp(2.4rem,6vw,5rem);
+                            line-height:1.05;
+                        "
+                    >
+
+                        TWO GAMES.
+
+                        <br>
+
+                        <span>
+                            ONE COMPETITIVE ARENA.
+                        </span>
+
+                    </h2>
+
+
+                    <p
+                        style="
+                            max-width:650px;
+                            margin:0 auto;
+                            color:#d0d0d0;
+                            font-size:17px;
+                            line-height:1.8;
+                        "
+                    >
+
+                        Strategy meets football.
+                        Think ahead on the chessboard or take your
+                        football skills to the pitch. Challenge real
+                        players, test your ability and build your record.
+
+                    </p>
+
+
+                    <div
+                        style="
+                            display:flex;
+                            justify-content:center;
+                            align-items:center;
+                            flex-wrap:wrap;
+                            gap:12px;
+                            margin:30px 0;
+                        "
+                    >
+
+                        <span
+                            style="
+                                padding:11px 22px;
+                                border:1px solid rgba(244,189,32,0.40);
+                                border-radius:50px;
+                                background:rgba(0,0,0,0.45);
+                                color:#fff;
+                                font-size:14px;
+                            "
+                        >
+                            ♟ CHESS
+                        </span>
+
+
+                        <span
+                            style="
+                                color:#f4bd20;
+                                font-weight:bold;
+                                font-size:18px;
+                            "
+                        >
+                            ×
+                        </span>
+
+
+                        <span
+                            style="
+                                padding:11px 22px;
+                                border:1px solid rgba(244,189,32,0.40);
+                                border-radius:50px;
+                                background:rgba(0,0,0,0.45);
+                                color:#fff;
+                                font-size:14px;
+                            "
+                        >
+                            ⚽ eFOOTBALL
+                        </span>
+
+                    </div>
+
+
+                    <p
+                        style="
+                            margin:0 0 25px;
+                            color:#888;
+                            font-size:14px;
+                        "
+                    >
+
+                        Create an account to enter
+                        the competition.
+
+                    </p>
+
+
+                    <a
+                        href="signup.html"
+                        class="primary-button large"
+                    >
+
+                        Create Account
+
+                        <b>
+                            →
+                        </b>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =====================================
+             PLATFORM
+        ====================================== -->
+
+        <section class="platform-section">
+
+            <div class="platform-inner">
+
+
+                <div class="platform-text">
+
+                    <span class="section-label">
+
+                        COMPETE WITH PURPOSE
+
+                    </span>
+
+
+                    <h2>
+
+                        Skill is your
+                        <span>
+                            advantage.
+                        </span>
+
+                    </h2>
+
+
+                    <p>
+
+                        GOAL$GAMBIT gives competitive players
+                        a place to challenge one another,
+                        build their record and compete for
+                        rewards based on their matches.
+
+                    </p>
+
+
+                    <a
+                        href="how-it-works.html"
+                        class="text-link"
+                    >
+
+                        Discover how GOAL$GAMBIT works
+
+                        <span>
+                            →
+                        </span>
+
+                    </a>
+
+                </div>
+
+
+
+                <div class="platform-stats">
+
+
+                    <div class="stat-card">
+
+                        <strong>
+                            02
+                        </strong>
+
+                        <span>
+
+                            Competitive
+                            <br>
+                            Games
+
+                        </span>
+
+                    </div>
+
+
+                    <div class="stat-card">
+
+                        <strong>
+                            ∞
+                        </strong>
+
+                        <span>
+
+                            Matches
+                            <br>
+                            to Play
+
+                        </span>
+
+                    </div>
+
+
+                    <div class="stat-card">
+
+                        <strong>
+                            01
+                        </strong>
+
+                        <span>
+
+                            Competitive
+                            <br>
+                            Community
+
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =====================================
+             LIVE LEADERBOARD
+        ====================================== -->
+
+        <section class="leaderboard-section">
+
+
+            <div class="section-heading">
+
+                <span class="section-label">
+
+                    PLAYER RANKINGS
+
+                </span>
+
+
+                <h2>
+
+                    The competition is real.
+
+                </h2>
+
+
+                <p>
+
+                    Live rankings based on
+                    completed GOAL$GAMBIT matches.
+
+                </p>
+
+            </div>
+
+
+            <div class="leaderboard">
+
+
+                <div class="leaderboard-header">
+
+                    <span>
+                        #
+                    </span>
+
+                    <span>
+                        PLAYER
+                    </span>
+
+                    <span>
+                        GAMES
+                    </span>
+
+                    <span>
+                        WIN RATE
+                    </span>
+
+                    <span>
+                        WINNINGS
+                    </span>
+
+                </div>
+
+
+                <!--
+                    REAL PLAYER DATA WILL BE INSERTED
+                    HERE BY THE BACKEND.
+                -->
+
+                <div id="leaderboardPreview">
+
+                    <div class="leaderboard-loading">
+
+                        Loading live leaderboard...
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <a
+                href="leaderboard.html"
+                class="view-button"
+            >
+
+                View Full Leaderboard
+
+                <span>
+                    →
+                </span>
+
+            </a>
+
+        </section>
+
+
+
+        <!-- =====================================
+             FINAL CTA
+        ====================================== -->
+
+        <section class="final-section">
+
+            <span class="section-label">
+
+                READY WHEN YOU ARE
+
+            </span>
+
+
+            <h2>
+
+                Bring your skill.
+
+                <br>
+
+                <span>
+                    We'll bring the competition.
+                </span>
+
+            </h2>
+
+
+            <p>
+
+                Create your player account
+                and find your next challenge.
+
+            </p>
+
+
+            <div class="final-actions">
+
+                <a
+                    href="signup.html"
+                    class="primary-button large"
+                >
+
+                    Create Account
+
+                    <b>
+                        →
+                    </b>
+
+                </a>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+
+    <!-- =====================================
+         SUPPORT
+    ====================================== -->
+
+    <footer>
+
+        <div class="footer-column">
+
+            <h4>
+
+                GOAL$GAMBIT SUPPORT
+
+            </h4>
+
+
+            <p>
+
+                Need help with your account, a match,
+                or anything related to GOAL$GAMBIT?
+                Our support team is ready to assist you.
+
+            </p>
+
+
+            <div class="footer-links">
+
+                <a href="contact.html">
+                    Contact
+                </a>
+
+                <a href="terms.html">
+                    Terms
+                </a>
+
+                <a href="privacy.html">
+                    Privacy
+                </a>
+
+            </div>
+
+
+            <div class="footer-help">
+
+                Direct support available through
+
+                <span>
+                    WhatsApp
+                </span>.
+
+            </div>
+
+        </div>
+
+    </footer>
+
+
+
+    <!-- =====================================
+         ORIGINAL SITE JAVASCRIPT
+    ====================================== -->
+
+
+
+    <!-- =====================================
+         MOBILE MENU + LIVE LEADERBOARD
+    ====================================== -->
+
+    <script src="../js/api.js"></script>
+    <script>
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            function () {
+
+
+                /* ==============================
+                   MOBILE MENU
+                =============================== */
+
+                const menuButton =
+                    document.getElementById(
+                        "menuButton"
+                    );
+
+                const mobileMenu =
+                    document.getElementById(
+                        "mobileMenu"
+                    );
+
+
+                if (
+                    menuButton &&
+                    mobileMenu
+                ) {
+
+                    menuButton.addEventListener(
+                        "click",
+                        function () {
+
+                            const open =
+                                mobileMenu.classList.toggle(
+                                    "open"
+                                );
+
+
+                            menuButton.setAttribute(
+                                "aria-expanded",
+                                open
+                                    ? "true"
+                                    : "false"
+                            );
+
+                        }
+                    );
+
+
+                    mobileMenu
+                        .querySelectorAll("a")
+                        .forEach(function (link) {
+
+                            link.addEventListener(
+                                "click",
+                                function () {
+
+                                    mobileMenu
+                                        .classList
+                                        .remove("open");
+
+                                    menuButton.setAttribute(
+                                        "aria-expanded",
+                                        "false"
+                                    );
+
+                                }
+                            );
+
+                        });
+
+                }
+
+
+
+                /* ==============================
+                   LIVE LEADERBOARD
+                =============================== */
+
+                loadLeaderboard();
+
+            });
+
+
+
+
+        async function loadLeaderboard() {
+
+            const container =
+                document.getElementById(
+                    "leaderboardPreview"
+                );
+
+
+            if (!container) {
+                return;
+            }
+
+
+            try {
+
+                /*
+                 * This endpoint must return
+                 * REAL REGISTERED PLAYERS
+                 * and REAL VERIFIED MATCH DATA.
+                 */
+
+                const response = await GG.api("/api/leaderboard?limit=5");
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        "Leaderboard unavailable"
+                    );
+
+                }
+
+
+                const players = response.data;
+
+
+                if (
+                    !Array.isArray(players) ||
+                    players.length === 0
+                ) {
+
+                    container.innerHTML = `
+
+                        <div class="leaderboard-empty">
+
+                            <strong>
+                                No ranked players yet.
+                            </strong>
+
+                            <span>
+                                Complete a ranked match
+                                to appear on the leaderboard.
+                            </span>
+
+                        </div>
+
+                    `;
+
+                    return;
+
+                }
+
+
+                container.innerHTML =
+                    players
+                    .slice(0, 5)
+                    .map(
+                        function (
+                            player,
+                            index
+                        ) {
+
+                            const username =
+                                escapeHTML(
+                                    player.username ||
+                                    "Player"
+                                );
+
+
+                            const games =
+                                Number(
+                                    player.games || 0
+                                );
+
+
+                            const wins =
+                                Number(
+                                    player.wins || 0
+                                );
+
+
+                            const winnings =
+                                Number(
+                                    player.winnings || 0
+                                );
+
+
+                            const winRate =
+                                games > 0
+                                    ? Math.round(
+                                        (
+                                            wins /
+                                            games
+                                        ) * 100
+                                    )
+                                    : 0;
+
+
+                            const initials =
+                                getInitials(
+                                    player.username
+                                );
+
+
+                            let rankClass = "";
+
+                            if (index === 0) {
+                                rankClass = "first";
+                            }
+
+                            else if (index === 1) {
+                                rankClass = "second";
+                            }
+
+                            else if (index === 2) {
+                                rankClass = "third";
+                            }
+
+
+                            return `
+
+                                <div class="player-row">
+
+                                    <span
+                                        class="rank ${rankClass}"
+                                    >
+                                        ${
+                                            String(
+                                                index + 1
+                                            ).padStart(
+                                                2,
+                                                "0"
+                                            )
+                                        }
+                                    </span>
+
+
+                                    <div class="player-info">
+
+                                        <div class="avatar">
+
+                                            ${initials}
+
+                                        </div>
+
+
+                                        <strong>
+
+                                            ${username}
+
+                                        </strong>
+
+                                    </div>
+
+
+                                    <span>
+
+                                        ${games}
+
+                                    </span>
+
+
+                                    <span>
+
+                                        ${winRate}%
+
+                                    </span>
+
+
+                                    <strong class="winnings">
+
+                                        KSh
+                                        ${winnings.toLocaleString(
+                                            "en-KE"
+                                        )}
+
+                                    </strong>
+
+                                </div>
+
+                            `;
+
+                        }
+                    )
+                    .join("");
+
+
+            }
+
+            catch (error) {
+
+                console.error(
+                    "Leaderboard error:",
+                    error
+                );
+
+
+                /*
+                 * NEVER show fake players.
+                 */
+
+                container.innerHTML = `
+
+                    <div class="leaderboard-empty">
+
+                        <strong>
+                            Leaderboard unavailable
+                        </strong>
+
+                        <span>
+                            Live player rankings could
+                            not be loaded right now.
+                        </span>
+
+                    </div>
+
+                `;
+
+            }
+
+        }
+
+
+
+
+        /* =====================================
+           PLAYER INITIALS
+        ====================================== */
+
+        function getInitials(username) {
+
+            if (!username) {
+                return "P";
+            }
+
+
+            const parts =
+                String(username)
+                    .trim()
+                    .split(/\s+/);
+
+
+            if (parts.length === 1) {
+
+                return parts[0]
+                    .substring(0, 2)
+                    .toUpperCase();
+
+            }
+
+
+            return (
+                parts[0][0] +
+                parts[parts.length - 1][0]
+            ).toUpperCase();
+
+        }
+
+
+
+
+        /* =====================================
+           SECURITY
+        ====================================== */
+
+        function escapeHTML(value) {
+
+            return String(value)
+
+                .replace(
+                    /&/g,
+                    "&amp;"
+                )
+
+                .replace(
+                    /</g,
+                    "&lt;"
+                )
+
+                .replace(
+                    />/g,
+                    "&gt;"
+                )
+
+                .replace(
+                    /"/g,
+                    "&quot;"
+                )
+
+                .replace(
+                    /'/g,
+                    "&#039;"
+                );
+
+        }
+
+    </script>
+
+</body>
+
+</html>

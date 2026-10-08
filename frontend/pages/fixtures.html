@@ -1,0 +1,3150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GOAL$GAMBIT | Fixtures</title>
+
+<style>
+
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+:root{
+    --bg:#050505;
+    --panel:#0b0b0b;
+    --panel2:#111;
+    --border:#242424;
+    --gold:#d4af37;
+    --gold-light:#f1d56a;
+    --text:#f5f5f5;
+    --muted:#858585;
+    --green:#39c76a;
+    --red:#e05252;
+    --blue:#4c9cff;
+}
+
+body{
+    font-family:Arial,Helvetica,sans-serif;
+    background:
+        radial-gradient(circle at 50% -10%,rgba(212,175,55,.08),transparent 35%),
+        var(--bg);
+    color:var(--text);
+    min-height:100vh;
+}
+
+/* NAVBAR */
+
+.navbar{
+    height:70px;
+    background:#080808;
+    border-bottom:1px solid #222;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 35px;
+    position:sticky;
+    top:0;
+    z-index:1000;
+}
+
+.logo{
+    color:var(--gold);
+    font-size:21px;
+    font-weight:bold;
+    letter-spacing:1px;
+}
+
+.nav-links{
+    display:flex;
+    gap:25px;
+}
+
+.nav-links a{
+    color:#aaa;
+    text-decoration:none;
+    font-size:14px;
+}
+
+.nav-links a:hover,
+.nav-links a.active{
+    color:var(--gold);
+}
+
+.dashboard-btn{
+    background:var(--gold);
+    color:#000;
+    text-decoration:none;
+    padding:10px 15px;
+    border-radius:6px;
+    font-weight:bold;
+    font-size:13px;
+}
+
+/* CONTAINER */
+
+.container{
+    width:92%;
+    max-width:1250px;
+    margin:auto;
+    padding:35px 0 120px;
+}
+
+/* HEADER */
+
+.page-heading{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    gap:25px;
+    margin-bottom:22px;
+}
+
+.heading-left h1{
+    color:var(--gold);
+    font-size:38px;
+    letter-spacing:.5px;
+    margin-bottom:8px;
+}
+
+.heading-left p{
+    color:var(--muted);
+    font-size:13px;
+    line-height:1.6;
+    max-width:650px;
+}
+
+.league-switch{
+    display:flex;
+    gap:7px;
+}
+
+.league-switch button{
+    background:#0d0d0d;
+    color:#888;
+    border:1px solid #292929;
+    border-radius:6px;
+    padding:10px 16px;
+    cursor:pointer;
+    font-size:11px;
+    font-weight:bold;
+}
+
+.league-switch button:hover,
+.league-switch button.active{
+    background:var(--gold);
+    border-color:var(--gold);
+    color:#000;
+}
+
+/* STATUS */
+
+.league-status{
+    background:linear-gradient(100deg,#101010,#090909);
+    border:1px solid #292929;
+    border-left:4px solid var(--gold);
+    border-radius:9px;
+    padding:17px 20px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:25px;
+}
+
+.status-main{
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.status-dot{
+    width:9px;
+    height:9px;
+    border-radius:50%;
+    background:var(--green);
+}
+
+.status-main strong{
+    display:block;
+    font-size:13px;
+    margin-bottom:4px;
+}
+
+.status-main span{
+    color:#707070;
+    font-size:11px;
+}
+
+.season-countdown{
+    text-align:right;
+}
+
+.season-countdown small{
+    color:#666;
+    display:block;
+    font-size:9px;
+    margin-bottom:5px;
+}
+
+.season-countdown strong{
+    color:var(--gold);
+    font-size:17px;
+}
+
+/* OVERVIEW */
+
+.overview{
+    display:grid;
+    grid-template-columns:1.5fr repeat(5,1fr);
+    gap:10px;
+    margin-bottom:30px;
+}
+
+.overview-card{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:15px;
+}
+
+.overview-card:first-child{
+    border-top:2px solid var(--gold);
+}
+
+.overview-label{
+    color:#666;
+    font-size:9px;
+    text-transform:uppercase;
+    letter-spacing:.7px;
+    margin-bottom:8px;
+}
+
+.overview-value{
+    font-size:20px;
+    font-weight:bold;
+}
+
+.overview-card:first-child .overview-value{
+    color:var(--gold);
+}
+
+/* LAYOUT */
+
+.main-grid{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 300px;
+    gap:22px;
+}
+
+/* NEXT MATCH */
+
+.section-heading{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:12px;
+}
+
+.section-heading h2{
+    font-size:18px;
+}
+
+.section-heading span{
+    color:#666;
+    font-size:10px;
+}
+
+.next-match{
+    background:
+        radial-gradient(circle at 90% 20%,rgba(212,175,55,.13),transparent 30%),
+        #0c0c0c;
+    border:1px solid #2c2c2c;
+    border-radius:11px;
+    padding:23px;
+    margin-bottom:27px;
+}
+
+.next-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:18px;
+}
+
+.matchday-label{
+    color:#777;
+    font-size:10px;
+    text-transform:uppercase;
+}
+
+.live-label{
+    color:var(--green);
+    border:1px solid rgba(57,199,106,.3);
+    background:rgba(57,199,106,.07);
+    border-radius:20px;
+    padding:6px 10px;
+    font-size:9px;
+    font-weight:bold;
+}
+
+.next-teams{
+    display:grid;
+    grid-template-columns:1fr 80px 1fr;
+    align-items:center;
+    text-align:center;
+}
+
+.next-team{
+    padding:10px;
+}
+
+.next-team small{
+    display:block;
+    color:#666;
+    font-size:9px;
+    margin-bottom:7px;
+}
+
+.next-team strong{
+    font-size:21px;
+}
+
+.next-team.home strong{
+    color:var(--gold);
+}
+
+.vs{
+    color:#555;
+    font-size:12px;
+    font-weight:bold;
+}
+
+.next-details{
+    display:flex;
+    justify-content:center;
+    gap:30px;
+    border-top:1px solid #202020;
+    margin-top:20px;
+    padding-top:17px;
+}
+
+.next-detail{
+    text-align:center;
+}
+
+.next-detail small{
+    display:block;
+    color:#666;
+    font-size:9px;
+    margin-bottom:5px;
+}
+
+.next-detail strong{
+    font-size:12px;
+}
+
+.match-hub-btn{
+    display:block;
+    width:100%;
+    text-align:center;
+    background:var(--gold);
+    color:#000;
+    text-decoration:none;
+    padding:12px;
+    border-radius:6px;
+    font-size:11px;
+    font-weight:bold;
+    margin-top:20px;
+}
+
+/* MATCHDAY BAR */
+
+.matchday-bar{
+    background:#0b0b0b;
+    border:1px solid #232323;
+    border-radius:9px;
+    padding:13px;
+    margin-bottom:15px;
+    overflow-x:auto;
+}
+
+.matchday-scroll{
+    display:flex;
+    gap:6px;
+    min-width:max-content;
+}
+
+.matchday-btn{
+    background:#111;
+    border:1px solid #292929;
+    color:#777;
+    border-radius:5px;
+    padding:8px 12px;
+    font-size:9px;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+.matchday-btn:hover,
+.matchday-btn.active{
+    background:var(--gold);
+    border-color:var(--gold);
+    color:#000;
+}
+
+/* FIXTURE FEED */
+
+.fixture-feed{
+    display:grid;
+    gap:8px;
+    margin-bottom:30px;
+}
+
+.fixture-row{
+    background:#0b0b0b;
+    border:1px solid #202020;
+    border-radius:8px;
+    padding:15px 17px;
+    display:grid;
+    grid-template-columns:85px 1fr 125px 95px 105px;
+    align-items:center;
+    gap:12px;
+    transition:.2s;
+}
+
+.fixture-row:hover{
+    border-color:#393939;
+}
+
+.fixture-round{
+    color:#666;
+    font-size:9px;
+    text-transform:uppercase;
+}
+
+.fixture-round strong{
+    color:#aaa;
+    font-size:13px;
+    display:block;
+    margin-top:4px;
+}
+
+.fixture-teams{
+    text-align:center;
+}
+
+.fixture-team-line{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+}
+
+.fixture-team-line strong{
+    font-size:12px;
+    min-width:95px;
+}
+
+.fixture-team-line strong:first-child{
+    text-align:right;
+}
+
+.fixture-team-line strong:last-child{
+    text-align:left;
+}
+
+.score{
+    min-width:45px;
+    color:#fff;
+    font-size:14px;
+    font-weight:bold;
+    text-align:center;
+}
+
+.score.live{
+    color:var(--green);
+}
+
+.score.upcoming{
+    color:#555;
+}
+
+.fixture-date{
+    text-align:center;
+}
+
+.fixture-date strong{
+    display:block;
+    color:#ddd;
+    font-size:11px;
+    margin-bottom:4px;
+}
+
+.fixture-date span{
+    color:#666;
+    font-size:9px;
+}
+
+.fixture-status{
+    text-align:center;
+}
+
+.badge{
+    display:inline-block;
+    padding:6px 8px;
+    border-radius:5px;
+    font-size:8px;
+    font-weight:bold;
+}
+
+.badge.upcoming{
+    color:var(--blue);
+    border:1px solid rgba(76,156,255,.25);
+    background:rgba(76,156,255,.07);
+}
+
+.badge.live{
+    color:var(--green);
+    border:1px solid rgba(57,199,106,.25);
+    background:rgba(57,199,106,.07);
+}
+
+.badge.completed{
+    color:#888;
+    border:1px solid #333;
+    background:#101010;
+}
+
+.badge.disputed{
+    color:var(--red);
+    border:1px solid rgba(224,82,82,.25);
+    background:rgba(224,82,82,.07);
+}
+
+.fixture-action{
+    text-align:right;
+}
+
+.fixture-action a{
+    color:#aaa;
+    border:1px solid #333;
+    text-decoration:none;
+    padding:8px 10px;
+    border-radius:5px;
+    font-size:9px;
+    font-weight:bold;
+}
+
+.fixture-action a:hover{
+    color:var(--gold);
+    border-color:var(--gold);
+}
+
+/* SIDEBAR */
+
+.side-panel{
+    background:#0b0b0b;
+    border:1px solid #242424;
+    border-radius:10px;
+    overflow:hidden;
+    height:max-content;
+}
+
+.side-title{
+    padding:17px;
+    border-bottom:1px solid #222;
+}
+
+.side-title h2{
+    font-size:16px;
+}
+
+.side-title span{
+    color:#666;
+    display:block;
+    font-size:9px;
+    margin-top:4px;
+}
+
+.form{
+    padding:15px;
+    border-bottom:1px solid #202020;
+}
+
+.form-title{
+    color:#666;
+    font-size:9px;
+    text-transform:uppercase;
+    margin-bottom:10px;
+}
+
+.form-items{
+    display:flex;
+    gap:5px;
+}
+
+.form-item{
+    width:25px;
+    height:25px;
+    border-radius:4px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:9px;
+    font-weight:bold;
+}
+
+.form-item.win{
+    background:rgba(57,199,106,.12);
+    color:var(--green);
+    border:1px solid rgba(57,199,106,.25);
+}
+
+.form-item.draw{
+    background:rgba(212,175,55,.1);
+    color:var(--gold);
+    border:1px solid rgba(212,175,55,.25);
+}
+
+.form-item.loss{
+    background:rgba(224,82,82,.1);
+    color:var(--red);
+    border:1px solid rgba(224,82,82,.25);
+}
+
+.table{
+    width:100%;
+    border-collapse:collapse;
+}
+
+.table th{
+    color:#555;
+    font-size:8px;
+    text-align:left;
+    padding:10px 12px;
+    border-bottom:1px solid #202020;
+}
+
+.table td{
+    color:#999;
+    font-size:10px;
+    padding:10px 12px;
+    border-bottom:1px solid #171717;
+}
+
+.table tr.you td{
+    color:var(--gold);
+    font-weight:bold;
+}
+
+.table td:first-child{
+    color:#555;
+}
+
+.table td:last-child{
+    text-align:right;
+    color:#fff;
+    font-weight:bold;
+}
+
+/* RECENT RESULTS */
+
+.recent-results{
+    margin-top:25px;
+}
+
+.result-card{
+    display:grid;
+    grid-template-columns:70px 1fr 65px;
+    align-items:center;
+    gap:12px;
+    background:#0b0b0b;
+    border:1px solid #202020;
+    border-radius:8px;
+    padding:13px;
+    margin-bottom:7px;
+}
+
+.result-card .round{
+    color:#666;
+    font-size:9px;
+}
+
+.result-card .opponent{
+    color:#aaa;
+    font-size:11px;
+}
+
+.result-score{
+    text-align:center;
+    font-size:14px;
+    font-weight:bold;
+}
+
+.result-score.win{
+    color:var(--green);
+}
+
+.result-score.draw{
+    color:var(--gold);
+}
+
+.result-score.loss{
+    color:var(--red);
+}
+
+/* ACTIVE MATCH */
+
+.active-match{
+    position:fixed;
+    right:20px;
+    bottom:20px;
+    width:235px;
+    background:#101010;
+    border:1px solid var(--gold);
+    border-radius:8px;
+    padding:13px;
+    z-index:1500;
+    display:none;
+    box-shadow:0 10px 35px rgba(0,0,0,.7);
+}
+
+.active-match small{
+    color:#666;
+    font-size:8px;
+}
+
+.active-match strong{
+    color:var(--gold);
+    display:block;
+    font-size:11px;
+    margin:5px 0 9px;
+}
+
+.active-match a{
+    display:block;
+    background:var(--gold);
+    color:#000;
+    text-decoration:none;
+    text-align:center;
+    padding:8px;
+    border-radius:5px;
+    font-size:9px;
+    font-weight:bold;
+}
+
+/* BOTTOM NOTE */
+
+.note{
+    margin-top:25px;
+    padding:18px;
+    border:1px solid #202020;
+    background:#090909;
+    border-radius:8px;
+    text-align:center;
+    color:#626262;
+    font-size:10px;
+    line-height:1.7;
+}
+
+/* MOBILE */
+
+@media(max-width:1050px){
+
+    .overview{
+        grid-template-columns:repeat(3,1fr);
+    }
+
+    .overview-card:first-child{
+        grid-column:1/-1;
+    }
+
+    .main-grid{
+        grid-template-columns:1fr;
+    }
+
+    .side-panel{
+        display:grid;
+        grid-template-columns:1fr;
+    }
+
+}
+
+@media(max-width:750px){
+
+    .navbar{
+        padding:0 15px;
+    }
+
+    .nav-links{
+        display:none;
+    }
+
+    .container{
+        width:94%;
+        padding-top:28px;
+    }
+
+    .page-heading{
+        display:block;
+    }
+
+    .heading-left h1{
+        font-size:30px;
+    }
+
+    .league-switch{
+        margin-top:18px;
+        overflow-x:auto;
+    }
+
+    .league-switch button{
+        white-space:nowrap;
+    }
+
+    .league-status{
+        flex-direction:column;
+        align-items:flex-start;
+        gap:15px;
+    }
+
+    .season-countdown{
+        text-align:left;
+    }
+
+    .overview{
+        grid-template-columns:repeat(2,1fr);
+    }
+
+    .overview-card:first-child{
+        grid-column:1/-1;
+    }
+
+    .next-teams{
+        grid-template-columns:1fr 50px 1fr;
+    }
+
+    .next-team strong{
+        font-size:16px;
+    }
+
+    .next-details{
+        gap:14px;
+    }
+
+    .fixture-row{
+        display:grid;
+        grid-template-columns:60px 1fr 85px;
+        gap:10px;
+    }
+
+    .fixture-date{
+        text-align:left;
+    }
+
+    .fixture-status{
+        text-align:left;
+    }
+
+    .fixture-action{
+        grid-column:2/-1;
+        text-align:left;
+    }
+
+    .fixture-teams{
+        text-align:left;
+    }
+
+    .fixture-team-line{
+        justify-content:flex-start;
+    }
+
+    .fixture-team-line strong{
+        min-width:auto;
+    }
+
+    .fixture-team-line strong:first-child{
+        text-align:left;
+    }
+
+    .fixture-team-line strong:last-child{
+        text-align:left;
+    }
+
+    .active-match{
+        left:12px;
+        right:12px;
+        bottom:12px;
+        width:auto;
+    }
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+
+<!-- NAVBAR -->
+
+<nav class="navbar">
+
+    <div class="logo">
+        GOAL$GAMBIT
+    </div>
+
+    <div class="nav-links">
+
+        <a href="konami.html">
+            Dashboard
+        </a>
+
+        <a href="ranked.html">
+            Ranked
+        </a>
+
+        <a href="leagues.html" class="active">
+            Leagues
+        </a>
+
+        <a href="tournaments.html">
+            Tournaments
+        </a>
+
+    </div>
+
+    <a href="konami.html" class="dashboard-btn">
+        DASHBOARD
+    </a>
+
+</nav>
+
+
+<div class="container">
+
+
+<!-- HEADER -->
+
+<div class="page-heading">
+
+    <div class="heading-left">
+
+        <h1 id="leagueTitle">
+            BRONZE LEAGUE
+        </h1>
+
+        <p id="leagueDescription">
+            Follow your complete 38-match league season,
+            monitor upcoming fixtures, results and your
+            position throughout the competition.
+        </p>
+
+    </div>
+
+
+    <div class="league-switch">
+
+        <button id="bronzeBtn"
+                onclick="switchLeague('Bronze')">
+            BRONZE
+        </button>
+
+        <button id="silverBtn"
+                onclick="switchLeague('Silver')">
+            SILVER
+        </button>
+
+        <button id="goldBtn"
+                onclick="switchLeague('Gold')">
+            GOLD
+        </button>
+
+    </div>
+
+</div>
+
+
+<!-- STATUS -->
+
+<div class="league-status">
+
+    <div class="status-main">
+
+        <div class="status-dot"
+             id="statusDot">
+        </div>
+
+        <div>
+
+            <strong id="statusTitle">
+                LEAGUE ACTIVE
+            </strong>
+
+            <span id="statusDescription">
+                Fixtures are currently available.
+            </span>
+
+        </div>
+
+    </div>
+
+
+    <div class="season-countdown">
+
+        <small id="countdownLabel">
+            SEASON CLOSES IN
+        </small>
+
+        <strong id="countdown">
+            00D 00H 00M
+        </strong>
+
+    </div>
+
+</div>
+
+
+<!-- OVERVIEW -->
+
+<div class="overview">
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Division
+        </div>
+
+        <div class="overview-value"
+             id="divisionValue">
+            BRONZE
+        </div>
+
+    </div>
+
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Position
+        </div>
+
+        <div class="overview-value"
+             id="positionValue">
+            —
+        </div>
+
+    </div>
+
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Played
+        </div>
+
+        <div class="overview-value"
+             id="playedValue">
+            0
+        </div>
+
+    </div>
+
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Wins
+        </div>
+
+        <div class="overview-value"
+             id="winsValue">
+            0
+        </div>
+
+    </div>
+
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Draws
+        </div>
+
+        <div class="overview-value"
+             id="drawsValue">
+            0
+        </div>
+
+    </div>
+
+
+    <div class="overview-card">
+
+        <div class="overview-label">
+            Points
+        </div>
+
+        <div class="overview-value"
+             id="pointsValue">
+            0
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- MAIN GRID -->
+
+<div class="main-grid">
+
+
+<div>
+
+
+<!-- NEXT MATCH -->
+
+<div class="section-heading">
+
+    <h2>
+        NEXT MATCH
+    </h2>
+
+    <span>
+        Your next scheduled fixture
+    </span>
+
+</div>
+
+
+<div class="next-match"
+     id="nextMatch">
+
+</div>
+
+
+<!-- MATCHDAYS -->
+
+<div class="section-heading">
+
+    <h2>
+        FIXTURES
+    </h2>
+
+    <span>
+        38 MATCHDAYS
+    </span>
+
+</div>
+
+
+<div class="matchday-bar">
+
+    <div class="matchday-scroll"
+         id="matchdayButtons">
+
+    </div>
+
+</div>
+
+
+<!-- FIXTURE FEED -->
+
+<div class="fixture-feed"
+     id="fixtureFeed">
+
+</div>
+
+
+<!-- RECENT RESULTS -->
+
+<div class="recent-results">
+
+    <div class="section-heading">
+
+        <h2>
+            RECENT RESULTS
+        </h2>
+
+        <span>
+            Latest completed matches
+        </span>
+
+    </div>
+
+    <div id="recentResults">
+
+    </div>
+
+</div>
+
+
+</div>
+
+
+<!-- SIDEBAR -->
+
+<aside>
+
+
+<div class="side-panel">
+
+    <div class="side-title">
+
+        <h2>
+            YOUR FORM
+        </h2>
+
+        <span>
+            Last five completed fixtures
+        </span>
+
+    </div>
+
+
+    <div class="form">
+
+        <div class="form-title">
+            Recent form
+        </div>
+
+        <div class="form-items"
+             id="formItems">
+
+        </div>
+
+    </div>
+
+
+    <div class="side-title">
+
+        <h2>
+            LEAGUE TABLE
+        </h2>
+
+        <span>
+            Current standings
+        </span>
+
+    </div>
+
+
+    <table class="table">
+
+        <thead>
+
+            <tr>
+
+                <th>
+                    #
+                </th>
+
+                <th>
+                    PLAYER
+                </th>
+
+                <th>
+                    PTS
+                </th>
+
+            </tr>
+
+        </thead>
+
+        <tbody id="leagueTable">
+
+        </tbody>
+
+    </table>
+
+</div>
+
+
+</aside>
+
+
+</div>
+
+
+<!-- NOTE -->
+
+<div class="note">
+
+    Standings use completed, screenshot-verified match results. New matches and
+    results appear automatically as players join, play, and complete review.
+
+</div>
+
+</div>
+
+
+<!-- ACTIVE MATCH -->
+
+<div class="active-match"
+     id="activeMatch">
+
+    <small>
+        ACTIVE MATCH
+    </small>
+
+    <strong id="activeMatchText">
+        League match
+    </strong>
+
+    <a href="match-hub.html">
+        RETURN TO MATCH HUB
+    </a>
+
+</div>
+
+
+<script>
+if (false) { /* Historical mock fixture generator disabled; this page now renders API data only.
+
+/* =========================================
+   CONFIGURATION
+========================================= */
+
+const leagues = {
+
+    Bronze:{
+        entry:20,
+        players:20,
+        start:"2026-10-05T18:00:00",
+        close:"2026-11-30T23:59:59"
+    },
+
+    Silver:{
+        entry:50,
+        players:20,
+        start:"2026-10-05T18:00:00",
+        close:"2026-11-30T23:59:59"
+    },
+
+    Gold:{
+        entry:100,
+        players:20,
+        start:"2026-10-05T18:00:00",
+        close:"2026-11-30T23:59:59"
+    }
+
+};
+
+
+/* =========================================
+   USER
+========================================= */
+
+const username =
+    localStorage.getItem("goalGambitUsername")
+    || "Briton";
+
+
+/* =========================================
+   SELECTED LEAGUE
+========================================= */
+
+const params =
+    new URLSearchParams(location.search);
+
+let currentLeague =
+    params.get("league") || "Bronze";
+
+if(!leagues[currentLeague]){
+    currentLeague = "Bronze";
+}
+
+
+/* =========================================
+   SAMPLE LEAGUE PLAYERS
+========================================= */
+
+const playersByLeague = {
+
+    Bronze:[
+        "Briton","Daniel","Kevin","Brian","James",
+        "Alex","Victor","Sam","Chris","Mark",
+        "Peter","David","Michael","Eric","John",
+        "Ryan","George","Steve","Tony","Felix"
+    ],
+
+    Silver:[
+        "Briton","Daniel","Kevin","Brian","James",
+        "Alex","Victor","Sam","Chris","Mark",
+        "Peter","David","Michael","Eric","John",
+        "Ryan","George","Steve","Tony","Felix"
+    ],
+
+    Gold:[
+        "Briton","Daniel","Kevin","Brian","James",
+        "Alex","Victor","Sam","Chris","Mark",
+        "Peter","David","Michael","Eric","John",
+        "Ryan","George","Steve","Tony","Felix"
+    ]
+
+};
+
+
+/* =========================================
+   STORAGE
+========================================= */
+
+function fixturesKey(){
+
+    return "goalGambitFixtures_"
+        + currentLeague;
+
+}
+
+
+function resultsKey(){
+
+    return "goalGambitLeagueResults_"
+        + currentLeague;
+
+}
+
+
+/* =========================================
+   ESCAPE
+========================================= */
+
+function escapeHTML(value){
+
+    return String(value)
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+
+}
+
+
+/* =========================================
+   CREATE 38 FIXTURES
+========================================= */
+
+function createFixtures(){
+
+    const players =
+        playersByLeague[currentLeague];
+
+    const opponents =
+        players.filter(
+            p => p !== username
+        );
+
+    const fixtures = [];
+
+    let number = 1;
+
+
+    /* HOME */
+
+    opponents.forEach((opponent,index)=>{
+
+        const date =
+            new Date(leagues[currentLeague].start);
+
+        date.setDate(
+            date.getDate() + index * 2
+        );
+
+        date.setHours(
+            18 + (index % 3),
+            0,
+            0,
+            0
+        );
+
+
+        fixtures.push({
+
+            id:
+                currentLeague
+                .substring(0,3)
+                .toUpperCase()
+                + "-"
+                + String(number)
+                .padStart(3,"0"),
+
+            matchday:number,
+
+            league:currentLeague,
+
+            home:username,
+
+            away:opponent,
+
+            venue:"HOME",
+
+            date:date.toISOString(),
+
+            status:"upcoming",
+
+            homeScore:null,
+
+            awayScore:null,
+
+            result:null
+
+        });
+
+
+        number++;
+
+    });
+
+
+    /* AWAY */
+
+    opponents.forEach((opponent,index)=>{
+
+        const date =
+            new Date(leagues[currentLeague].start);
+
+        date.setDate(
+            date.getDate()
+            + 40
+            + index * 2
+        );
+
+        date.setHours(
+            18 + (index % 3),
+            0,
+            0,
+            0
+        );
+
+
+        fixtures.push({
+
+            id:
+                currentLeague
+                .substring(0,3)
+                .toUpperCase()
+                + "-"
+                + String(number)
+                .padStart(3,"0"),
+
+            matchday:number,
+
+            league:currentLeague,
+
+            home:opponent,
+
+            away:username,
+
+            venue:"AWAY",
+
+            date:date.toISOString(),
+
+            status:"upcoming",
+
+            homeScore:null,
+
+            awayScore:null,
+
+            result:null
+
+        });
+
+
+        number++;
+
+    });
+
+
+    localStorage.setItem(
+        fixturesKey(),
+        JSON.stringify(fixtures)
+    );
+
+
+    return fixtures;
+
+}
+
+
+/* =========================================
+   LOAD FIXTURES
+========================================= */
+
+function getFixtures(){
+
+    try{
+
+        const saved =
+            JSON.parse(
+                localStorage.getItem(
+                    fixturesKey()
+                ) || "null"
+            );
+
+
+        if(
+            Array.isArray(saved)
+            &&
+            saved.length === 38
+        ){
+
+            return saved;
+
+        }
+
+    }catch(e){}
+
+
+    return createFixtures();
+
+}
+
+
+/* =========================================
+   RESULTS
+========================================= */
+
+function getResults(){
+
+    try{
+
+        return JSON.parse(
+            localStorage.getItem(
+                resultsKey()
+            ) || "[]"
+        );
+
+    }catch(e){
+
+        return [];
+
+    }
+
+}
+
+
+/* =========================================
+   MERGE RESULTS
+========================================= */
+
+function applyResults(fixtures){
+
+    const results =
+        getResults();
+
+
+    fixtures.forEach(fixture=>{
+
+        const match =
+            results.find(
+                result =>
+                result.fixtureId === fixture.id
+            );
+
+
+        if(!match) return;
+
+
+        fixture.status =
+            match.status || "completed";
+
+        fixture.homeScore =
+            match.homeScore ?? null;
+
+        fixture.awayScore =
+            match.awayScore ?? null;
+
+        fixture.result =
+            match.result || null;
+
+    });
+
+
+    return fixtures;
+
+}
+
+
+/* =========================================
+   SWITCH LEAGUE
+========================================= */
+
+function switchLeague(league){
+
+    location.href =
+        "fixtures.html?league="
+        + encodeURIComponent(league);
+
+}
+
+
+/* =========================================
+   DATE
+========================================= */
+
+function formatDate(date){
+
+    return new Intl.DateTimeFormat(
+        "en-KE",
+        {
+            day:"numeric",
+            month:"short"
+        }
+    ).format(date);
+
+}
+
+
+function formatFullDate(date){
+
+    return new Intl.DateTimeFormat(
+        "en-KE",
+        {
+            weekday:"short",
+            day:"numeric",
+            month:"short",
+            year:"numeric"
+        }
+    ).format(date);
+
+}
+
+
+function formatTime(date){
+
+    return new Intl.DateTimeFormat(
+        "en-KE",
+        {
+            hour:"numeric",
+            minute:"2-digit"
+        }
+    ).format(date);
+
+}
+
+
+/* =========================================
+   COUNTDOWN
+========================================= */
+
+function countdown(target){
+
+    const difference =
+        new Date(target) - new Date();
+
+
+    if(difference <= 0){
+
+        return "00D 00H 00M";
+
+    }
+
+
+    const days =
+        Math.floor(
+            difference / 86400000
+        );
+
+    const hours =
+        Math.floor(
+            (difference % 86400000)
+            / 3600000
+        );
+
+    const minutes =
+        Math.floor(
+            (difference % 3600000)
+            / 60000
+        );
+
+
+    return (
+
+        String(days).padStart(2,"0")
+        + "D "
+
+        + String(hours).padStart(2,"0")
+        + "H "
+
+        + String(minutes).padStart(2,"0")
+        + "M"
+
+    );
+
+}
+
+
+/* =========================================
+   LEAGUE STATUS
+========================================= */
+
+function updateStatus(){
+
+    const config =
+        leagues[currentLeague];
+
+    const now =
+        new Date();
+
+    const start =
+        new Date(config.start);
+
+    const close =
+        new Date(config.close);
+
+
+    const title =
+        document.getElementById(
+            "statusTitle"
+        );
+
+    const description =
+        document.getElementById(
+            "statusDescription"
+        );
+
+    const label =
+        document.getElementById(
+            "countdownLabel"
+        );
+
+    const timer =
+        document.getElementById(
+            "countdown"
+        );
+
+    const dot =
+        document.getElementById(
+            "statusDot"
+        );
+
+
+    if(now < start){
+
+        title.textContent =
+            "LEAGUE STARTING SOON";
+
+        description.textContent =
+            "Fixtures are prepared and will unlock when the season begins.";
+
+        label.textContent =
+            "STARTS IN";
+
+        timer.textContent =
+            countdown(start);
+
+        dot.style.background =
+            varColor("--gold");
+
+        return;
+
+    }
+
+
+    if(now < close){
+
+        title.textContent =
+            "LEAGUE ACTIVE";
+
+        description.textContent =
+            "The season is currently running. Follow your scheduled fixtures.";
+
+        label.textContent =
+            "SEASON CLOSES IN";
+
+        timer.textContent =
+            countdown(close);
+
+        dot.style.background =
+            varColor("--green");
+
+        return;
+
+    }
+
+
+    title.textContent =
+        "LEAGUE CLOSED";
+
+    description.textContent =
+        "The official league playing window has ended.";
+
+    label.textContent =
+        "SEASON ENDED";
+
+    timer.textContent =
+        "CLOSED";
+
+    dot.style.background =
+        varColor("--red");
+
+}
+
+
+function varColor(variable){
+
+    return getComputedStyle(
+        document.documentElement
+    ).getPropertyValue(variable);
+
+}
+
+
+/* =========================================
+   NEXT MATCH
+========================================= */
+
+function renderNextMatch(fixtures){
+
+    const box =
+        document.getElementById(
+            "nextMatch"
+        );
+
+
+    const now =
+        new Date();
+
+
+    const available =
+        fixtures
+        .filter(
+            f =>
+                f.status !== "completed"
+                &&
+                f.status !== "disputed"
+        )
+        .sort(
+            (a,b)=>
+                new Date(a.date)
+                -
+                new Date(b.date)
+        );
+
+
+    if(!available.length){
+
+        box.innerHTML = `
+            <div style="
+                text-align:center;
+                padding:30px;
+                color:#666;
+            ">
+                <strong style="
+                    display:block;
+                    color:#aaa;
+                    margin-bottom:6px;
+                ">
+                    NO UPCOMING FIXTURES
+                </strong>
+
+                Your current schedule has no
+                outstanding matches.
+            </div>
+        `;
+
+        return;
+
+    }
+
+
+    const fixture =
+        available[0];
+
+    const date =
+        new Date(fixture.date);
+
+
+    let statusText =
+        "UPCOMING";
+
+
+    if(
+        now >= date
+        &&
+        fixture.status !== "completed"
+    ){
+
+        statusText =
+            "READY TO PLAY";
+
+    }
+
+
+    box.innerHTML = `
+
+        <div class="next-top">
+
+            <div class="matchday-label">
+                MATCHDAY ${fixture.matchday}
+                • ${fixture.venue}
+            </div>
+
+            <div class="live-label">
+                ${statusText}
+            </div>
+
+        </div>
+
+
+        <div class="next-teams">
+
+            <div class="next-team home">
+
+                <small>
+                    HOME
+                </small>
+
+                <strong>
+                    ${escapeHTML(fixture.home)}
+                </strong>
+
+            </div>
+
+
+            <div class="vs">
+                VS
+            </div>
+
+
+            <div class="next-team">
+
+                <small>
+                    AWAY
+                </small>
+
+                <strong>
+                    ${escapeHTML(fixture.away)}
+                </strong>
+
+            </div>
+
+        </div>
+
+
+        <div class="next-details">
+
+            <div class="next-detail">
+
+                <small>
+                    DATE
+                </small>
+
+                <strong>
+                    ${formatFullDate(date)}
+                </strong>
+
+            </div>
+
+
+            <div class="next-detail">
+
+                <small>
+                    KICK-OFF
+                </small>
+
+                <strong>
+                    ${formatTime(date)}
+                </strong>
+
+            </div>
+
+
+            <div class="next-detail">
+
+                <small>
+                    FIXTURE
+                </small>
+
+                <strong>
+                    ${fixture.id}
+                </strong>
+
+            </div>
+
+        </div>
+
+
+        <a
+            class="match-hub-btn"
+            href="match-hub.html?fixture=${encodeURIComponent(fixture.id)}&league=${encodeURIComponent(currentLeague)}">
+
+            OPEN MATCH HUB
+
+        </a>
+
+    `;
+
+}
+
+
+/* =========================================
+   MATCHDAY BUTTONS
+========================================= */
+
+let selectedMatchday = 1;
+
+
+function renderMatchdayButtons(){
+
+    const container =
+        document.getElementById(
+            "matchdayButtons"
+        );
+
+
+    container.innerHTML = "";
+
+
+    for(let i=1;i<=38;i++){
+
+        const button =
+            document.createElement("button");
+
+        button.className =
+            "matchday-btn"
+            +
+            (
+                i === selectedMatchday
+                ? " active"
+                : ""
+            );
+
+
+        button.textContent =
+            "MD " + i;
+
+
+        button.onclick = ()=>{
+
+            selectedMatchday =
+                i;
+
+            renderMatchdayButtons();
+
+            renderFixtures();
+
+        };
+
+
+        container.appendChild(button);
+
+    }
+
+}
+
+
+/* =========================================
+   FIXTURE FEED
+========================================= */
+
+function renderFixtures(){
+
+    const fixtures =
+        applyResults(
+            getFixtures()
+        );
+
+
+    const selected =
+        fixtures.filter(
+            fixture =>
+                fixture.matchday ===
+                selectedMatchday
+        );
+
+
+    const container =
+        document.getElementById(
+            "fixtureFeed"
+        );
+
+
+    if(!selected.length){
+
+        container.innerHTML = `
+            <div style="
+                padding:35px;
+                text-align:center;
+                color:#666;
+                background:#0b0b0b;
+                border:1px solid #222;
+                border-radius:8px;
+            ">
+                No fixture found for this matchday.
+            </div>
+        `;
+
+        return;
+
+    }
+
+
+    container.innerHTML =
+        selected.map(fixture=>{
+
+            const date =
+                new Date(fixture.date);
+
+
+            let score =
+                "—";
+
+
+            if(
+                fixture.homeScore !== null
+                &&
+                fixture.awayScore !== null
+            ){
+
+                score =
+                    fixture.homeScore
+                    + " - "
+                    + fixture.awayScore;
+
+            }
+
+
+            let badgeClass =
+                "upcoming";
+
+            let badgeText =
+                "UPCOMING";
+
+
+            if(fixture.status === "completed"){
+
+                badgeClass =
+                    "completed";
+
+                badgeText =
+                    "FULL TIME";
+
+            }
+
+            else if(fixture.status === "live"){
+
+                badgeClass =
+                    "live";
+
+                badgeText =
+                    "LIVE";
+
+            }
+
+            else if(fixture.status === "disputed"){
+
+                badgeClass =
+                    "disputed";
+
+                badgeText =
+                    "DISPUTED";
+
+            }
+
+
+            const playable =
+                fixture.status !== "completed";
+
+
+            return `
+
+                <div class="fixture-row">
+
+                    <div class="fixture-round">
+
+                        Matchday
+
+                        <strong>
+                            ${fixture.matchday}
+                        </strong>
+
+                    </div>
+
+
+                    <div class="fixture-teams">
+
+                        <div class="fixture-team-line">
+
+                            <strong>
+                                ${escapeHTML(fixture.home)}
+                            </strong>
+
+                            <span class="score">
+                                ${score}
+                            </span>
+
+                            <strong>
+                                ${escapeHTML(fixture.away)}
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="fixture-date">
+
+                        <strong>
+                            ${formatDate(date)}
+                        </strong>
+
+                        <span>
+                            ${formatTime(date)}
+                        </span>
+
+                    </div>
+
+
+                    <div class="fixture-status">
+
+                        <span class="badge ${badgeClass}">
+                            ${badgeText}
+                        </span>
+
+                    </div>
+
+
+                    <div class="fixture-action">
+
+                        ${
+                            playable
+                            ?
+
+                            `<a href="match-hub.html?fixture=${encodeURIComponent(fixture.id)}&league=${encodeURIComponent(currentLeague)}">
+                                MATCH HUB
+                             </a>`
+
+                            :
+
+                            `<a href="match-hub.html?fixture=${encodeURIComponent(fixture.id)}&league=${encodeURIComponent(currentLeague)}">
+                                VIEW
+                             </a>`
+                        }
+
+                    </div>
+
+                </div>
+
+            `;
+
+        }).join("");
+
+}
+
+
+/* =========================================
+   SUMMARY
+========================================= */
+
+function calculateStats(fixtures){
+
+    let played = 0;
+    let wins = 0;
+    let draws = 0;
+    let losses = 0;
+    let points = 0;
+
+
+    fixtures.forEach(fixture=>{
+
+        if(fixture.status !== "completed"){
+            return;
+        }
+
+
+        played++;
+
+
+        if(fixture.result === "win"){
+
+            wins++;
+            points += 3;
+
+        }
+
+        else if(fixture.result === "draw"){
+
+            draws++;
+            points += 1;
+
+        }
+
+        else if(fixture.result === "loss"){
+
+            losses++;
+
+        }
+
+    });
+
+
+    return {
+        played,
+        wins,
+        draws,
+        losses,
+        points
+    };
+
+}
+
+
+function updateSummary(fixtures){
+
+    const stats =
+        calculateStats(fixtures);
+
+
+    document.getElementById(
+        "playedValue"
+    ).textContent =
+        stats.played;
+
+
+    document.getElementById(
+        "winsValue"
+    ).textContent =
+        stats.wins;
+
+
+    document.getElementById(
+        "drawsValue"
+    ).textContent =
+        stats.draws;
+
+
+    document.getElementById(
+        "pointsValue"
+    ).textContent =
+        stats.points;
+
+
+    const record =
+        stats.wins
+        + "-"
+        + stats.draws
+        + "-"
+        + stats.losses;
+
+}
+
+
+/* =========================================
+   FORM
+========================================= */
+
+function renderForm(fixtures){
+
+    const container =
+        document.getElementById(
+            "formItems"
+        );
+
+
+    const completed =
+        fixtures
+        .filter(
+            fixture =>
+                fixture.status === "completed"
+        )
+        .sort(
+            (a,b)=>
+                new Date(b.date)
+                -
+                new Date(a.date)
+        )
+        .slice(0,5)
+        .reverse();
+
+
+    if(!completed.length){
+
+        container.innerHTML = `
+            <span style="
+                color:#666;
+                font-size:10px;
+            ">
+                No results yet
+            </span>
+        `;
+
+        return;
+
+    }
+
+
+    container.innerHTML =
+        completed.map(fixture=>{
+
+            if(fixture.result === "win"){
+
+                return `
+                    <div class="form-item win">
+                        W
+                    </div>
+                `;
+
+            }
+
+            if(fixture.result === "draw"){
+
+                return `
+                    <div class="form-item draw">
+                        D
+                    </div>
+                `;
+
+            }
+
+            return `
+                <div class="form-item loss">
+                    L
+                </div>
+            `;
+
+        }).join("");
+
+}
+
+
+/* =========================================
+   RECENT RESULTS
+========================================= */
+
+function renderRecent(fixtures){
+
+    const container =
+        document.getElementById(
+            "recentResults"
+        );
+
+
+    const completed =
+        fixtures
+        .filter(
+            fixture =>
+                fixture.status === "completed"
+        )
+        .sort(
+            (a,b)=>
+                new Date(b.date)
+                -
+                new Date(a.date)
+        )
+        .slice(0,5);
+
+
+    if(!completed.length){
+
+        container.innerHTML = `
+            <div style="
+                padding:25px;
+                text-align:center;
+                background:#0b0b0b;
+                border:1px solid #202020;
+                border-radius:8px;
+                color:#666;
+                font-size:10px;
+            ">
+                No completed matches yet.
+            </div>
+        `;
+
+        return;
+
+    }
+
+
+    container.innerHTML =
+        completed.map(fixture=>{
+
+            let resultClass =
+                fixture.result || "draw";
+
+
+            const score =
+                fixture.homeScore
+                + " - "
+                + fixture.awayScore;
+
+
+            return `
+
+                <div class="result-card">
+
+                    <div class="round">
+                        MD ${fixture.matchday}
+                    </div>
+
+                    <div class="opponent">
+
+                        vs
+                        ${escapeHTML(fixture.opponent || (
+                            fixture.home === username
+                            ? fixture.away
+                            : fixture.home
+                        ))}
+
+                    </div>
+
+                    <div class="result-score ${resultClass}">
+
+                        ${score}
+
+                    </div>
+
+                </div>
+
+            `;
+
+        }).join("");
+
+}
+
+
+/* =========================================
+   LEAGUE TABLE
+========================================= */
+
+function buildTable(fixtures){
+
+    const players =
+        playersByLeague[currentLeague];
+
+
+    const rows =
+        players.map(player=>{
+
+            let pts = 0;
+            let played = 0;
+            let wins = 0;
+            let draws = 0;
+            let losses = 0;
+            let gf = 0;
+            let ga = 0;
+
+
+            fixtures.forEach(fixture=>{
+
+                if(
+                    fixture.status !== "completed"
+                ){
+                    return;
+                }
+
+
+                if(
+                    fixture.home !== player
+                    &&
+                    fixture.away !== player
+                ){
+
+                    return;
+
+                }
+
+
+                if(
+                    fixture.homeScore === null
+                    ||
+                    fixture.awayScore === null
+                ){
+
+                    return;
+
+                }
+
+
+                played++;
+
+
+                const playerHome =
+                    fixture.home === player;
+
+
+                const scored =
+                    playerHome
+                    ? fixture.homeScore
+                    : fixture.awayScore;
+
+
+                const conceded =
+                    playerHome
+                    ? fixture.awayScore
+                    : fixture.homeScore;
+
+
+                gf += scored;
+                ga += conceded;
+
+
+                if(scored > conceded){
+
+                    wins++;
+                    pts += 3;
+
+                }
+
+                else if(scored === conceded){
+
+                    draws++;
+                    pts++;
+
+                }
+
+                else{
+
+                    losses++;
+
+                }
+
+            });
+
+
+            return {
+
+                player,
+                played,
+                wins,
+                draws,
+                losses,
+                gf,
+                ga,
+                gd:gf-ga,
+                pts
+
+            };
+
+        });
+
+
+    rows.sort((a,b)=>{
+
+        if(b.pts !== a.pts){
+            return b.pts - a.pts;
+        }
+
+        if(b.gd !== a.gd){
+            return b.gd - a.gd;
+        }
+
+        if(b.gf !== a.gf){
+            return b.gf - a.gf;
+        }
+
+        return a.player.localeCompare(
+            b.player
+        );
+
+    });
+
+
+    const position =
+        rows.findIndex(
+            row =>
+                row.player === username
+        ) + 1;
+
+
+    document.getElementById(
+        "positionValue"
+    ).textContent =
+        position > 0
+        ? position
+        : "—";
+
+
+    const table =
+        document.getElementById(
+            "leagueTable"
+        );
+
+
+    table.innerHTML =
+        rows.slice(0,10).map(
+            (row,index)=>{
+
+                return `
+
+                    <tr
+                        class="${
+                            row.player === username
+                            ? "you"
+                            : ""
+                        }">
+
+                        <td>
+                            ${index + 1}
+                        </td>
+
+                        <td>
+                            ${escapeHTML(row.player)}
+                        </td>
+
+                        <td>
+                            ${row.pts}
+                        </td>
+
+                    </tr>
+
+                `;
+
+            }
+        ).join("");
+
+}
+
+
+/* =========================================
+   ACTIVE MATCH
+========================================= */
+
+function updateActiveMatch(){
+
+    const box =
+        document.getElementById(
+            "activeMatch"
+        );
+
+
+    let current = null;
+
+
+    try{
+
+        current =
+            JSON.parse(
+                localStorage.getItem(
+                    "goalGambitCurrentMatch"
+                ) || "null"
+            );
+
+    }catch(e){}
+
+
+    if(
+        current
+        &&
+        current.status !== "completed"
+    ){
+
+        box.style.display =
+            "block";
+
+
+        document.getElementById(
+            "activeMatchText"
+        ).textContent =
+
+            current.opponent
+            ? "vs " + current.opponent
+            : "League match in progress";
+
+    }
+
+    else{
+
+        box.style.display =
+            "none";
+
+    }
+
+}
+
+
+/* =========================================
+   RENDER EVERYTHING
+========================================= */
+
+function renderPage(){
+
+    document.getElementById(
+        "leagueTitle"
+    ).textContent =
+        currentLeague.toUpperCase()
+        + " LEAGUE";
+
+
+    document.getElementById(
+        "divisionValue"
+    ).textContent =
+        currentLeague.toUpperCase();
+
+
+    document.getElementById(
+        "leagueDescription"
+    ).textContent =
+
+        "Follow your complete 38-match "
+        + currentLeague
+        + " League season, monitor upcoming "
+        + "fixtures, results and your position "
+        + "throughout the competition.";
+
+
+    document.querySelectorAll(
+        ".league-switch button"
+    ).forEach(button=>{
+
+        button.classList.remove(
+            "active"
+        );
+
+    });
+
+
+    document.getElementById(
+        currentLeague.toLowerCase()
+        + "Btn"
+    ).classList.add("active");
+
+
+    const fixtures =
+        applyResults(
+            getFixtures()
+        );
+
+
+    updateStatus();
+
+    renderNextMatch(fixtures);
+
+    renderMatchdayButtons();
+
+    renderFixtures();
+
+    updateSummary(fixtures);
+
+    renderForm(fixtures);
+
+    renderRecent(fixtures);
+
+    buildTable(fixtures);
+
+    updateActiveMatch();
+
+}
+
+
+/* =========================================
+   START
+========================================= */
+
+renderPage();
+
+
+/* =========================================
+   LIVE STATUS
+========================================= */
+
+setInterval(()=>{
+
+    updateStatus();
+
+},1000);
+
+
+/* =========================================
+   ACTIVE MATCH
+========================================= */
+
+setInterval(()=>{
+
+    updateActiveMatch();
+
+},1000);
+
+
+/* =========================================
+   STORAGE SYNC
+========================================= */
+
+window.addEventListener(
+    "storage",
+    ()=>{
+        renderPage();
+    }
+);
+
+
+/* =========================================
+   PAGE RETURN
+========================================= */
+
+window.addEventListener(
+    "pageshow",
+    ()=>{
+        renderPage();
+    }
+);
+}
+</script>
+
+<script src="../js/api.js"></script>
+<script>
+"use strict";
+const leagueNames = ["Bronze", "Silver", "Gold"];
+const query = new URLSearchParams(location.search);
+let selectedLeague = leagueNames.includes(query.get("league")) ? query.get("league") : "Bronze";
+let selectedFilter = "all";
+let refreshing = false;
+let currentFixtures = [];
+const currentUser = (localStorage.getItem("goalGambitUsername") || "").toLowerCase();
+const esc = GG.escapeHTML;
+
+function switchLeague(name) {
+  if (!leagueNames.includes(name)) return;
+  location.href = "fixtures.html?league=" + encodeURIComponent(name);
+}
+
+function statusLabel(status) {
+  const labels = {waiting:"WAITING FOR PLAYER",ready:"BOTH PLAYERS GETTING READY",playing:"LIVE",awaiting_verification:"SCREENSHOT REVIEW",disputed:"ADMIN REVIEW",completed:"VERIFIED",cancelled:"CANCELLED"};
+  return labels[status] || String(status || "PENDING").replaceAll("_", " ").toUpperCase();
+}
+
+function statusClass(status) {
+  if (status === "completed") return "completed";
+  if (status === "playing" || status === "ready") return "live";
+  if (status === "disputed" || status === "awaiting_verification") return "disputed";
+  return "upcoming";
+}
+
+function fixtureDate(match) {
+  const value = match.finished_at || match.started_at || match.created_at;
+  return value ? new Date(value).toLocaleString() : "Just created";
+}
+
+function matchLink(match) {
+  return "match-hub.html?fixture=" + encodeURIComponent(match.id) + "&league=" + encodeURIComponent(selectedLeague);
+}
+
+function renderTable(standings) {
+  const body = document.getElementById("leagueTable");
+  if (!standings.length) {
+    body.innerHTML = '<tr><td colspan="3">No members have joined this league yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = standings.map((row, index) => '<tr class="' + (currentUser && String(row.username).toLowerCase() === currentUser ? "you" : "") + '">' +
+    '<td>' + (index + 1) + '</td><td>' + esc(row.username) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("");
+}
+
+function renderFixtures(fixtures) {
+  const feed = document.getElementById("fixtureFeed");
+  const filtered = fixtures.filter(item => {
+    if (selectedFilter === "all") return true;
+    if (selectedFilter === "completed") return item.status === "completed";
+    if (selectedFilter === "review") return ["disputed", "awaiting_verification"].includes(item.status);
+    return ["waiting", "ready", "playing"].includes(item.status);
+  });
+  if (!fixtures.length) {
+    feed.innerHTML = '<div class="fixture-row"><div class="fixture-teams">No league matches yet. Start a match to join the live queue.</div><div class="fixture-action"><a href="match-hub.html?league=' + encodeURIComponent(selectedLeague) + '">START MATCH</a></div></div>';
+    return;
+  }
+  if (!filtered.length) {
+    feed.innerHTML = '<div class="fixture-row"><div class="fixture-teams">No matches in this filter.</div></div>';
+    return;
+  }
+  feed.innerHTML = filtered.map(match => {
+    const score = match.status === "completed" && match.home_score !== null ? Number(match.home_score) + " - " + Number(match.away_score) : "—";
+    const away = match.away || "Searching for opponent";
+    const action = match.status === "cancelled" ? "VIEW" : "OPEN MATCH";
+    return '<div class="fixture-row"><div class="fixture-round">Match <strong>#' + Number(match.id) + '</strong></div>' +
+      '<div class="fixture-teams"><div class="fixture-team-line"><strong>' + esc(match.home || "Player") + '</strong><span class="score">' + score + '</span><strong>' + esc(away) + '</strong></div></div>' +
+      '<div class="fixture-date"><strong>' + esc(fixtureDate(match)) + '</strong><span>Updated from live match data</span></div>' +
+      '<div class="fixture-status"><span class="badge ' + statusClass(match.status) + '">' + esc(statusLabel(match.status)) + '</span></div>' +
+      '<div class="fixture-action"><a href="' + matchLink(match) + '">' + action + '</a></div></div>';
+  }).join("");
+}
+
+function renderOverview(fixtures, standings) {
+  const me = standings.find(row => currentUser && String(row.username).toLowerCase() === currentUser);
+  const position = me ? standings.indexOf(me) + 1 : 0;
+  document.getElementById("positionValue").textContent = position || "—";
+  document.getElementById("playedValue").textContent = Number(me && me.played || 0);
+  document.getElementById("winsValue").textContent = Number(me && me.wins || 0);
+  document.getElementById("drawsValue").textContent = Number(me && me.draws || 0);
+  document.getElementById("pointsValue").textContent = Number(me && me.points || 0);
+
+  const completed = fixtures.filter(match => match.status === "completed").sort((a,b) => new Date(b.finished_at || b.created_at) - new Date(a.finished_at || a.created_at));
+  const active = fixtures.find(match => ["waiting", "ready", "playing", "awaiting_verification", "disputed"].includes(match.status));
+  const next = active || null;
+  document.getElementById("nextMatch").innerHTML = next
+    ? '<div class="next-top"><div class="matchday-label">LIVE LEAGUE MATCH</div><div class="live-label">' + esc(statusLabel(next.status)) + '</div></div><div class="next-teams"><div class="next-team home"><small>PLAYER</small><strong>' + esc(next.home || "Player") + '</strong></div><div class="vs">VS</div><div class="next-team"><small>OPPONENT</small><strong>' + esc(next.away || "Finding opponent") + '</strong></div></div><a class="match-hub-btn" href="' + matchLink(next) + '">OPEN MATCH HUB</a>'
+    : '<div style="text-align:center;padding:20px;color:#aaa"><strong style="display:block;color:#ddd;margin-bottom:8px">NO ACTIVE MATCH</strong>Start a league match to enter the live queue.<a class="match-hub-btn" href="match-hub.html?league=' + encodeURIComponent(selectedLeague) + '">START LEAGUE MATCH</a></div>';
+
+  document.getElementById("recentResults").innerHTML = completed.length
+    ? completed.slice(0,5).map(match => '<div class="result-card"><div class="round">#' + Number(match.id) + '</div><div class="opponent">vs ' + esc(Number(match.home_id) === Number(localStorage.getItem("goalGambitUserId")) ? (match.away || "Opponent") : match.home || "Opponent") + '</div><div class="result-score">' + Number(match.home_score) + ' - ' + Number(match.away_score) + '</div></div>').join("")
+    : '<div class="result-card"><div class="opponent">Verified results will appear here automatically.</div></div>';
+
+  const form = completed.slice(0,5).reverse().map(match => {
+    const myId = Number(localStorage.getItem("goalGambitUserId"));
+    const myScore = Number(match.home_id) === myId ? Number(match.home_score) : Number(match.away_score);
+    const otherScore = Number(match.home_id) === myId ? Number(match.away_score) : Number(match.home_score);
+    return '<div class="form-item ' + (myScore > otherScore ? "win" : myScore === otherScore ? "draw" : "loss") + '">' + (myScore > otherScore ? "W" : myScore === otherScore ? "D" : "L") + '</div>';
+  }).join("");
+  document.getElementById("formItems").innerHTML = form || '<span style="color:#666;font-size:10px">No verified results yet</span>';
+
+  const activeBox = document.getElementById("activeMatch");
+  activeBox.style.display = active ? "block" : "none";
+  if (active) document.getElementById("activeMatchText").textContent = (active.away || "Waiting for opponent") + " · " + statusLabel(active.status);
+}
+
+function renderFilters() {
+  const box = document.getElementById("matchdayButtons");
+  box.innerHTML = [["all","All"],["active","Active"],["review","Review"],["completed","Verified"]].map(([key,label]) => '<button type="button" class="matchday-btn ' + (selectedFilter === key ? "active" : "") + '" data-filter="' + key + '">' + label + '</button>').join("");
+  box.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => {
+    selectedFilter = button.dataset.filter;
+    renderFilters();
+    renderFixtures(currentFixtures);
+  }));
+}
+
+async function loadLiveLeague() {
+  if (refreshing || document.hidden) return;
+  refreshing = true;
+  const results = await Promise.all([
+    GG.api("/api/leagues/" + encodeURIComponent(selectedLeague) + "/fixtures", {noRedirect:true}),
+    GG.api("/api/leagues/" + encodeURIComponent(selectedLeague), {noRedirect:true})
+  ]);
+  refreshing = false;
+  if (!results[0].ok || !results[1].ok) {
+    document.getElementById("statusTitle").textContent = "LIVE DATA UNAVAILABLE";
+    document.getElementById("statusDescription").textContent = results[0].data.message || results[1].data.message || "Trying to reconnect…";
+    return;
+  }
+  const fixtures = results[0].data.fixtures || [];
+  const standings = results[1].data.standings || [];
+  currentFixtures = fixtures;
+  document.getElementById("leagueTitle").textContent = selectedLeague.toUpperCase() + " LEAGUE";
+  document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
+  document.getElementById("leagueDescription").textContent = "Live standings and match activity for league members. Results affect the table only after screenshot verification.";
+  leagueNames.forEach(name => document.getElementById(name.toLowerCase() + "Btn").classList.toggle("active", name === selectedLeague));
+  document.getElementById("statusTitle").textContent = "LIVE · " + standings.length + " MEMBERS";
+  document.getElementById("statusDescription").textContent = "Standings refresh from verified results every few seconds.";
+  document.getElementById("countdownLabel").textContent = "LAST UPDATED";
+  document.getElementById("countdown").textContent = new Date().toLocaleTimeString();
+  renderTable(standings);
+  renderOverview(fixtures, standings);
+  renderFilters();
+  renderFixtures(fixtures);
+}
+
+document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
+document.querySelectorAll(".section-heading span").forEach(span => { if (span.textContent.includes("38 MATCHDAYS")) span.textContent = "Updates automatically"; });
+loadLiveLeague();
+setInterval(loadLiveLeague, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLiveLeague(); });
+</script>
+</body>
+
+</html>

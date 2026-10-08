@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GOAL$GAMBIT Chess</title>
+
+    <link rel="stylesheet" href="board.css">
+</head>
+
+<body>
+
+<header class="topbar">
+
+    <a href="chess.html" class="brand">
+        GOAL<span>$</span>GAMBIT
+    </a>
+
+    <div class="game-heading">
+        <div id="gameMode">Rapid Ranked</div>
+        <span id="gameStatus">Ready</span>
+    </div>
+
+    <button id="flipButton" class="top-button" type="button">
+        Flip
+    </button>
+
+</header>
+
+
+<main class="game-layout">
+
+    <!-- =========================
+         CHESS SECTION
+         ========================= -->
+    <section class="chess-section">
+
+        <!-- BLACK PLAYER -->
+        <div class="player-bar">
+
+            <div class="player-info">
+
+                <div class="player-avatar black-avatar">
+                    ♟
+                </div>
+
+                <div>
+                    <div id="blackName" class="player-name">
+                        Opponent
+                    </div>
+
+                    <div id="blackRating" class="player-rating">
+                        1200
+                    </div>
+                </div>
+
+            </div>
+
+            <div id="blackClock" class="clock">
+                15:00
+            </div>
+
+        </div>
+
+
+        <!-- BOARD -->
+        <div class="board-wrapper">
+
+            <div id="chessBoard" class="chess-board" role="grid" aria-label="Chess board"></div>
+
+        </div>
+
+
+        <!-- WHITE PLAYER -->
+        <div class="player-bar">
+
+            <div class="player-info">
+
+                <div class="player-avatar white-avatar">
+                    ♙
+                </div>
+
+                <div>
+                    <div id="whiteName" class="player-name">
+                        You
+                    </div>
+
+                    <div id="whiteRating" class="player-rating">
+                        1200
+                    </div>
+                </div>
+
+            </div>
+
+            <div id="whiteClock" class="clock active">
+                15:00
+            </div>
+
+        </div>
+
+
+        <div id="statusBar" class="status-bar" aria-live="polite">
+            <span id="turnMessage">Select one of your pieces to see its legal moves.</span>
+        </div>
+
+
+        <!-- CONTROLS -->
+        <div class="game-controls">
+
+            <button
+                id="drawButton"
+                class="control-button"
+                type="button">
+                Offer Draw
+            </button>
+
+            <button
+                id="resignButton"
+                class="control-button resign"
+                type="button">
+                Resign
+            </button>
+
+        </div>
+
+    </section>
+
+
+    <!-- =========================
+         SIDE TOOLBOX
+         ========================= -->
+    <aside class="toolbox">
+
+        <!-- MATCH -->
+        <div class="tool-card">
+
+            <div class="card-title">
+                MATCH
+            </div>
+
+            <div class="information">
+
+                <div class="info-item">
+                    <span>Type</span>
+                    <strong id="matchType">
+                        Ranked
+                    </strong>
+                </div>
+
+                <div class="info-item">
+                    <span>Time</span>
+                    <strong id="matchTime">
+                        15 + 10
+                    </strong>
+                </div>
+
+                <div class="info-item">
+                    <span>Stake</span>
+                    <strong id="matchStake">
+                        KSh 50
+                    </strong>
+                </div>
+
+                <div class="info-item">
+                    <span>Status</span>
+                    <strong id="matchStatus">
+                        Ready
+                    </strong>
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- PLAYERS -->
+        <div class="tool-card">
+
+            <div class="card-title">
+                PLAYERS
+            </div>
+
+
+            <div class="side-player">
+
+                <div class="mini-avatar black-avatar">
+                    ♟
+                </div>
+
+                <div class="side-player-text">
+
+                    <strong id="sideBlackName">
+                        Opponent
+                    </strong>
+
+                    <span id="sideBlackRating">
+                        1200
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <div class="side-player">
+
+                <div class="mini-avatar white-avatar">
+                    ♙
+                </div>
+
+                <div class="side-player-text">
+
+                    <strong id="sideWhiteName">
+                        You
+                    </strong>
+
+                    <span id="sideWhiteRating">
+                        1200
+                    </span>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- MOVES -->
+        <div class="tool-card moves-card">
+
+            <div class="card-title">
+                MOVES
+            </div>
+
+            <div id="moveList" class="move-list">
+
+                <div class="empty-moves">
+                    No moves yet
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- DRAW REQUEST -->
+        <div id="drawPanel" class="draw-panel hidden">
+
+            <div class="draw-message">
+                Your opponent offered a draw.
+            </div>
+
+            <div class="draw-actions">
+
+                <button
+                    id="acceptDrawButton"
+                    type="button">
+                    Accept
+                </button>
+
+                <button
+                    id="declineDrawButton"
+                    type="button">
+                    Decline
+                </button>
+
+            </div>
+
+        </div>
+
+    </aside>
+
+</main>
+
+
+<!-- =========================
+     GAME OVER
+     ========================= -->
+<div id="gameOverModal" class="modal hidden">
+
+    <div class="modal-box">
+
+        <div class="modal-piece">
+            ♛
+        </div>
+
+        <h2 id="gameOverTitle">
+            Game Over
+        </h2>
+
+        <p id="gameOverMessage">
+            The game has ended.
+        </p>
+
+        <button
+            id="returnDashboardButton"
+            class="dashboard-button"
+            type="button">
+            Return to Chess
+        </button>
+
+    </div>
+
+</div>
+
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="../js/board.js"></script>
+
+</body>
+</html>
