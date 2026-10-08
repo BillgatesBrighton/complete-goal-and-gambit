@@ -13,8 +13,8 @@
     var frontendPorts = ["3000", "5173", "5500", "8080"];
     var needsDefaultBackend = location.protocol === "file:" ||
         (isLocal && (!location.port || frontendPorts.indexOf(location.port) !== -1));
-    var API_BASE = window.GG_API_BASE ||
-        (needsDefaultBackend ? "http://localhost:5000" : "");
+    var githubPagesBackend = host === "billgatesbrighton.github.io" ? "https://desktop-elb0fth.taildd904a.ts.net" : ""; var API_BASE = window.GG_API_BASE ||
+        (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
 
