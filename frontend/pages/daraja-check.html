@@ -17,7 +17,7 @@
     <section class="card" aria-labelledby="title">
       <p class="eyebrow">Daraja diagnostics</p>
       <h1 id="title">Check M-Pesa connectivity</h1>
-      <p class="intro">The connectivity check requests an OAuth token only. It never sends a payment prompt. A separate button below sends a real STK request after connectivity is ready.</p>
+      <p class="intro">The connectivity check requests an OAuth token and checks local settings only. It never sends a payment prompt or verifies M-Pesa Express access. The button below sends a real STK request only after you confirm the phone and amount.</p>
       <div id="status" class="status pending" role="status" aria-live="polite">Sign in with an administrator account, then check Daraja.</div>
       <div class="actions"><button id="checkButton" type="button">CHECK CONNECTIVITY</button></div>
     </section>
@@ -54,10 +54,10 @@
       statusBox.textContent = "Checking Daraja OAuth and callback configuration…";
       const result = await GG.api("/api/mpesa/connectivity", {noRedirect:true});
       checkButton.disabled = false;
-      isReady = result.ok && result.data.readyForStk === true;
+      isReady = result.ok && result.data.configurationReady === true;
       sendButton.disabled = !isReady || !document.getElementById("confirm").checked;
       if (result.ok) {
-        statusBox.className = "status ready";
+        statusBox.className = !isReady ? "status error" : (result.data.stkProductVerified ? "status ready" : "status pending");
         statusBox.textContent = result.data.message + " Environment: " + result.data.environment + ".";
         if (result.data.sandboxShortcodeMatches === false) statusBox.textContent += " Set the sandbox shortcode to 174379.";
         if (result.data.transactionTypeSupported === false) statusBox.textContent += " Use a supported customer payment transaction type.";

@@ -60,6 +60,8 @@ const symbols = {
 function token(){ return localStorage.getItem("goalGambitToken") || ""; }
 function username(){ return localStorage.getItem("goalGambitUsername") || "You"; }
 function apiBase(){
+  const configured = window.GG_API_BASE || (window.GG && window.GG.API_BASE);
+  if(configured) return String(configured).replace(/\/+$/, "");
   const h=location.hostname;
   const isLocal=h==="localhost"||h==="127.0.0.1";
   const frontendPorts=["3000","5173","5500","8080"];

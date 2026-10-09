@@ -413,10 +413,14 @@ type="number"
 id="withdrawAmount"
 placeholder="Enter amount"
 min="1"
-step="0.01"
-inputmode="decimal"
+step="1"
+inputmode="numeric"
 
 >
+
+<div class="phone-hint" id="withdrawalEstimate">
+The 5% fee is rounded to the nearest KSh. Enter an amount to see your estimated payout.
+</div>
 
 <label class="field-label" for="withdrawPhone">M-Pesa Number</label>
 
@@ -433,7 +437,7 @@ autocomplete="tel"
 Accepted: 07XXXXXXXX, 011XXXXXXX or 07420XXXXX.
 </div>
 
-<button onclick="withdraw()">
+<button id="withdrawButton" onclick="withdraw()">
 Withdraw Funds
 </button>
 
@@ -473,6 +477,7 @@ Your balance and transactions are now stored on the GOAL$GAMBIT server
 and can no longer be changed from your browser.
 
 Withdrawals carry a 5% processing fee.
+The fee is rounded to the nearest KSh. Withdrawals stay pending until M-Pesa confirms the payout; do not submit another while one is pending.
 Your M-Pesa number is required for both deposit and withdrawal requests.
 
 </div>
@@ -514,6 +519,28 @@ var TYPE_LABELS = {
 
 
 var currentBalance = 0;
+var pendingWithdrawalRefreshTimer = null;
+
+function updateWithdrawalEstimate() {
+
+    var amount = Number(
+        document.getElementById("withdrawAmount").value
+    );
+    var estimate = document.getElementById("withdrawalEstimate");
+
+    if (!Number.isSafeInteger(amount) || amount < 1) {
+        estimate.textContent =
+            "The 5% fee is rounded to the nearest KSh. Enter an amount to see your estimated payout.";
+        return;
+    }
+
+    var fee = Math.round(amount * 0.05);
+    var payout = amount - fee;
+    estimate.textContent =
+        "Estimated fee: " + GG.formatMoney(fee) +
+        " · You receive: " + GG.formatMoney(payout);
+
+}
 
 
 function showMessage(id, text) {
@@ -600,6 +627,21 @@ async function loadTransactions() {
 
     var transactions =
         result.data.transactions || [];
+
+    var hasPendingWithdrawal = transactions.some(function(t) {
+        return t.type === "withdrawal" && t.status === "pending";
+    });
+
+    if (hasPendingWithdrawal && pendingWithdrawalRefreshTimer === null) {
+        pendingWithdrawalRefreshTimer = setInterval(async function() {
+            if (document.hidden) return;
+            await loadWallet(false);
+            await loadTransactions();
+        }, 10000);
+    } else if (!hasPendingWithdrawal && pendingWithdrawalRefreshTimer !== null) {
+        clearInterval(pendingWithdrawalRefreshTimer);
+        pendingWithdrawalRefreshTimer = null;
+    }
 
 
     if (!transactions.length) {
@@ -767,12 +809,13 @@ async function deposit() {
 
     if (
         !Number.isFinite(amount) ||
+        !Number.isSafeInteger(amount) ||
         amount < 1
     ) {
 
         showMessage(
             "depositMessage",
-            "Enter a valid deposit amount."
+            "Enter a whole KSh deposit amount of at least 1."
         );
 
         amountInput.focus();
@@ -817,7 +860,7 @@ async function deposit() {
                     method: "POST",
 
                     body: {
-                        amount: Math.floor(amount),
+                        amount: amount,
                         phone: phone
                     }
                 }
@@ -920,6 +963,10 @@ async function withdraw() {
             "withdrawAmount"
         );
 
+    var button =
+        document.getElementById(
+            "withdrawButton"
+        );
 
     var messageId =
         "withdrawMessage";
@@ -939,14 +986,11 @@ async function withdraw() {
         phoneInput.value.trim();
 
 
-    if (
-        !amount ||
-        amount <= 0
-    ) {
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
 
         showMessage(
             messageId,
-            "Enter a valid amount."
+            "Enter a whole KSh amount of at least 1."
         );
 
         return;
@@ -970,69 +1014,63 @@ async function withdraw() {
     }
 
 
-    showMessage(
-        messageId,
-        "Processing..."
-    );
+    button.disabled = true;
+    showMessage(messageId, "Sending withdrawal request to M-Pesa...");
 
-
-    var result =
-        await GG.api(
+    try {
+        var result = await GG.api(
             "/api/wallet/withdraw",
             {
                 method: "POST",
-
                 body: {
                     amount: amount,
-                    phone: phone
+                    phone: normalizePhone(phone)
                 }
             }
         );
 
-
-    if (!result.ok) {
+        if (!result.ok) {
+            showMessage(
+                messageId,
+                result.data && result.data.message
+                    ? result.data.message
+                    : "Withdrawal request failed."
+            );
+            await loadWallet(true);
+            await loadTransactions();
+            return;
+        }
 
         showMessage(
             messageId,
-            result.data &&
-            result.data.message
-                ? result.data.message
-                : "Withdrawal request failed."
+            result.data.message || "Withdrawal request submitted."
         );
+        input.value = "";
+        phoneInput.value = "";
+        updateWithdrawalEstimate();
 
-        return;
-
+        if (result.data.wallet) {
+            currentBalance = Number(result.data.wallet.balance || 0);
+            updateBalance(true);
+        }
+        await loadTransactions();
+    } catch (_) {
+        showMessage(
+            messageId,
+            "Could not confirm the withdrawal request. Refresh your wallet before trying again."
+        );
+        await loadWallet(true);
+        await loadTransactions();
+    } finally {
+        button.disabled = false;
     }
-
-
-    showMessage(
-        messageId,
-        result.data.message ||
-        "Withdrawal request submitted."
-    );
-
-
-    input.value = "";
-
-    phoneInput.value = "";
-
-
-    if (result.data.wallet) {
-
-        currentBalance =
-            Number(
-                result.data.wallet.balance || 0
-            );
-
-        updateBalance(true);
-
-    }
-
-
-    loadTransactions();
 
 }
 
+document.getElementById("withdrawAmount").addEventListener(
+    "input",
+    updateWithdrawalEstimate
+);
 
 loadWallet(false);
 

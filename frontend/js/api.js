@@ -13,7 +13,10 @@
     var frontendPorts = ["3000", "5173", "5500", "8080"];
     var needsDefaultBackend = location.protocol === "file:" ||
         (isLocal && (!location.port || frontendPorts.indexOf(location.port) !== -1));
-    var githubPagesBackend = host === "billgatesbrighton.github.io" ? "https://desktop-elb0fth.taildd904a.ts.net" : ""; var API_BASE = window.GG_API_BASE ||
+    var githubPagesBackend = host === "billgatesbrighton.github.io"
+        ? "https://desktop-elb0fth.taildd904a.ts.net"
+        : "";
+    var API_BASE = window.GG_API_BASE ||
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
@@ -250,4 +253,109 @@
         },
         gameHome: gameHome
     };
+
+    // Show a shared maintenance banner when the backend or database is unreachable.
+    // The health probe is read-only, unauthenticated, and never sends payment data.
+    function initServerStatus() {
+        if (window.__GG_STATUS_MONITOR_STARTED || !document.body) return;
+        window.__GG_STATUS_MONITOR_STARTED = true;
+
+        var banner = document.createElement("div");
+        banner.id = "gg-server-status";
+        banner.hidden = true;
+        banner.setAttribute("role", "status");
+        banner.setAttribute("aria-live", "polite");
+        banner.style.cssText = [
+            "box-sizing:border-box",
+            "display:none",
+            "position:sticky",
+            "top:0",
+            "z-index:2147483000",
+            "width:100%",
+            "padding:11px 16px",
+            "text-align:center",
+            "font:600 14px/1.45 Arial,Helvetica,sans-serif",
+            "color:#fff7ed",
+            "background:#2b1710",
+            "border-bottom:2px solid #f4bd20",
+            "box-shadow:0 3px 12px rgba(0,0,0,.3)"
+        ].join(";");
+
+        // Put the status at the top of the page so it stays visible while scrolling.
+        document.body.insertBefore(banner, document.body.firstChild);
+
+        var wasOffline = false;
+        var recoveryTimer = null;
+        var healthBase = API_BASE || location.origin;
+        if (!healthBase || healthBase === "null" || location.protocol === "file:") {
+            healthBase = "http://localhost:5000";
+        }
+        healthBase = healthBase.replace(/\/+$/, "");
+
+        function showOffline() {
+            window.clearTimeout(recoveryTimer);
+            wasOffline = true;
+            banner.textContent = "⚠ Server under maintenance. The server or database is offline, so some features are unavailable. Please try again shortly.";
+            banner.style.background = "#2b1710";
+            banner.style.color = "#fff7ed";
+            banner.style.borderBottomColor = "#f4bd20";
+            banner.setAttribute("role", "alert");
+            banner.setAttribute("aria-live", "assertive");
+            banner.hidden = false;
+            banner.style.display = "block";
+        }
+
+        function showOnline() {
+            if (wasOffline) {
+                wasOffline = false;
+                banner.textContent = "Server connection restored.";
+                banner.style.background = "#123021";
+                banner.style.color = "#e9fff1";
+                banner.style.borderBottomColor = "#56c781";
+                banner.setAttribute("role", "status");
+                banner.setAttribute("aria-live", "polite");
+                banner.hidden = false;
+                banner.style.display = "block";
+                recoveryTimer = window.setTimeout(function () {
+                    banner.hidden = true;
+                    banner.style.display = "none";
+                }, 4500);
+            } else if (!recoveryTimer) {
+                banner.hidden = true;
+                banner.style.display = "none";
+            }
+        }
+
+        async function checkServer() {
+            var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+            var timeout = window.setTimeout(function () {
+                if (controller) controller.abort();
+            }, 7000);
+            try {
+                var response = await fetch(healthBase + "/api/health", {
+                    method: "GET",
+                    headers: { "Accept": "application/json" },
+                    cache: "no-store",
+                    credentials: "omit",
+                    signal: controller ? controller.signal : undefined
+                });
+                var health = await response.json();
+                if (response.ok && health && health.success === true && health.database === "connected") {
+                    showOnline();
+                } else {
+                    showOffline();
+                }
+            } catch (error) {
+                showOffline();
+            } finally {
+                window.clearTimeout(timeout);
+            }
+        }
+
+        checkServer();
+        window.setInterval(checkServer, 25000);
+    }
+
+    initServerStatus();
+
 })();
