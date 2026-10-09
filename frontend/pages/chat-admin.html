@@ -12,7 +12,19 @@
 var lastSig="",sending=false,loading=false,forceBottom=true;var $=function(id){return document.getElementById(id)},esc=GG.escapeHTML;
 function setStatus(text,error){$("status").textContent=text;$("status").classList.toggle("error",!!error)}
 function bottom(el){return el.scrollHeight-el.scrollTop-el.clientHeight<90}
-function draw(list){var sig=list.map(function(m){return m.id+":"+m.message}).join("|");if(sig===lastSig)return;var pane=$("messages"),stick=forceBottom||bottom(pane);forceBottom=false;lastSig=sig;var me=localStorage.getItem("goalGambitUserId");pane.innerHTML=list.length?list.map(function(m){var mine=String(m.sender_id)===String(me),d=new Date(m.created_at);return '<article class="bubble '+(mine?"mine":"")+'">'+esc(m.message)+'<div class="meta">'+(mine?"You":esc(m.username||"Support"))+' · '+(isNaN(d.getTime())?"":d.toLocaleString())+'</div></article>'}).join(""):'<div class="empty">No support messages yet. Send your first message.</div>';if(stick)pane.scrollTop=pane.scrollHeight}
+function draw(list) {
+    var sig=list.map(function(m){return m.id+":"+m.message+":"+(m.read_at||"");}).join("|");
+    if(sig===lastSig)return;
+    var pane=$("messages"),stick=forceBottom||bottom(pane);
+    forceBottom=false;lastSig=sig;
+    var me=localStorage.getItem("goalGambitUserId");
+    pane.innerHTML=list.length?list.map(function(m){
+        var mine=String(m.sender_id)===String(me),d=new Date(m.created_at);
+        var receipt=mine?(m.read_at?" · Seen by admin":" · Sent"):"";
+        return '<article class="bubble '+(mine?"mine":"")+'">'+esc(m.message)+'<div class="meta">'+(mine?"You":esc(m.username||"Support"))+' · '+(isNaN(d.getTime())?"":d.toLocaleString())+esc(receipt)+'</div></article>';
+    }).join(""):'<div class="empty">No support messages yet. Send your first message.</div>';
+    if(stick)pane.scrollTop=pane.scrollHeight;
+}
 async function load(){if(loading||document.hidden)return;loading=true;try{var r=await GG.api("/api/chat/support");if(!r.ok){if(!lastSig)$("messages").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load support chat.")+'</div>';return}draw(r.data.messages||[])}finally{loading=false}}
 function resize(){var i=$("message");i.style.height="auto";i.style.height=Math.min(i.scrollHeight,150)+"px";$("count").textContent=i.value.length+" / 2000";$("send").disabled=!i.value.trim()||sending}
 async function send(){var input=$("message"),v=input.value.trim();if(!v||sending)return;sending=true;resize();setStatus("Sending…",false);var r=await GG.api("/api/chat/support",{method:"POST",body:{message:v}});if(!r.ok){sending=false;resize();setStatus(r.data.message||"Message not sent. Your text is still here; try again.",true);return}input.value="";sending=false;forceBottom=true;resize();setStatus("Sent",false);await load();input.focus()}

@@ -1,0 +1,20 @@
+.header-links { display:flex; align-items:center; gap:14px; }
+.presence-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: #777;
+    vertical-align: 1px;
+    box-shadow: 0 0 0 2px #7772;
+}
+.presence-dot.online {
+    background: #55d879;
+    box-shadow: 0 0 0 2px #55d87935, 0 0 9px #55d87980;
+}
+#users .user small { color: #7dde95; margin-left: 5px; font-size: 11px; }
+#onlineUsers { max-height: 18vh; }
+#onlineUsers .user { border-color: #263c2b; background: #111814; }
+#onlineUsers .user:hover { border-color: #55d879; }
+.person #personPresence { display: block; min-height: 14px; }\n@media (max-width: 500px) { .header-links { gap: 8px; font-size: 12px; } }

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090909">
+    <title>GOAL$GAMBIT | Account Settings</title>
+    <style>
+        :root{color-scheme:dark;--gold:#f4bd20;--line:#303030;--muted:#aaa}
+        *{box-sizing:border-box}
+        body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top,#19170f,#080808 55%);color:#f8f8f8;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+        a{color:var(--gold);text-decoration:none}
+        .wrap{max-width:680px;margin:0 auto;padding:24px 16px}
+        .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+        .top h1{font-size:clamp(21px,4vw,30px);margin:0}
+        .card{padding:clamp(18px,4vw,30px);border:1px solid var(--line);border-radius:18px;background:#101010;box-shadow:0 18px 60px #0008}
+        .intro{color:var(--muted);margin:4px 0 22px}
+        .field{display:grid;gap:7px;margin:16px 0}
+        label{font-weight:700}
+        input{width:100%;min-height:46px;padding:11px 12px;border:1px solid #414141;border-radius:10px;background:#090909;color:#fff;font:inherit}
+        input:focus{outline:2px solid #f4bd2070;border-color:var(--gold)}
+        input[readonly]{color:#aaa;background:#151515}
+        .help{color:#929292;font-size:12px;margin:0}
+        .divider{height:1px;border:0;background:#292929;margin:24px 0}
+        .submit{width:100%;min-height:48px;border:0;border-radius:11px;background:var(--gold);color:#14110a;font:inherit;font-size:15px;font-weight:800;cursor:pointer}
+        .submit:disabled{opacity:.55;cursor:wait}
+        .status{min-height:23px;margin-top:12px;color:#95dfa5}
+        .status.error{color:#ff8585}
+        .security-note{border:1px solid #4e421e;border-radius:11px;background:#1a160a;color:#d5ca9f;padding:12px;font-size:12px}
+        @media(max-width:420px){.wrap{padding:14px 10px}.top{align-items:flex-start}}
+    </style>
+</head>
+<body>
+    <main class="wrap">
+        <header class="top">
+            <h1>Account settings</h1>
+            <a href="chat.html">← Chat Center</a>
+        </header>
+        <section class="card" aria-labelledby="accountHeading">
+            <h2 id="accountHeading">Change your sign-in details</h2>
+            <p class="intro">Update your username, password, or both. Your current password is required to confirm the change.</p>
+            <form id="accountForm" novalidate>
+                <div class="field">
+                    <label for="currentUsername">Current username</label>
+                    <input id="currentUsername" type="text" readonly autocomplete="username">
+                </div>
+                <div class="field">
+                    <label for="newUsername">New username <span class="help">(leave blank to keep it)</span></label>
+                    <input id="newUsername" type="text" minlength="3" maxlength="30" autocomplete="off" placeholder="letters, numbers, underscores">
+                </div>
+                <hr class="divider">
+                <div class="field">
+                    <label for="currentPassword">Current password</label>
+                    <input id="currentPassword" type="password" maxlength="128" autocomplete="current-password" required>
+                </div>
+                <div class="field">
+                    <label for="newPassword">New password <span class="help">(leave blank to keep it)</span></label>
+                    <input id="newPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <label for="confirmPassword">Confirm new password</label>
+                    <input id="confirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password">
+                    <p class="help">Use at least 8 characters.</p>
+                </div>
+                <div class="security-note">For your security, this change signs out your other sessions. This page changes details for a signed-in account; forgotten-password recovery needs a verified phone or email process.</div>
+                <button id="saveAccount" class="submit" type="submit">Save account changes</button>
+                <div id="accountStatus" class="status" role="status" aria-live="polite"></div>
+            </form>
+        </section>
+    </main>
+    <script src="../js/api.js"></script>
+    <script>
+        (function(){
+            "use strict";
+            if(!GG.requireLogin()) return;
+            var $=function(id){return document.getElementById(id)};
+            var currentUsername="";
+            function show(message,isError){
+                $("accountStatus").textContent=message;
+                $("accountStatus").classList.toggle("error",!!isError);
+            }
+            async function loadAccount(){
+                var result=await GG.api("/api/me");
+                if(!result.ok||!result.data.user){show(result.data.message||"Could not load your account.",true);return}
+                currentUsername=String(result.data.user.username||"");
+                $("currentUsername").value=currentUsername;
+            }
+            $("accountForm").addEventListener("submit",async function(event){
+                event.preventDefault();
+                var username=$("newUsername").value.trim().toLowerCase();
+                var newPassword=$("newPassword").value;
+                var confirmPassword=$("confirmPassword").value;
+                if(username&&username===currentUsername&&!newPassword){show("Enter a different username or a new password.",true);return}
+                if(newPassword&&newPassword!==confirmPassword){show("The new passwords do not match.",true);return}
+                if(!username&&!newPassword){show("Enter a new username or a new password.",true);return}
+                var body={currentPassword:$("currentPassword").value};
+                if(username)body.username=username;
+                if(newPassword)body.newPassword=newPassword;
+                var button=$("saveAccount");button.disabled=true;show("Saving account changes…",false);
+                var result=await GG.api("/api/auth/account",{method:"PATCH",body:body});
+                button.disabled=false;
+                if(!result.ok){show(result.data.message||"Could not update your account.",true);return}
+                GG.saveSession(result.data.token,result.data.user,result.data.user.game);
+                currentUsername=String(result.data.user.username||"");
+                $("currentUsername").value=currentUsername;
+                $("newUsername").value="";
+                $("currentPassword").value="";
+                $("newPassword").value="";
+                $("confirmPassword").value="";
+                show(result.data.message||"Account updated.",false);
+            });
+            loadAccount();
+        })();
+    </script>
+</body>
+</html>

@@ -223,6 +223,56 @@ button:disabled {
     min-height: 18px;
 }
 
+.c2b-panel {
+    margin-top: 20px;
+    padding: 16px;
+    border: 1px solid #303030;
+    border-radius: 13px;
+    background: #101010;
+}
+
+.c2b-panel h3 {
+    margin-bottom: 8px;
+    font-size: 16px;
+}
+
+.c2b-help, .c2b-unavailable {
+    color: #999;
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.c2b-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #242424;
+    font-size: 13px;
+}
+
+.c2b-row span { color: #888; }
+.c2b-row strong { color: #f4bd20; overflow-wrap: anywhere; }
+
+.c2b-row button, .c2b-register {
+    width: auto;
+    padding: 8px 11px;
+    font-size: 11px;
+}
+
+.c2b-register {
+    width: 100%;
+    margin-top: 12px;
+}
+
+.c2b-panel .message { margin-bottom: 0; }
+
+@media (max-width: 420px) {
+    .c2b-row { grid-template-columns: 1fr auto; }
+    .c2b-row span { grid-column: 1 / -1; }
+}
+
 .transactions {
     margin-top: 25px;
     background:
@@ -396,6 +446,19 @@ Deposit Funds
 
 <div class="message" id="depositMessage"></div>
 
+<section class="c2b-panel" id="c2bPanel" aria-live="polite">
+    <h3>Manual M-Pesa PayBill</h3>
+    <p class="c2b-help">When enabled, pay from M-Pesa using the business short code and the account reference shown here. The wallet updates after Safaricom confirms the payment.</p>
+    <p class="c2b-unavailable" id="c2bUnavailable">Checking PayBill setup…</p>
+    <div id="c2bDetails" hidden>
+        <div class="c2b-row"><span>Business short code</span><strong id="c2bShortCode"></strong><button type="button" onclick="copyC2bValue('c2bShortCode')">Copy</button></div>
+        <div class="c2b-row"><span>Account reference</span><strong id="c2bAccountReference"></strong><button type="button" onclick="copyC2bValue('c2bAccountReference')">Copy</button></div>
+        <p class="c2b-help" style="margin-top:10px">Sandbox payments require an administrator to register the callbacks before using Daraja’s simulator.</p>
+        <button class="c2b-register" id="c2bRegisterButton" type="button" onclick="registerC2bCallbacks()" hidden>Register sandbox callbacks</button>
+    </div>
+    <div class="message" id="c2bMessage"></div>
+</section>
+
 </div>
 
 <div class="card withdraw">
@@ -547,6 +610,77 @@ function showMessage(id, text) {
 
     document.getElementById(id).textContent = text;
 
+}
+
+
+async function loadC2bInstructions() {
+    var unavailable = document.getElementById("c2bUnavailable");
+    var details = document.getElementById("c2bDetails");
+    var registerButton = document.getElementById("c2bRegisterButton");
+    if (!unavailable || !details) return;
+
+    var result = await GG.api("/api/wallet/c2b-instructions");
+    if (!result.ok || !result.data || !result.data.c2b) {
+        unavailable.textContent = "Manual PayBill deposits are unavailable right now. Use STK Push or try again later.";
+        return;
+    }
+
+    var c2b = result.data.c2b;
+    if (!c2b.available) {
+        unavailable.textContent = c2b.enabled
+            ? "PayBill setup needs a valid sandbox shortcode, account credentials and public HTTPS callback address."
+            : "Manual PayBill deposits are not enabled yet. STK Push remains available above.";
+        return;
+    }
+
+    document.getElementById("c2bShortCode").textContent = String(c2b.shortCode || "");
+    document.getElementById("c2bAccountReference").textContent = String(c2b.accountReference || "");
+    unavailable.hidden = true;
+    details.hidden = false;
+    registerButton.hidden = !c2b.canRegisterCallbacks;
+}
+
+
+async function copyC2bValue(id) {
+    var element = document.getElementById(id);
+    var value = element ? element.textContent.trim() : "";
+    if (!value) return;
+    try {
+        await navigator.clipboard.writeText(value);
+        showMessage("c2bMessage", "Copied.");
+    } catch (_) {
+        var temporary = document.createElement("textarea");
+        temporary.value = value;
+        temporary.setAttribute("readonly", "");
+        temporary.style.position = "fixed";
+        temporary.style.opacity = "0";
+        document.body.appendChild(temporary);
+        temporary.select();
+        var copied = document.execCommand("copy");
+        temporary.remove();
+        showMessage("c2bMessage", copied ? "Copied." : "Copy failed. Select the value and copy it.");
+    }
+}
+
+
+async function registerC2bCallbacks() {
+    var button = document.getElementById("c2bRegisterButton");
+    if (!confirm("Register these callback URLs with the Daraja sandbox? This does not charge or pay anyone.")) return;
+    button.disabled = true;
+    showMessage("c2bMessage", "Registering sandbox callback URLs…");
+    try {
+        var result = await GG.api("/api/payments/c2b/register-urls", { method: "POST", body: {} });
+        showMessage(
+            "c2bMessage",
+            result.ok && result.data && result.data.message
+                ? result.data.message
+                : (result.data && result.data.message) || "Daraja could not register the C2B callbacks. Check the sandbox app product and credentials."
+        );
+    } catch (_) {
+        showMessage("c2bMessage", "Could not connect to the backend to register callbacks.");
+    } finally {
+        button.disabled = false;
+    }
 }
 
 
@@ -1076,6 +1210,8 @@ loadWallet(false);
 
 loadTransactions();
 
+loadC2bInstructions();
+
 
 window.addEventListener(
     "pageshow",
@@ -1084,6 +1220,8 @@ window.addEventListener(
         loadWallet(false);
 
         loadTransactions();
+
+        loadC2bInstructions();
 
     }
 );
@@ -1098,6 +1236,8 @@ document.addEventListener(
             loadWallet(false);
 
             loadTransactions();
+
+            loadC2bInstructions();
 
         }
 

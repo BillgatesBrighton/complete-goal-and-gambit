@@ -3,7 +3,7 @@
 if (!GG.requireLogin()) return;
 var $ = function (id) { return document.getElementById(id); };
 var esc = GG.escapeHTML;
-var adminId = null, selectedUser = null, selectedName = "", messageSig = "", urls = [], busy = false, timer = null, users = [];
+var adminId = null, selectedUser = null, selectedName = "", messageSig = "", urls = [], busy = false, timer = null, users = [], includeCleared = false;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
 function date(value) { var d = new Date(value); return value && !isNaN(d.getTime()) ? d.toLocaleString() : "Time unavailable"; }
@@ -71,21 +71,21 @@ async function loadComplaints() {
     $("statComplaints").textContent=open.length; $("navComplaints").textContent=open.length; return open.length;
 }
 async function loadThreads() {
-    var r=await GG.api("/api/admin/support");
+    var r=await GG.api("/api/admin/support"+(includeCleared?"?includeCleared=true":""));
     if(!r.ok){$("threads").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load inbox.")+'</div>';return;}
     var list=r.data.threads||[], unread=list.reduce(function(n,t){return n+(Number(t.unread)||0);},0);
     $("statUnread").textContent=unread; $("navUnread").textContent=unread;
-    $("threads").innerHTML=list.length?list.map(function(t){var id=Number(t.user_id);return '<button class="thread'+(id===Number(selectedUser)?" active":"")+'" data-thread="'+id+'" data-name="'+esc(t.username||"Player")+'"><span class="thread-name">'+esc(t.username||"Player")+(Number(t.unread)?' <span class="unread">'+Number(t.unread)+'</span>':"")+'</span><span class="last">'+esc(t.last_message||"No messages yet")+'</span></button>';}).join(""):'<div class="empty">No player support messages yet.</div>';
+    $("threads").innerHTML=list.length?list.map(function(t){var id=Number(t.user_id),cleared=!!t.admin_cleared_at;return '<div class="thread-row"><button class="thread'+(id===Number(selectedUser)?" active":"")+'" data-thread="'+id+'" data-name="'+esc(t.username||"Player")+'"><span class="thread-name">'+esc(t.username||"Player")+(Number(t.unread)?' <span class="unread">'+Number(t.unread)+'</span>':"")+(cleared?' <span class="badge">Cleared</span>':"")+'</span><span class="last">'+esc(t.last_message||"No messages yet")+'</span></button><button class="btn" type="button" data-thread-clear="'+id+'">'+(cleared?"Restore":"Clear")+'</button></div>';}).join(""):'<div class="empty">No player support messages in this view.</div>';
 }
 async function loadMessages(force) {
     if(selectedUser==null)return;
     if(!force&&document.activeElement===$("reply"))return;
     var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser));
     if(!r.ok){$("convhead").textContent=r.data.message||"Could not load conversation.";return;}
-    var list=r.data.messages||[], sig=list.map(function(m){return m.id+":"+m.message;}).join("|");
+    var list=r.data.messages||[], sig=list.map(function(m){return m.id+":"+m.message+":"+(m.read_at||"");}).join("|");
     if(sig===messageSig)return; messageSig=sig;
     var pane=$("messages"), bottom=pane.scrollHeight-pane.scrollTop-pane.clientHeight<70;
-    pane.innerHTML=list.length?list.map(function(m){var mine=Number(m.sender_id)===Number(adminId);return '<div class="bubble'+(mine?" mine":"")+'">'+esc(m.message)+'<small>'+esc(mine?"You":m.username||selectedName)+" · "+esc(date(m.created_at))+'</small></div>';}).join(""):'<div class="empty">No messages in this conversation.</div>';
+    pane.innerHTML=list.length?list.map(function(m){var mine=Number(m.sender_id)===Number(adminId),receipt=mine?(m.read_at?" · Seen by player":" · Sent"):"";return '<div class="bubble'+(mine?" mine":"")+'">'+esc(m.message)+'<small>'+esc(mine?"You":m.username||selectedName)+" · "+esc(date(m.created_at))+esc(receipt)+'</small></div>';}).join(""):'<div class="empty">No messages in this conversation.</div>';
     if(bottom)pane.scrollTop=pane.scrollHeight;
     $("convhead").textContent=selectedName+" · "+list.length+" message"+(list.length===1?"":"s");
 }
@@ -103,7 +103,7 @@ async function loadUsers() {
         else {
             if(status!=="active")h+='<button class="btn" data-status="active" data-id="'+id+'">Reactivate</button>';
             if(status!=="suspended")h+='<button class="btn" data-status="suspended" data-id="'+id+'">Suspend</button>';
-            if(status!=="closed")h+='<button class="btn red" data-status="closed" data-id="'+id+'">Dismiss</button>';
+            if(status!=="closed")h+='<button class="btn red" data-status="closed" data-id="'+id+'">Clear account</button>';
         }
         return h+'</div></article>';
     }).join(""):'<div class="empty">No accounts match that search.</div>';
@@ -147,12 +147,24 @@ async function resultAction(btn) {
 async function statusAction(btn) {
     var id=Number(btn.dataset.id), status=btn.dataset.status, u=users.find(function(x){return Number(x.id)===id;}), row=btn.closest("[data-user]");
     if(!u)return;
-    if(status==="closed"&&!confirm("Dismiss "+u.username+"? This blocks sign-in but preserves the account and history. An admin can reactivate it."))return;
+    if(status==="closed"&&!confirm("Clear "+u.username+" from active accounts? This blocks sign-in but preserves the account and history. An admin can reactivate it."))return;
     if(status==="suspended"&&!confirm("Suspend "+u.username+" from signing in? An admin can reactivate the account."))return;
     var reason=row.querySelector("[data-user-note]").value.trim(); btn.disabled=true;
     var r=await GG.api("/api/admin/users/"+id+"/status",{method:"POST",body:{status:status,reason:reason}});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Account action failed.","error");return;}
     say(u.username+" is now "+status+". "+(reason?"Admin note saved.":"No reason was required."),"ok");await refresh(true);
+}
+
+async function clearThreadAction(btn) {
+    var id=Number(btn.dataset.threadClear), restore=btn.textContent.trim()==="Restore";
+    var target=users.find(function(u){return Number(u.id)===id;});
+    var name=target?target.username:(btn.closest(".thread-row").querySelector("[data-thread]").dataset.name||"this player");
+    if(!restore&&!confirm("Clear "+name+"’s conversation from the admin inbox? The message history stays saved, and a new player message will reopen it."))return;
+    btn.disabled=true;
+    var r=await GG.api("/api/admin/support/"+id+(restore?"/restore":"/clear"),{method:"POST"});
+    if(!r.ok){btn.disabled=false;say(r.data.message||"Could not update the conversation.","error");return;}
+    if(selectedUser===id&&!restore){selectedUser=null;selectedName="";messageSig="";$("messages").innerHTML='<div class="empty">Choose a player to read their messages.</div>';$("convhead").textContent="Select a conversation";$("reply").disabled=true;$("sendReply").disabled=true;}
+    say(r.data.message||"Conversation updated.","ok");await refresh(true);
 }
 
 $("resultFilter").addEventListener("change",function(){loadResults();});
@@ -165,7 +177,8 @@ $("userSearch").addEventListener("input",function(){clearTimeout(timer);timer=se
 $("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b)resultAction(b);});
 $("complaintList").addEventListener("click",function(e){var b=e.target.closest("[data-complaint-action]");if(b)complaintAction(b);});
 $("userList").addEventListener("click",function(e){var b=e.target.closest("[data-status]");if(b)statusAction(b);});
-$("threads").addEventListener("click",function(e){var b=e.target.closest("[data-thread]");if(!b)return;selectedUser=Number(b.dataset.thread);selectedName=b.dataset.name||"Player";messageSig="";$("reply").disabled=false;$("sendReply").disabled=false;$("convhead").textContent=selectedName+" · loading";loadThreads().then(function(){return loadMessages(true);});});
+$("threads").addEventListener("click",function(e){var action=e.target.closest("[data-thread-clear]");if(action){clearThreadAction(action);return;}var b=e.target.closest("[data-thread]");if(!b)return;selectedUser=Number(b.dataset.thread);selectedName=b.dataset.name||"Player";messageSig="";$("reply").disabled=false;$("sendReply").disabled=false;$("convhead").textContent=selectedName+" · loading";loadThreads().then(function(){return loadMessages(true);});});
+$("toggleCleared").addEventListener("click",function(){includeCleared=!includeCleared;this.setAttribute("aria-pressed",String(includeCleared));this.textContent=includeCleared?"Hide cleared":"Show cleared";loadThreads();});
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convhead").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convhead").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig="";$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 async function authorize() {

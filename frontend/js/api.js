@@ -20,9 +20,72 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
+    var presenceSocket = null;
+    var presenceScriptPending = false;
+    var onlineUserIds = new Set();
 
     function getToken() {
         return localStorage.getItem(TOKEN_KEY);
+    }
+
+    function publishPresence(ids) {
+        onlineUserIds = new Set((Array.isArray(ids) ? ids : []).map(function(id) {
+            return String(Number(id));
+        }).filter(function(id) { return id !== "NaN" && id !== "0"; }));
+        window.dispatchEvent(new CustomEvent("gg:presence-update", {
+            detail: { onlineUserIds: Array.from(onlineUserIds) }
+        }));
+    }
+
+    function disconnectPresence() {
+        if (presenceSocket) {
+            var socket = presenceSocket;
+            presenceSocket = null;
+            socket.disconnect();
+        }
+        publishPresence([]);
+    }
+
+    function startPresence() {
+        if (!getToken()) return;
+        if (presenceSocket && (presenceSocket.connected || presenceSocket.active)) return;
+
+        function connect() {
+            if (!window.io || !getToken() || presenceSocket) return;
+            var socket = window.io(API_BASE || location.origin, {
+                auth: { token: getToken() },
+                transports: ["websocket", "polling"]
+            });
+            presenceSocket = socket;
+            socket.on("presence:update", function(data) {
+                publishPresence(data && data.onlineUserIds);
+            });
+            socket.on("disconnect", function(reason) {
+                publishPresence([]);
+                if (reason === "io server disconnect" && presenceSocket === socket) {
+                    presenceSocket = null;
+                }
+            });
+        }
+
+        if (window.io) {
+            connect();
+            return;
+        }
+        if (presenceScriptPending) return;
+        presenceScriptPending = true;
+        var script = document.createElement("script");
+        script.src = (API_BASE || location.origin).replace(/\/+$/, "") + "/socket.io/socket.io.js";
+        script.async = true;
+        script.onload = function() {
+            presenceScriptPending = false;
+            connect();
+        };
+        script.onerror = function() {
+            presenceScriptPending = false;
+            script.remove();
+        };
+        document.head.appendChild(script);
     }
 
     function saveSession(token, user, game) {
@@ -42,9 +105,12 @@
             phone: user.phone || previous.phone || "",
             game: game || previous.game || ""
         }));
+        disconnectPresence();
+        startPresence();
     }
 
     function clearSession() {
+        disconnectPresence();
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem("goalGambitLoggedIn");
         localStorage.removeItem("goalGambitAccount");
@@ -104,6 +170,7 @@
             location.href = "login.html";
             return false;
         }
+        startPresence();
         return true;
     }
 
@@ -246,6 +313,9 @@
         fillProfile: fillProfile,
         fillBalance: fillBalance,
         formatMoney: formatMoney,
+        startPresence: startPresence,
+        isUserOnline: function(id) { return onlineUserIds.has(String(Number(id))); },
+        getOnlineUserIds: function() { return Array.from(onlineUserIds); },
         escapeHTML: function (value) {
             return String(value == null ? "" : value)
                 .replace(/&/g, "&amp;").replace(/</g, "&lt;")

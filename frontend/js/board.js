@@ -226,6 +226,7 @@ async function loadMatch(){
   const version=stateVersion;
   const r=await api("/api/chess/"+matchId);
   if(r.ok&&version===stateVersion)applyState(r.data.match);
+  else if(!r.ok)setStatus(r.data.message||"Could not load this chess match. Return to chess and start a new match.","waiting");
 }
 async function createOrJoin(){
   if(!token()){setStatus("Log in required.","waiting");setTimeout(()=>location.href="login.html",1200);return}
