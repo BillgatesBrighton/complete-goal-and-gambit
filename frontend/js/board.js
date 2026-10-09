@@ -104,13 +104,20 @@ function remaining(color){
 function currentBoard(){return parseFen(state&&state.fen || "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")}
 
 function setInfo(){
-  const speed=(config.rankedMode||config.speed||"rapid").replace(/[^a-z]/gi,"");
-  const type=config.tournamentMode?"Tournament":"Ranked";
+  const timeControl=state?.timeControl||config.timeControl||"";
+  const speed=(config.rankedMode||config.speed||speedForTimeControl(timeControl)).replace(/[^a-z]/gi,"");
+  const type=(state?.matchType|| (config.tournamentMode?"tournament":"ranked"))==="tournament"?"Tournament":"Ranked";
   const label=speed.charAt(0).toUpperCase()+speed.slice(1)+" "+type;
   if(gameModeElement)gameModeElement.textContent=label;
   if(matchTypeElement)matchTypeElement.textContent=type;
-  if(matchTimeElement)matchTimeElement.textContent=state?.timeControl||config.timeControl||"—";
+  if(matchTimeElement)matchTimeElement.textContent=timeControl||"—";
   if(matchStakeElement)matchStakeElement.textContent="KSh "+Number(state?.stake??config.rankedStake??0).toLocaleString("en-KE");
+}
+function speedForTimeControl(value){
+  const control=String(value||"").trim();
+  if(/^(1:00|1\+1|2:00|2\+1)$/.test(control))return "bullet";
+  if(/^(3:00|3\+2|5:00)$/.test(control))return "blitz";
+  return "rapid";
 }
 function setPlayers(){
   const mine=state?.playerColor;
@@ -211,7 +218,12 @@ function applyState(m){
   state=m; playerColor=m.playerColor||playerColor;
   if(!orientationSet&&m.playerColor){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=Date.now();
   const check=m.checkSquare?" · CHECK":"";
-  setInfo();setPlayers();setStatus(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:(m.status==="waiting"?"Searching for an opponent…":m.status==="cancelled"?"Search cancelled":"Game finished"),m.status==="waiting"?"waiting":"ready");updateCancelButton();renderBoard();
+  setInfo();setPlayers();setStatus(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:(m.status==="waiting"?"Searching for an opponent…":m.status==="settling"?"Settling result…":m.status==="cancelled"?"Search cancelled":"Game finished"),m.status==="waiting"||m.status==="settling"?"waiting":"ready");
+  if(m.status==="waiting"){
+    const turnMessage=document.getElementById("turnMessage");
+    if(turnMessage)turnMessage.textContent="Waiting for another player with the same clock and stake. Your stake is locked; cancel search to refund it.";
+  }
+  updateCancelButton();renderBoard();
   const active=state&&state.status==="active";if(drawButton)drawButton.disabled=!active;if(resignButton)resignButton.disabled=!active;
   if(m.result)showGameOver(m.result,m.winnerId);
   if(drawPanelElement)drawPanelElement.classList.toggle("hidden",!m.drawOfferUserId||Number(m.drawOfferUserId)===Number(getUserId()));
@@ -231,13 +243,13 @@ async function loadMatch(){
 async function createOrJoin(){
   if(!token()){setStatus("Log in required.","waiting");setTimeout(()=>location.href="login.html",1200);return}
   if(matchId){await loadMatch();return}
+  if(await restoreSavedMatch())return;
   const speed=(config.rankedMode||"rapid").toLowerCase(); const tc=config.timeControl||({rapid:"10+5",blitz:"3+2",bullet:"1+1"}[speed]||"10+5");
   setStatus("Checking your wallet…","waiting");
   const created=await api("/api/chess/create",{method:"POST",body:{matchType:config.tournamentMode?"tournament":"ranked",speed,stake:Number(config.rankedStake||0),timeControl:tc}});
   if(created.ok){
     matchId=created.data.match.matchId;
-    localStorage.setItem("goalGambitChessMatchId",String(matchId));
-    try{const u=new URL(location.href);u.searchParams.set("matchId",String(matchId));history.replaceState(null,"",u.toString())}catch(_){}
+    rememberMatch(matchId);
     applyState(created.data.match);
   } else {
     const msg=created.data.message||"Unable to create match.";
@@ -245,10 +257,39 @@ async function createOrJoin(){
     if(/insufficient/i.test(msg)){setTimeout(()=>{alert(msg+"\nDeposit funds in your wallet to play.");location.href="wallet.html"},600)}
   }
 }
+function rememberMatch(id){
+  localStorage.setItem("goalGambitChessMatchId",String(id));
+  try{const u=new URL(location.href);u.searchParams.set("matchId",String(id));history.replaceState(null,"",u.toString())}catch(_){}
+}
+async function restoreSavedMatch(){
+  const savedId=Number(localStorage.getItem("goalGambitChessMatchId")||0);
+  if(!Number.isInteger(savedId)||savedId<=0)return false;
+  setStatus("Reconnecting to your previous chess match…","waiting");
+  const r=await api("/api/chess/"+savedId);
+  const m=r.data&&r.data.match;
+  if(r.ok&&m){
+    if(["waiting","active","settling"].includes(m.status)){
+      matchId=savedId;
+      const timeControl=m.timeControl||config.timeControl;
+      config={...config,rankedMode:speedForTimeControl(timeControl),tournamentMode:m.matchType==="tournament",rankedStake:Number(m.stake||0),timeControl};
+      rememberMatch(savedId);
+      applyState(m);
+      return true;
+    }
+    localStorage.removeItem("goalGambitChessMatchId");
+    return false;
+  }
+  if(r.status===403||r.status===404){
+    localStorage.removeItem("goalGambitChessMatchId");
+    return false;
+  }
+  setStatus((r.data&&r.data.message)||"Could not reconnect to the previous match. Check the server connection before starting another search.","waiting");
+  return true;
+}
 async function cancelSearch(){
   if(!matchId||!state||state.status!=="waiting")return;
   const r=await api("/api/chess/"+matchId+"/cancel",{method:"POST"});
-  if(r.ok){location.href="chess.html"}else setStatus(r.data.message||"Could not cancel.","waiting");
+  if(r.ok){if(Number(localStorage.getItem("goalGambitChessMatchId"))===Number(matchId))localStorage.removeItem("goalGambitChessMatchId");location.href="chess.html"}else setStatus(r.data.message||"Could not cancel.","waiting");
 }
 function updateCancelButton(){
   const bar=document.getElementById("statusBar"); if(!bar)return;
@@ -263,6 +304,7 @@ function setupSocket(){
   try{socket=window.io(apiBase()||location.origin,{auth:{token:token()},transports:["websocket","polling"]});socket.on("connect",()=>socket.emit("chess:join",{matchId}));socket.on("chess:move",()=>loadMatch());socket.on("chess:match_ready",()=>loadMatch());socket.on("chess:game_over",loadMatch);socket.on("chess:draw_offer",d=>{if(Number(d.userId)!==getUserId()&&drawPanelElement)drawPanelElement.classList.remove("hidden")});}catch(e){console.warn(e)}
 }
 function showGameOver(result,winnerId){
+  if(Number(localStorage.getItem("goalGambitChessMatchId"))===Number(matchId))localStorage.removeItem("goalGambitChessMatchId");
   if(gameOverModal)gameOverModal.classList.remove("hidden");
   const me=getUserId();const win=winnerId&&Number(winnerId)===me;
   if(gameOverTitleElement)gameOverTitleElement.textContent=result==="draw"?"Draw":win?"You Win":"You Lose";
@@ -281,6 +323,10 @@ if(returnDashboardButton)returnDashboardButton.addEventListener("click",()=>loca
 window.addEventListener("message",event=>{if(!event.data||event.data.type!=="GOAL_GAMBIT_INIT")return;config=event.data.config||{};if(config.matchId)matchId=Number(config.matchId);if(config.player?.color)playerColor=config.player.color;setInfo();createOrJoin().then(setupSocket);window.parent.postMessage({type:"GOAL_GAMBIT_BOARD_READY"},"*")});
 
 setInfo(); renderBoard();
+if(matchId)setStatus("Reconnecting to match…","waiting");
+else if(window.parent!==window)setStatus("Waiting for match setup…","waiting");
+else if(params.has("mode"))setStatus("Starting ranked match…","waiting");
+else setStatus("Choose ranked match settings to begin.","ready");
 (function startFromQuery(){
   // board.html?mode=rapid-ranked&minutes=10&increment=5&stake=50  (opened from the ranked / tournament pages)
   const mode=(params.get("mode")||"").toLowerCase();
