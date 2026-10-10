@@ -1,28 +1,87 @@
-/* GOAL$GAMBIT notification clicks return to the Match Hub.
-   The site polls for new room codes while this page is open. */
+"use strict";
+
+function safeTargetPath(value) {
+    const path = String(value || "");
+    if (/^pages\/(match-room|match-results|match-hub)\.html(?:\?matchId=[1-9][0-9]*)?$/.test(path)) return path;
+    return "pages/match-hub.html";
+}
+
+self.addEventListener("push", function(event) {
+    event.waitUntil((async function() {
+        let payload = {};
+        try { payload = event.data ? event.data.json() : {}; } catch (_) { payload = {}; }
+        if (!payload || typeof payload !== "object") payload = {};
+        const title = String(payload.title || "GOAL$GAMBIT match update").slice(0, 120);
+        const body = String(payload.body || "Open GOAL$GAMBIT to view your match update.").slice(0, 240);
+        const eventId = Number(payload.eventId) || 0;
+        const targetPath = safeTargetPath(payload.targetPath);
+        const isSender = String(payload.type || "").indexOf("room-code-needed") !== -1;
+        const isReceiver = String(payload.type || "").indexOf("room-code-sent") !== -1;
+        const options = {
+            body: body,
+            icon: "images/notification-icon.svg",
+            tag: String(payload.tag || (eventId ? "goal-gambit-event-" + eventId : "goal-gambit-update")),
+            renotify: false,
+            data: {
+                targetPath: targetPath,
+                eventId: eventId,
+                clickToken: String(payload.clickToken || ""),
+                trackingUrl: String(payload.trackingUrl || "")
+            }
+        };
+        if (isSender) options.actions = [{ action: "send-code", title: "Send code" }];
+        else if (isReceiver) options.actions = [{ action: "view-code", title: "View code" }];
+        try {
+            await self.registration.showNotification(title, options);
+        } catch (_) {
+            // Some browsers reject action buttons. Retry the same safe alert without actions.
+            delete options.actions;
+            await self.registration.showNotification(title, options);
+        }
+    })());
+});
+
 self.addEventListener("notificationclick", function(event) {
     event.notification.close();
-
     const data = event.notification.data || {};
-    const target = new URL(data.url || "pages/match-hub.html", self.registration.scope).href;
+    const target = new URL(safeTargetPath(data.targetPath), self.registration.scope).href;
+    const action = ["send-code", "view-code", "results"].includes(event.action) ? event.action : "open";
 
     event.waitUntil((async function() {
-        const windows = await self.clients.matchAll({
-            type: "window",
-            includeUncontrolled: true
-        });
+        const tasks = [];
+        const trackingUrl = String(data.trackingUrl || "");
+        if (data.eventId && data.clickToken && /^https:\/\//i.test(trackingUrl)) {
+            tasks.push(fetch(trackingUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ eventId: data.eventId, clickToken: data.clickToken, action: action }),
+                mode: "cors",
+                credentials: "omit",
+                keepalive: true
+            }).catch(function() {}));
+        }
+        const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
         const scopeUrl = new URL(self.registration.scope);
-
         for (const client of windows) {
             const clientUrl = new URL(client.url);
-            if (clientUrl.origin !== scopeUrl.origin ||
-                !clientUrl.href.startsWith(scopeUrl.href)) continue;
-            if (typeof client.navigate === "function") {
-                await client.navigate(target);
-            }
-            return client.focus();
+            if (clientUrl.origin !== scopeUrl.origin || !clientUrl.href.startsWith(scopeUrl.href)) continue;
+            if (typeof client.navigate === "function" && client.url !== target) await client.navigate(target);
+            tasks.push(client.focus());
+            await Promise.all(tasks);
+            return;
         }
+        tasks.push(self.clients.openWindow(target));
+        await Promise.all(tasks);
+    })());
+});
 
-        return self.clients.openWindow(target);
+// A rotated browser subscription is synchronized when an authenticated app
+// page is open. On the next visit, api.js also upserts the current subscription.
+self.addEventListener("pushsubscriptionchange", function(event) {
+    event.waitUntil((async function() {
+        const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        for (const client of windows) {
+            client.postMessage({ type: "GG_PUSH_SUBSCRIPTION_CHANGED" });
+        }
     })());
 });
