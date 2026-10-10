@@ -3615,6 +3615,50 @@ document.addEventListener("DOMContentLoaded", async function () {
     setInterval(syncFromServer, 2500);
 });
 </script>
+<script>
+/* MATCH PAGE ROUTER: room code and results live on separate pages */
+(function(){
+  "use strict";
+  var busy = false;
+  async function routeMatch(){
+    if(busy) return;
+    busy = true;
+    try{
+      var params = new URLSearchParams(location.search);
+      var id = params.get("matchId") || params.get("fixture") || "";
+      if(!id){
+        try{
+          var saved = JSON.parse(localStorage.getItem("goalGambitCurrentMatch") || "null");
+          if(saved && saved.backendId) id = String(saved.backendId);
+        }catch(_){}
+      }
+      var match = null;
+      if(id){
+        var byId = await GG.api("/api/efootball/matches/" + encodeURIComponent(id), {noRedirect:true});
+        if(byId.ok && byId.data.match) match = byId.data.match;
+      }else{
+        var active = await GG.api("/api/efootball/matches/active", {noRedirect:true});
+        if(active.ok && active.data.match) match = active.data.match;
+      }
+      if(!match || !match.id) return;
+      var filename = "";
+      if(["playing","awaiting_verification","disputed","completed"].indexOf(match.status) !== -1){
+        filename = "match-results.html";
+      }else if(match.opponentFound){
+        filename = "match-room.html";
+      }
+      if(!filename || location.pathname.split("/").pop() === filename) return;
+      location.replace(filename + "?matchId=" + encodeURIComponent(match.id));
+    }catch(_){
+      /* The existing Match Hub keeps its own status display if routing is unavailable. */
+    }finally{
+      busy = false;
+    }
+  }
+  routeMatch();
+  window.setInterval(routeMatch, 2500);
+})();
+</script>
 </body>
 
 </html>
