@@ -148,14 +148,20 @@ button:disabled{opacity:.55;cursor:not-allowed}
     try{
       var registration = await getNotificationRegistration();
       var tag = notificationTagPrefix + role + "-" + id;
-      await registration.showNotification(title, {
+      var options = {
         body: body,
         tag: tag,
         renotify: false,
         requireInteraction: true,
         actions: [{action:"open-room",title:role === "sender" ? "Enter code" : "View code"}],
         data: {url:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
-      });
+      };
+      try{
+        await registration.showNotification(title, options);
+      }catch(actionError){
+        delete options.actions;
+        await registration.showNotification(title, options);
+      }
       localStorage.setItem("goalGambitAlertShown_" + role + "_" + id, "1");
     }catch(_){}
   }
