@@ -122,8 +122,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const page = /result|screenshot|disput|verif|review/i.test(notificationType)
                 ? "match-results"
                 : (/search_expired/i.test(notificationType) || !matchId ? "match-hub" : "match-room");
+            const pushType = notificationType === "room_code_sender"
+                ? "room-code-needed"
+                : (notificationType === "room_code" ? "room-code-sent" : "efootball-system");
             await pushService.enqueueNotification(client, Number(userId), {
-                eventKey: "efootball-system:" + String(inserted.rows[0].id),
+                eventKey: pushType + ":" + String(inserted.rows[0].id),
                 title: title,
                 body: message,
                 matchId: matchId,
