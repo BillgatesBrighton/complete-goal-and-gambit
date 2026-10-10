@@ -103,6 +103,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
   var errorNode = document.getElementById("error");
   var notificationRegistration = null;
   var notificationTagPrefix = "gg-efootball-code-";
+  var phonePushRegistered = false;
+  var phonePushBusy = false;
 
   function phoneAlertsSupported(){
     return "Notification" in window && "serviceWorker" in navigator;
@@ -113,20 +115,47 @@ button:disabled{opacity:.55;cursor:not-allowed}
     await navigator.serviceWorker.ready;
     return notificationRegistration;
   }
+  async function setupPhonePush(){
+    if(phonePushRegistered) return {ok:true,message:"Background alerts are connected."};
+    if(phonePushBusy) return {ok:false,message:"Background alerts are still connecting."};
+    phonePushBusy = true;
+    updatePhoneAlertHelp();
+  if(phoneAlertsSupported() && Notification.permission === "granted") setupPhonePush();
+    var result;
+    try{ result = await GG.enablePushNotifications(); }
+    catch(error){ result = {ok:false,message:error && error.message || "Could not connect background alerts."}; }
+    phonePushBusy = false;
+    phonePushRegistered = !!(result && result.ok);
+    updatePhoneAlertHelp();
+    return result || {ok:false,message:"Could not connect background alerts."};
+  }
   function updatePhoneAlertHelp(){
     var help = document.getElementById("phoneAlertHelp");
     var button = document.getElementById("enablePhoneAlerts");
     if(!phoneAlertsSupported()){
-      help.textContent = "This browser does not support system notifications. Keep the Match Room open to receive match updates.";
+      help.textContent = "This browser does not support background notifications. Keep the Match Room open to receive updates.";
       button.classList.add("hidden");
-    }else if(Notification.permission === "granted"){
-      help.textContent = "Phone alerts are enabled. Leave this Match Room open in the background while you play; tap the alert to open the room-code form.";
+      button.disabled = true;
+    }else if(Notification.permission === "granted" && phonePushRegistered){
+      help.textContent = "Background alerts are connected to your account. Tap the notification to return to this Match Room.";
       button.textContent = "✓ Phone alerts enabled";
       button.disabled = true;
+    }else if(Notification.permission === "granted" && phonePushBusy){
+      help.textContent = "Connecting background alerts to your account…";
+      button.textContent = "Connecting…";
+      button.disabled = true;
+    }else if(Notification.permission === "granted"){
+      help.textContent = "Browser permission is allowed. Connect this device to your account to receive background match alerts.";
+      button.textContent = "Connect phone alerts";
+      button.disabled = false;
     }else if(Notification.permission === "denied"){
-      help.textContent = "Phone notifications are blocked for this site. Allow notifications in your browser or phone settings to receive room-code alerts.";
+      help.textContent = "Phone notifications are blocked for this site. Allow them in your browser or phone settings to receive room-code alerts.";
       button.textContent = "Notifications blocked";
       button.disabled = true;
+    }else{
+      help.textContent = "Enable phone alerts to receive room-code updates while the browser is in the background.";
+      button.textContent = "Enable phone alerts";
+      button.disabled = false;
     }
   }
   async function enablePhoneAlerts(){
@@ -134,13 +163,15 @@ button:disabled{opacity:.55;cursor:not-allowed}
     try{
       var permission = Notification.permission;
       if(permission === "default") permission = await Notification.requestPermission();
-      updatePhoneAlertHelp();
-      if(permission === "granted"){
-        await getNotificationRegistration();
-        if(lastMatch) await notifyForMatch(lastMatch);
+      if(permission !== "granted"){ updatePhoneAlertHelp(); return; }
+      var result = await setupPhonePush();
+      if(!result.ok){
+        document.getElementById("phoneAlertHelp").textContent = "Background alerts could not connect: " + result.message;
+        return;
       }
-    }catch(_){
-      document.getElementById("phoneAlertHelp").textContent = "Could not enable phone alerts. Check your browser notification settings.";
+      if(lastMatch) await notifyForMatch(lastMatch);
+    }catch(error){
+      document.getElementById("phoneAlertHelp").textContent = error && error.message || "Could not enable phone alerts. Check your browser notification settings.";
     }
   }
   async function showSystemAlert(title, body, id, role){
@@ -154,7 +185,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
         renotify: false,
         requireInteraction: true,
         actions: [{action:"open-room",title:role === "sender" ? "Enter code" : "View code"}],
-        data: {url:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
+        data: {targetPath:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
       };
       try{
         await registration.showNotification(title, options);
