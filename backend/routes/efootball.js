@@ -8,7 +8,7 @@ const multer = require("multer");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { analyzeScreenshot, matchesExpected } = require("../services/imageverification");
 
-module.exports = function (pool, authenticateToken) {
+module.exports = function (pool, authenticateToken, io, pushService) {
 
     const router = express.Router();
     const SEARCH_PRESENCE_TTL_SECONDS = 120;
@@ -96,12 +96,9 @@ module.exports = function (pool, authenticateToken) {
         message,
         matchId = null
     ) {
+        if (!userId) return;
 
-        if (!userId) {
-            return;
-        }
-
-        await client.query(
+        const inserted = await client.query(
             `
             INSERT INTO system_notifications
             (
@@ -112,15 +109,27 @@ module.exports = function (pool, authenticateToken) {
                 match_id
             )
             VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
             `,
-            [
-                userId,
-                type,
-                title,
-                message,
-                matchId
-            ]
+            [userId, type, title, message, matchId]
         );
+
+        // Enqueue in the same database transaction as the in-app alert so the
+        // user's subscribed devices receive the same match update in background.
+        if (pushService && typeof pushService.enqueueNotification === "function" &&
+            pushService.status().configured && inserted.rows[0]) {
+            const notificationType = String(type || "");
+            const page = /result|screenshot|disput|verif|review/i.test(notificationType)
+                ? "match-results"
+                : (/search_expired/i.test(notificationType) || !matchId ? "match-hub" : "match-room");
+            await pushService.enqueueNotification(client, Number(userId), {
+                eventKey: "efootball-system:" + String(inserted.rows[0].id),
+                title: title,
+                body: message,
+                matchId: matchId,
+                page: page
+            });
+        }
     }
 
     // A waiting row is matchable only while its creator is checking in from
