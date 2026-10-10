@@ -1,936 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>GOAL$GAMBIT | Match Hub</title>
-
-<style>
-*{
-    box-sizing:border-box;
-    margin:0;
-    padding:0;
-}
-
-body{
-    font-family:Arial,Helvetica,sans-serif;
-    background:#050505;
-    color:#fff;
-    min-height:100vh;
-}
-
-nav{
-    height:70px;
-    background:#090909;
-    border-bottom:1px solid #242424;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    padding:0 6%;
-}
-
-.logo{
-    color:#d4af37;
-    font-size:22px;
-    font-weight:bold;
-    letter-spacing:1px;
-}
-
-.nav-links{
-    display:flex;
-    gap:25px;
-}
-
-.nav-links a{
-    color:#ddd;
-    text-decoration:none;
-    font-size:14px;
-}
-
-.nav-links a:hover{
-    color:#d4af37;
-}
-
-.dashboard-btn{
-    border:1px solid #d4af37;
-    color:#d4af37 !important;
-    padding:9px 16px;
-    border-radius:6px;
-    text-decoration:none;
-}
-
-.container{
-    width:92%;
-    max-width:950px;
-    margin:35px auto 120px;
-}
-
-.header{
-    text-align:center;
-    margin-bottom:28px;
-}
-
-.header h1{
-    color:#d4af37;
-    font-size:34px;
-    margin-bottom:8px;
-}
-
-.header p{
-    color:#999;
-    line-height:1.5;
-}
-
-.card{
-    background:#0c0c0c;
-    border:1px solid #292929;
-    border-radius:12px;
-    padding:25px;
-    margin-bottom:20px;
-}
-
-.section-title{
-    color:#d4af37;
-    font-size:19px;
-    font-weight:bold;
-    margin-bottom:10px;
-}
-
-.description{
-    color:#999;
-    font-size:14px;
-    line-height:1.65;
-}
-
-.match-status{
-    text-align:center;
-}
-
-.status-label{
-    color:#888;
-    font-size:12px;
-    text-transform:uppercase;
-    letter-spacing:1.5px;
-    margin-bottom:9px;
-}
-
-.status{
-    color:#d4af37;
-    font-size:23px;
-    font-weight:bold;
-}
-
-.loading{
-    display:inline-block;
-    width:9px;
-    height:9px;
-    background:#d4af37;
-    border-radius:50%;
-    margin-left:7px;
-    animation:pulse 1s infinite;
-}
-
-@keyframes pulse{
-    50%{opacity:.2;}
-}
-
-.match-info{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:12px;
-    margin-top:22px;
-}
-
-.info-box{
-    background:#111;
-    border:1px solid #222;
-    border-radius:8px;
-    padding:15px;
-    text-align:center;
-}
-
-.info-box span{
-    display:block;
-    color:#777;
-    font-size:11px;
-    margin-bottom:7px;
-}
-
-.info-box strong{
-    color:#fff;
-    font-size:14px;
-}
-
-.players{
-    display:grid;
-    grid-template-columns:1fr 90px 1fr;
-    align-items:center;
-    gap:15px;
-    margin-top:22px;
-}
-
-.player{
-    background:#111;
-    border:1px solid #252525;
-    padding:22px 15px;
-    text-align:center;
-    border-radius:10px;
-}
-
-.player.you{
-    border-color:#d4af37;
-}
-
-.player-name{
-    font-size:19px;
-    font-weight:bold;
-    margin-bottom:7px;
-    word-break:break-word;
-}
-
-.player-role{
-    color:#888;
-    font-size:12px;
-}
-
-.vs{
-    text-align:center;
-    color:#d4af37;
-    font-size:21px;
-    font-weight:bold;
-}
-
-.role-banner{
-    padding:15px;
-    border-radius:8px;
-    margin-top:18px;
-    text-align:center;
-    background:#161208;
-    border:1px solid #554715;
-    color:#d4af37;
-    font-weight:bold;
-    font-size:13px;
-}
-
-input[type="text"],
-input[type="number"]{
-    width:100%;
-    padding:14px;
-    background:#080808;
-    border:1px solid #333;
-    color:#fff;
-    border-radius:7px;
-    outline:none;
-    font-size:16px;
-}
-
-input:focus{
-    border-color:#d4af37;
-}
-
-button{
-    border:none;
-    cursor:pointer;
-    font-weight:bold;
-}
-
-.primary-btn{
-    width:100%;
-    padding:14px;
-    margin-top:12px;
-    background:#d4af37;
-    color:#050505;
-    border-radius:7px;
-    font-size:15px;
-}
-
-.primary-btn:hover{
-    background:#f0cf55;
-}
-
-.primary-btn:disabled{
-    opacity:.55;
-    cursor:not-allowed;
-}
-
-.secondary-btn{
-    width:100%;
-    padding:13px;
-    margin-top:12px;
-    background:transparent;
-    color:#d4af37;
-    border:1px solid #d4af37;
-    border-radius:7px;
-    font-size:14px;
-}
-
-.secondary-btn:hover{
-    background:#171308;
-}
-
-.danger-btn{
-    width:100%;
-    padding:13px;
-    margin-top:12px;
-    background:#180b0b;
-    color:#ff7373;
-    border:1px solid #652525;
-    border-radius:7px;
-}
-
-.code-area{
-    margin-top:20px;
-}
-
-.label{
-    color:#aaa;
-    font-size:13px;
-    margin-bottom:8px;
-}
-
-.received-code{
-    background:#111;
-    border:1px solid #d4af37;
-    border-radius:8px;
-    padding:20px;
-    margin-top:18px;
-    text-align:center;
-}
-
-.received-code small{
-    color:#999;
-    display:block;
-    margin-bottom:8px;
-}
-
-.received-code strong{
-    color:#d4af37;
-    font-size:29px;
-    letter-spacing:4px;
-    word-break:break-all;
-}
-
-.room-message{
-    margin-top:16px;
-    padding:15px;
-    background:#102018;
-    border:1px solid #28553e;
-    border-radius:15px 15px 15px 4px;
-}
-.room-message-meta{
-    color:#84d6a4;
-    font-size:12px;
-    font-weight:800;
-    margin-bottom:9px;
-}
-.room-message p{
-    color:#d8e5dc;
-    font-size:14px;
-    line-height:1.5;
-}
-.room-message .received-code{
-    margin-top:12px;
-    background:#0b120e;
-}
-
-.room-code-notice{
-    position:sticky;
-    top:0;
-    z-index:1100;
-    width:min(94%,950px);
-    margin:10px auto 0;
-    padding:13px 15px;
-    display:grid;
-    grid-template-columns:minmax(0,1fr) minmax(290px,1.15fr);
-    align-items:center;
-    gap:12px;
-    background:#171307;
-    border:1px solid #d4af37;
-    border-radius:12px;
-    box-shadow:0 8px 28px rgba(0,0,0,.48);
-}
-.room-code-notice-title{
-    color:#f0cf55;
-    font-size:13px;
-    font-weight:900;
-    letter-spacing:.04em;
-    margin-bottom:5px;
-}
-.room-code-notice-copy{
-    color:#c9c1a7;
-    font-size:12px;
-    line-height:1.4;
-}
-.room-code-notice-form{
-    display:grid;
-    grid-template-columns:minmax(0,1fr) auto;
-    gap:8px;
-}
-.room-code-notice-form input{min-width:0;}
-.room-code-notice-form .primary-btn{
-    width:auto;
-    min-width:120px;
-    margin:0;
-    padding:12px;
-}
-.room-code-notice-sent{
-    color:#9ee4b3;
-    font-size:13px;
-    font-weight:800;
-    text-align:right;
-}
-
-.ready-status{
-    text-align:center;
-    color:#999;
-    margin-top:12px;
-    font-size:13px;
-}
-
-.ready-status span{
-    color:#d4af37;
-    font-weight:bold;
-}
-
-.score-grid{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:15px;
-    margin-top:20px;
-}
-
-.score-card{
-    background:#111;
-    border:1px solid #252525;
-    border-radius:9px;
-    padding:16px;
-}
-
-.score-card.mine{
-    border-color:#d4af37;
-}
-
-.score-card h3{
-    color:#fff;
-    font-size:15px;
-    margin-bottom:12px;
-}
-
-.result-preview{
-    margin-top:18px;
-    background:#111;
-    border:1px solid #292929;
-    border-radius:9px;
-    padding:18px;
-    text-align:center;
-}
-
-.result-score{
-    color:#d4af37;
-    font-size:31px;
-    font-weight:bold;
-    margin:8px 0;
-}
-
-.result-state{
-    font-weight:bold;
-    font-size:15px;
-}
-
-.success{
-    color:#73df9b !important;
-}
-
-.error{
-    color:#ff7373 !important;
-}
-
-.warning{
-    color:#ffbd66;
-}
-
-.muted{
-    color:#888;
-}
-
-.verification-grid{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:10px;
-    margin-top:20px;
-}
-
-.verify-box{
-    background:#111;
-    border:1px solid #252525;
-    border-radius:8px;
-    padding:14px;
-    text-align:center;
-}
-
-.verify-box span{
-    display:block;
-    color:#777;
-    font-size:11px;
-    margin-bottom:7px;
-}
-
-.verify-box strong{
-    color:#fff;
-    font-size:16px;
-}
-
-.upload-area{
-    margin-top:20px;
-    border:1px dashed #554715;
-    background:#100e08;
-    border-radius:10px;
-    padding:25px;
-    text-align:center;
-}
-
-.upload-icon{
-    font-size:30px;
-    margin-bottom:8px;
-}
-
-.upload-area h3{
-    color:#d4af37;
-    font-size:17px;
-    margin-bottom:7px;
-}
-
-.upload-area p{
-    color:#888;
-    font-size:13px;
-    line-height:1.5;
-}
-
-.file-input{
-    display:none;
-}
-
-.upload-btn{
-    display:inline-block;
-    margin-top:15px;
-    padding:12px 20px;
-    background:#d4af37;
-    color:#050505;
-    border-radius:7px;
-    font-weight:bold;
-    cursor:pointer;
-    font-size:13px;
-}
-
-.preview-wrap{
-    display:none;
-    margin-top:20px;
-    text-align:center;
-}
-
-.preview-wrap.show{
-    display:block;
-}
-
-.preview-wrap img{
-    max-width:100%;
-    max-height:500px;
-    border-radius:9px;
-    border:1px solid #333;
-}
-
-.preview-title{
-    color:#d4af37;
-    font-size:13px;
-    margin-bottom:10px;
-}
-
-.verification-status{
-    margin-top:18px;
-    padding:16px;
-    border-radius:8px;
-    background:#111;
-    border:1px solid #292929;
-    text-align:center;
-}
-
-.verification-status strong{
-    display:block;
-    font-size:19px;
-    margin-bottom:7px;
-}
-
-.stats-grid{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:10px;
-    margin-top:18px;
-}
-
-.stat{
-    background:#111;
-    border:1px solid #252525;
-    padding:15px 10px;
-    border-radius:8px;
-    text-align:center;
-}
-
-.stat span{
-    display:block;
-    color:#777;
-    font-size:11px;
-    margin-bottom:6px;
-}
-
-.stat strong{
-    color:#d4af37;
-    font-size:18px;
-}
-
-.notification-box{
-    background:#101010;
-    border:1px solid #292929;
-    border-radius:8px;
-    padding:16px;
-    margin-top:18px;
-}
-
-.notification-box p{
-    color:#999;
-    font-size:13px;
-    line-height:1.5;
-}
-
-.hidden{
-    display:none !important;
-}
-
-.match-indicator{
-    position:fixed;
-    right:18px;
-    bottom:18px;
-    width:290px;
-    background:#0b0b0b;
-    border:1px solid #d4af37;
-    border-radius:10px;
-    padding:14px;
-    z-index:1000;
-    box-shadow:0 8px 30px rgba(0,0,0,.5);
-}
-
-.match-indicator-title{
-    color:#d4af37;
-    font-weight:bold;
-    font-size:13px;
-    margin-bottom:5px;
-}
-
-.match-indicator-text{
-    color:#bbb;
-    font-size:12px;
-    margin-bottom:10px;
-}
-
-.match-indicator button{
-    width:100%;
-    padding:9px;
-    background:#d4af37;
-    border-radius:5px;
-}
-
-@media(max-width:760px){
-
-    nav{
-        padding:0 4%;
-    }
-
-    .nav-links{
-        display:none;
-    }
-
-    .container{
-        width:94%;
-    }
-
-    .room-code-notice{
-        width:94%;
-        grid-template-columns:1fr;
-    }
-
-    .room-code-notice-sent{
-        text-align:left;
-    }
-
-    .match-info{
-        grid-template-columns:1fr 1fr;
-    }
-
-    .players{
-        grid-template-columns:1fr;
-    }
-
-    .vs{
-        margin:-4px 0;
-    }
-
-    .verification-grid,
-    .stats-grid{
-        grid-template-columns:1fr 1fr;
-    }
-}
-
-@media(max-width:520px){
-
-    .match-info{
-        grid-template-columns:1fr;
-    }
-
-    .score-grid{
-        grid-template-columns:1fr;
-    }
-
-    .verification-grid,
-    .stats-grid{
-        grid-template-columns:1fr 1fr;
-    }
-
-    .header h1{
-        font-size:28px;
-    }
-
-    .match-indicator{
-        width:calc(100% - 30px);
-        right:15px;
-        bottom:15px;
-    }
-}
-</style>
-<script src="../js/api.js"></script>
-</head>
-
-<body>
-
-<nav>
-
-    <div class="logo">
-        GOAL$GAMBIT
-    </div>
-
-    <div class="nav-links">
-        <a href="konami.html">Dashboard</a>
-        <a href="ranked.html">Ranked</a>
-        <a href="leagues.html">Leagues</a>
-        <a href="tournaments.html">Tournaments</a>
-    </div>
-
-    <a class="dashboard-btn" href="konami.html">
-        Dashboard
-    </a>
-
-</nav>
-
-<div
-    class="room-code-notice hidden"
-    id="roomCodeNotice"
-    role="region"
-    aria-label="GOAL$GAMBIT room code notification"
->
-    <div>
-        <div class="room-code-notice-title">GOAL$GAMBIT · ROOM CODE</div>
-        <div class="room-code-notice-copy" id="roomCodeNoticeText">
-            Create your eFootball room, then enter its code here. The Match Hub stays open.
-        </div>
-    </div>
-    <form
-        class="room-code-notice-form"
-        id="roomCodeNoticeForm"
-        onsubmit="event.preventDefault(); sendRoomCode();"
-    >
-        <input
-            type="text"
-            id="roomCodeNoticeInput"
-            maxlength="50"
-            placeholder="Enter eFootball room code"
-            autocomplete="off"
-            aria-label="eFootball room code"
-        >
-        <button class="primary-btn" id="roomCodeNoticeSend" type="submit">
-            SEND CODE
-        </button>
-    </form>
-    <div class="room-code-notice-sent hidden" id="roomCodeNoticeSent" role="status">
-        ✓ Code sent to your opponent. Keep this Match Hub open.
-    </div>
-</div>
-
-<div class="container">
-
-    <div class="header">
-        <h1>Match Hub</h1>
-        <p>
-            Your central control room for the GOAL$GAMBIT eFootball match.
-        </p>
-    </div>
-
-
-    <!-- =====================================================
-         MATCH STATUS
-    ====================================================== -->
-
-    <div class="card match-status">
-
-        <div class="status-label">
-            Match Status
-        </div>
-
-        <div class="status" id="matchStatus">
-            Finding Opponent
-            <span class="loading"></span>
-        </div>
-
-        <div class="match-info">
-
-            <div class="info-box">
-                <span>MODE</span>
-                <strong id="matchMode">—</strong>
-            </div>
-
-            <div class="info-box">
-                <span>LEAGUE</span>
-                <strong id="matchLeague">—</strong>
-            </div>
-
-            <div class="info-box">
-                <span>STAKE</span>
-                <strong id="matchStake">—</strong>
-            </div>
-
-            <div class="info-box">
-                <span>MATCH ID</span>
-                <strong id="matchId">—</strong>
-            </div>
-
-        </div>
-
-    </div>
-
-
-    <!-- =====================================================
-         PLAYERS
-    ====================================================== -->
-
-    <div class="card">
-
-        <div class="section-title">
-            Match Players
-        </div>
-
-        <div class="players">
-
-            <div class="player you">
-
-                <div class="player-name" id="yourName">
-                    You
-                </div>
-
-                <div class="player-role">
-                    Your GOAL$GAMBIT Account
-                </div>
-
-            </div>
-
-            <div class="vs">
-                VS
-            </div>
-
-            <div class="player">
-
-                <div class="player-name" id="opponentName">
-                    Searching...
-                </div>
-
-                <div class="player-role">
-                    Opponent
-                </div>
-
-            </div>
-
-        </div>
-
-    </div>
-
-
-    <!-- =====================================================
-         AUTOMATIC PAIRING
-    ====================================================== -->
-
-    <div class="card" id="pairingCard">
-
-        <div class="section-title">
-            Automatic Pairing
-        </div>
-
-        <p class="description">
-            Once two players are matched, GOAL$GAMBIT randomly selects
-            one player to create and send the eFootball room code.
-            That same player will also be responsible for submitting
-            the match screenshot.
-        </p>
-
-        <div class="role-banner" id="pairingMessage">
-            Searching for another player...
-        </div>
-
-    </div>
-
-
-    <!-- =====================================================
-         ROOM CODE
-    ====================================================== -->
-
-    <div class="card hidden" id="roomCodeCard">
-
-        <div class="section-title">
-            eFootball Room Code
-        </div>
-
-        <p class="description">
-            The room is created inside eFootball. GOAL$GAMBIT only
-            transfers the room code between the two matched players.
-        </p>
-
-
-        <!-- SENDER -->
-
-        <div id="senderArea" class="hidden">
-
-            <div class="role-banner">
-                YOU ARE THE CODE SENDER
-            </div>
-
-            <p class="description" style="margin-top:12px;">
-                Create the room in eFootball. Enter its code in the GOAL$GAMBIT notification bar above;
-                this Match Hub will remain open while you send it.
-            </p>
-
-        </div>
-
-
-        <!-- RECEIVER -->
-
-        <div id="receiverArea" class="hidden">
-
-            <div class="role-banner">
-                YOU WILL RECEIVE THE ROOM CODE AS A MESSAGE
-            </div>
-
-            <div class="room-message hidden" id="receivedCodeBox" role="status" aria-live="polite">
-                <div class="room-message-meta">
-                    ROOM MESSAGE · FROM <span id="roomCodeSender">YOUR OPPONENT</span>
-                </div>
-                <p id="receiverWaiting">
-                    Your opponent is creating the room. We will notify you when the code arrives.
+reating the room. We will notify you when the code arrives.
                 </p>
                 <div class="received-code">
                     <small>eFOOTBALL ROOM CODE</small>
@@ -946,7 +14,11 @@ button{
                 </button>
             </div>
 
-            <p class="description" id="receiverWaitingFallback" style="margin-top:15px;text-align:center;">
+            <p
+                class="description"
+                id="receiverWaitingFallback"
+                style="margin-top:15px;text-align:center;"
+            >
                 Your opponent is creating the room. You will receive a message here when the code is ready.
             </p>
 
@@ -1583,6 +655,7 @@ function loadMatch(){
 function updateInterface(){
 
     if(!currentMatch){
+        updateCancelSearchButton();
         return;
     }
 
@@ -1591,6 +664,8 @@ function updateInterface(){
         currentMatch.opponent &&
         currentMatch.opponent !== "Opponent" &&
         currentMatch.opponent !== "Searching...";
+
+    updateCancelSearchButton();
 
 
     if(!opponentFound){
@@ -1603,8 +678,9 @@ function updateInterface(){
 
         document.getElementById(
             "pairingMessage"
-        ).textContent =
-            "Searching for another player in your bracket...";
+        ).textContent = currentMatch.league
+            ? "Searching only among players currently waiting in the " + currentMatch.league + " league."
+            : "Searching only among players currently waiting in this same ranked stake queue.";
 
         return;
     }
@@ -1660,6 +736,37 @@ function updateInterface(){
 
     updateIndicator();
 
+}
+
+function updateCancelSearchButton(){
+    const button = document.getElementById("cancelSearchButton");
+    if(!button) return;
+    const searching = !!currentMatch && !!currentMatch.backendId &&
+        currentMatch.status === "waiting" && !currentMatch.opponentId;
+    button.classList.toggle("hidden", !searching);
+    button.disabled = !!button.dataset.pending;
+}
+
+async function cancelMatchSearch(){
+    if(!currentMatch || !currentMatch.backendId || currentMatch.status !== "waiting" || currentMatch.opponentId) return;
+    if(!confirm("Cancel this search? Any locked stake will be refunded.")) return;
+    const button = document.getElementById("cancelSearchButton");
+    if(button){button.dataset.pending="true";button.disabled=true;button.textContent="CANCELLING…";}
+    try{
+        const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/cancel", { method:"POST", noRedirect:true });
+        if(!result.ok){alert(result.data.message || "Could not cancel this search.");return;}
+        currentMatch.status = "cancelled";
+        currentMatch.backendId = null;
+        localStorage.removeItem("goalGambitCurrentMatch");
+        document.getElementById("matchStatus").textContent = "SEARCH CANCELLED · STAKE REFUNDED";
+        document.getElementById("pairingMessage").textContent = result.data.message || "Search cancelled.";
+        updateCancelSearchButton();
+    }catch(_){
+        alert("Could not reach the server. Your search is still active.");
+    }finally{
+        if(button){delete button.dataset.pending;button.disabled=false;button.textContent="Cancel Search · Refund Stake";}
+        updateCancelSearchButton();
+    }
 }
 
 
@@ -1811,6 +918,7 @@ function updateRoomCodeNotice(){
     const form = document.getElementById("roomCodeNoticeForm");
     const sent = document.getElementById("roomCodeNoticeSent");
     const copy = document.getElementById("roomCodeNoticeText");
+
     if(!notice || !form || !sent) return;
 
     const hasOpponent = currentMatch &&
@@ -1835,30 +943,54 @@ function updateRoomCodeNotice(){
         if(copy) copy.textContent =
             "Create your eFootball room, then enter its code here. This Match Hub stays open.";
     }
+
 }
 
+
 function updateSenderReceiver(){
-    const sender = document.getElementById("senderArea");
-    const receiver = document.getElementById("receiverArea");
+
+    const sender =
+        document.getElementById(
+            "senderArea"
+        );
+
+
+    const receiver =
+        document.getElementById(
+            "receiverArea"
+        );
+
 
     if(isSender()){
+
         sender.classList.remove("hidden");
         receiver.classList.add("hidden");
+
     }else{
+
         sender.classList.add("hidden");
         receiver.classList.remove("hidden");
+
     }
 
     updateRoomCodeNotice();
 
-    if(currentMatch.roomCode && !isSender()){
-        showReceivedCode(currentMatch.roomCode);
+    if(currentMatch.roomCode){
+
+        if(!isSender()){
+
+            showReceivedCode(
+                currentMatch.roomCode
+            );
+
+        }
+
     }
+
 }
 
 
 /* ============================================================
-   SEND ROOM CODE/* ============================================================
    SEND ROOM CODE
 ============================================================ */
 
@@ -1958,8 +1090,12 @@ function sendRoomCode(){
 ============================================================ */
 
 function showReceivedCode(code){
-    const box = document.getElementById("receivedCodeBox");
-    if(box) box.classList.remove("hidden");
+
+    document
+        .getElementById(
+            "receivedCodeBox"
+        )
+        .classList.remove("hidden");
 
     const fallback = document.getElementById("receiverWaitingFallback");
     if(fallback) fallback.classList.add("hidden");
@@ -1968,29 +1104,35 @@ function showReceivedCode(code){
     if(senderName) senderName.textContent = currentMatch.opponent || "YOUR OPPONENT";
 
     const message = document.getElementById("receiverWaiting");
-    if(message) {
-        message.textContent = "Room code received. Join the room in eFootball, then confirm below when you are ready.";
-        message.classList.add("success");
-    }
+    if(message) message.textContent =
+        "Your opponent sent the room code. Join the room in eFootball, then reply to let them know you received it.";
 
-    const codeNode = document.getElementById("receivedCode");
-    if(codeNode) codeNode.textContent = code;
+    document.getElementById(
+        "receivedCode"
+    ).textContent =
+        code;
 
-    const confirmButton = document.getElementById("confirmRoomCodeButton");
-    if(confirmButton && currentMatch.playerReady) {
-        confirmButton.disabled = true;
-        confirmButton.textContent = "✓ CODE RECEIVED · YOU ARE READY";
-    }
-    const status = document.getElementById("matchStatus");
-    if(status && status.textContent.indexOf("CODE RECEIVED") === -1 &&
-       status.textContent.indexOf("READY") === -1){
-        status.textContent = "CODE RECEIVED";
-    }
+
+    document.getElementById(
+        "receiverWaiting"
+    ).textContent =
+        "Room code received. Join the room in eFootball.";
+
+
+    document.getElementById(
+        "receiverWaiting"
+    ).classList.add("success");
+
+
+    document.getElementById(
+        "matchStatus"
+    ).textContent =
+        "CODE RECEIVED";
+
 }
 
 
 /* ============================================================
-   OPEN eFOOTBALL/* ============================================================
    OPEN eFOOTBALL
 ============================================================ */
 
@@ -2828,28 +1970,46 @@ function updateVerificationPanel(){
 ============================================================ */
 
 async function ensureMatchNotificationWorker(){
+
     if(!("serviceWorker" in navigator)){
         throw new Error("This browser does not support system notifications.");
     }
+
     return navigator.serviceWorker.register("../sw.js", { scope: "../" });
+
 }
 
+
 async function enableNotifications(){
+
     if(!("Notification" in window)){
-        updateNotificationBox("This browser does not support system notifications.", "error");
+
+        updateNotificationBox(
+            "This browser does not support system notifications.",
+            "error"
+        );
+
         return;
     }
 
     try{
         await ensureMatchNotificationWorker();
         const permission = await Notification.requestPermission();
+
         if(permission === "granted"){
             updateNotificationBox(
-                "System notifications are enabled. Room codes appear in the Match Hub while it is open.",
+                "System notifications are enabled. Room-code messages can alert you while this page is open.",
                 "success"
             );
-            document.getElementById("notificationButton").textContent = "✓ MESSAGE ALERTS ENABLED";
-            notifyUser("GOAL$GAMBIT", "Room-code alerts are enabled.");
+
+            document.getElementById(
+                "notificationButton"
+            ).textContent = "✓ MESSAGE ALERTS ENABLED";
+
+            notifyUser(
+                "GOAL$GAMBIT",
+                "Room-code message alerts are enabled."
+            );
         }else{
             updateNotificationBox(
                 "Notifications were not allowed. Enable them in your browser or phone site settings.",
@@ -2857,8 +2017,12 @@ async function enableNotifications(){
             );
         }
     }catch(error){
-        updateNotificationBox(error.message || "Could not set up system notifications.", "error");
+        updateNotificationBox(
+            error.message || "Could not set up system notifications.",
+            "error"
+        );
     }
+
 }
 
 
@@ -2867,32 +2031,44 @@ async function enableNotifications(){
 ============================================================ */
 
 function updateNotificationStatus(){
+
     if(!("Notification" in window) || !("serviceWorker" in navigator)){
-        updateNotificationBox("System notifications are not supported in this browser.", "error");
+
+        updateNotificationBox(
+            "System notifications are not supported in this browser.",
+            "error"
+        );
+
         return;
     }
 
     if(Notification.permission === "granted"){
         ensureMatchNotificationWorker().then(function(){
             updateNotificationBox(
-                "System message alerts are enabled. Keep the Match Hub open during matchmaking for live room-code alerts.",
+                "System message alerts are enabled. Keep the Match Hub open during matchmaking to receive live alerts.",
                 "success"
             );
-            document.getElementById("notificationButton").textContent = "✓ MESSAGE ALERTS ENABLED";
         }).catch(function(){
             updateNotificationBox(
                 "Notifications are allowed, but this site could not register its notification handler.",
                 "error"
             );
         });
+
+        document.getElementById(
+            "notificationButton"
+        ).textContent = "✓ MESSAGE ALERTS ENABLED";
     }else{
-        updateNotificationBox("Enable system alerts to receive room-code messages on your phone.", "");
+        updateNotificationBox(
+            "Enable system alerts to receive room-code messages on your phone.",
+            ""
+        );
     }
+
 }
 
 
 /* ============================================================
-   NOTIFICATION BOX/* ============================================================
    NOTIFICATION BOX
 ============================================================ */
 
@@ -2916,26 +2092,40 @@ function updateNotificationBox(
    USER NOTIFICATION
 ============================================================ */
 
-async function notifyUser(title, body, options = {}){
-    if(!("Notification" in window) || Notification.permission !== "granted") return;
+async function notifyUser(
+    title,
+    body,
+    options = {}
+){
+
+    if(
+        !("Notification" in window) ||
+        Notification.permission !== "granted"
+    ){
+        return;
+    }
 
     try{
         const registration = await ensureMatchNotificationWorker();
-        await registration.showNotification(title, {
+        const notificationOptions = {
             body: body,
             icon: new URL("../images/chess-logo.png", location.href).href,
             tag: options.tag || "goal-gambit-match",
             renotify: Boolean(options.tag),
-            data: { url: options.url || "pages/match-hub.html" }
-        });
+            data: {
+                url: options.url || "pages/match-hub.html"
+            }
+        };
+
+        await registration.showNotification(title, notificationOptions);
     }catch(error){
         console.warn("Could not show match notification:", error);
     }
+
 }
 
 
 /* ============================================================
-   LOCAL MATCH STATE CHECK/* ============================================================
    LOCAL MATCH STATE CHECK
 ============================================================ */
 
@@ -2981,9 +2171,8 @@ function checkMatchState(){
             ){
 
                 notifyUser(
-                    "Room code from " + (currentMatch.opponent || "your opponent"),
-                    "eFootball room code: " + currentMatch.roomCode + ". Open GOAL$GAMBIT Match Hub to view it.",
-                    { tag: "goal-gambit-room-code-" + (currentMatch.backendId || "current") }
+                    "GOAL$GAMBIT",
+                    "Your opponent has sent the eFootball room code."
                 );
 
             }
@@ -3161,17 +2350,20 @@ async function syncFromServer() {
     const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId), { noRedirect: true });
     if (!r.ok) return;
     const m = r.data.match;
-    const previousRoomCode = currentMatch.roomCode;
     const before = JSON.stringify(currentMatch);
 
+    const previousRoomCode = currentMatch.roomCode;
     currentMatch.player = m.yourName || currentMatch.player;
     currentMatch.opponent = m.opponentFound ? m.opponentName : "Opponent";
+    currentMatch.opponentId = Number(m.youAreCreator ? m.opponent_id : m.creator_id) || null;
     currentMatch.stake = Number(m.stake_amount || 0);
     currentMatch.league = m.league || currentMatch.league || null;
     currentMatch.codeSender = m.youAreSender ? currentMatch.player : currentMatch.opponent;
     currentMatch.screenshotSender = currentMatch.codeSender;
     currentMatch.roomCode = m.room_code || null;
     currentMatch.codeSent = !!m.codeSent;
+    currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
+
     if(!previousRoomCode && currentMatch.roomCode && !m.youAreSender){
         notifyUser(
             "Room code from " + (m.codeSenderName || currentMatch.opponent || "your opponent"),
@@ -3182,7 +2374,6 @@ async function syncFromServer() {
             }
         );
     }
-    currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
     currentMatch.verificationStatus = m.verificationStatus || null;
     currentMatch.playerReady = !!m.yourReady;
     currentMatch.opponentReady = !!m.opponentReady;
@@ -3243,27 +2434,25 @@ async function sendRoomCode() {
         alert("The room-code field is unavailable. Reload the Match Hub and try again.");
         return;
     }
-    const code = input.value.trim();
+    const code = input ? input.value.trim() : "";
     if (!code) {
         alert("Please enter the actual eFootball room code.");
         input.focus();
         return;
     }
-
     const button = document.getElementById("roomCodeNoticeSend");
-    if(button){
+    if (button) {
         button.disabled = true;
         button.textContent = "SENDING…";
     }
-
     let r;
-    try{
+    try {
         r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/roomcode", {
             method: "POST",
             body: { code: code }
         });
-    }catch(error){
-        if(button){
+    } catch (error) {
+        if (button) {
             button.disabled = false;
             button.textContent = "SEND CODE";
         }
@@ -3271,15 +2460,14 @@ async function sendRoomCode() {
         return;
     }
     if (!r.ok) {
-        if(button){
+        if (button) {
             button.disabled = false;
             button.textContent = "SEND CODE";
         }
-        alert((r.data && r.data.message) || "Could not send the room code.");
+        alert(r.data.message || "Could not send the room code.");
         return;
     }
-
-    const sent = (r.data.match && r.data.match.room_code) || code;
+    const sent = r.data.match.room_code || code;
     currentMatch.roomCode = sent;
     currentMatch.codeSent = true;
     localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
@@ -3288,44 +2476,36 @@ async function sendRoomCode() {
     document.getElementById("senderArea").innerHTML =
         '<div class="role-banner">✓ ROOM CODE SENT</div>' +
         '<div class="received-code"><small>YOUR ROOM CODE</small><strong>' + escapeHTML(sent) + '</strong></div>' +
-        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code. Keep the Match Hub open.</p>';
+        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code.</p>';
     notifyUser("GOAL$GAMBIT", "Room code sent successfully.");
 }
-
 
 async function toggleReady() {
     if (!currentMatch || !currentMatch.backendId) return;
     const button = document.getElementById("readyButton");
     const receivedButton = document.getElementById("confirmRoomCodeButton");
-    if(button) button.disabled = true;
-    if(receivedButton) receivedButton.disabled = true;
-
+    button.disabled = true;
+    if (receivedButton) receivedButton.disabled = true;
     let r;
-    try{
+    try {
         r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/ready", {
             method: "POST",
             body: { ready: true }
         });
-    }catch(error){
-        if(button) button.disabled = false;
-        if(receivedButton) receivedButton.disabled = false;
+    } catch (error) {
+        button.disabled = false;
+        if (receivedButton) receivedButton.disabled = false;
         alert(error.message || "Could not reach the server. Try again.");
         return;
     }
     if (!r.ok) {
-        if(button) button.disabled = false;
-        if(receivedButton) receivedButton.disabled = false;
-        alert((r.data && r.data.message) || "Could not mark you as ready.");
+        button.disabled = false;
+        if (receivedButton) receivedButton.disabled = false;
+        alert(r.data.message || "Could not mark you as ready.");
         return;
     }
-    if(button){
-        button.textContent = "✓ YOU ARE READY";
-        button.disabled = true;
-    }
-    if(receivedButton){
-        receivedButton.textContent = "✓ CODE RECEIVED · YOU ARE READY";
-        receivedButton.disabled = true;
-    }
+    button.textContent = "✓ YOU ARE READY";
+    if (receivedButton) receivedButton.textContent = "✓ CODE RECEIVED · YOU ARE READY";
     document.getElementById("yourReady").textContent = "READY";
     notifyUser("GOAL$GAMBIT", "You are marked as ready.");
     await syncFromServer();
@@ -3339,8 +2519,7 @@ async function confirmRoomCode() {
     await toggleReady();
 }
 
-
-// A league fixture// A league fixture opens the hub with ?league=Bronze|Silver|Gold.
+// A league fixture opens the hub with ?league=Bronze|Silver|Gold.
 // The entry fee was already paid when joining the league, so the
 // match itself has no extra stake. Only league members can play.
 async function startLeagueMatch(league) {
@@ -3411,3 +2590,4 @@ document.addEventListener("DOMContentLoaded", async function () {
 </body>
 
 </html>
+
