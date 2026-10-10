@@ -281,6 +281,10 @@ CREATE TABLE IF NOT EXISTS efootball_result_verifications (
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(match_id)
 );
+-- CREATE TABLE IF NOT EXISTS does not add constraints to an older table.
+-- Keep the per-match uniqueness required by the result route's ON CONFLICT.
+CREATE UNIQUE INDEX IF NOT EXISTS efootball_result_verifications_match_id_key
+    ON efootball_result_verifications(match_id);
 CREATE INDEX IF NOT EXISTS idx_efootball_result_verifications_player
     ON efootball_result_verifications(selected_player_id, status);
 
