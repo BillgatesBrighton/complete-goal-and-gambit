@@ -311,6 +311,76 @@ button{
     word-break:break-all;
 }
 
+.room-message{
+    margin-top:16px;
+    padding:15px;
+    background:#102018;
+    border:1px solid #28553e;
+    border-radius:15px 15px 15px 4px;
+}
+.room-message-meta{
+    color:#84d6a4;
+    font-size:12px;
+    font-weight:800;
+    margin-bottom:9px;
+}
+.room-message p{
+    color:#d8e5dc;
+    font-size:14px;
+    line-height:1.5;
+}
+.room-message .received-code{
+    margin-top:12px;
+    background:#0b120e;
+}
+
+.room-code-notice{
+    position:sticky;
+    top:0;
+    z-index:1100;
+    width:min(94%,950px);
+    margin:10px auto 0;
+    padding:13px 15px;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(290px,1.15fr);
+    align-items:center;
+    gap:12px;
+    background:#171307;
+    border:1px solid #d4af37;
+    border-radius:12px;
+    box-shadow:0 8px 28px rgba(0,0,0,.48);
+}
+.room-code-notice-title{
+    color:#f0cf55;
+    font-size:13px;
+    font-weight:900;
+    letter-spacing:.04em;
+    margin-bottom:5px;
+}
+.room-code-notice-copy{
+    color:#c9c1a7;
+    font-size:12px;
+    line-height:1.4;
+}
+.room-code-notice-form{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:8px;
+}
+.room-code-notice-form input{min-width:0;}
+.room-code-notice-form .primary-btn{
+    width:auto;
+    min-width:120px;
+    margin:0;
+    padding:12px;
+}
+.room-code-notice-sent{
+    color:#9ee4b3;
+    font-size:13px;
+    font-weight:800;
+    text-align:right;
+}
+
 .ready-status{
     text-align:center;
     color:#999;
@@ -583,6 +653,15 @@ button{
         width:94%;
     }
 
+    .room-code-notice{
+        width:94%;
+        grid-template-columns:1fr;
+    }
+
+    .room-code-notice-sent{
+        text-align:left;
+    }
+
     .match-info{
         grid-template-columns:1fr 1fr;
     }
@@ -651,6 +730,39 @@ button{
 
 </nav>
 
+<div
+    class="room-code-notice hidden"
+    id="roomCodeNotice"
+    role="region"
+    aria-label="GOAL$GAMBIT room code notification"
+>
+    <div>
+        <div class="room-code-notice-title">GOAL$GAMBIT · ROOM CODE</div>
+        <div class="room-code-notice-copy" id="roomCodeNoticeText">
+            Create your eFootball room, then enter its code here. The Match Hub stays open.
+        </div>
+    </div>
+    <form
+        class="room-code-notice-form"
+        id="roomCodeNoticeForm"
+        onsubmit="event.preventDefault(); sendRoomCode();"
+    >
+        <input
+            type="text"
+            id="roomCodeNoticeInput"
+            maxlength="50"
+            placeholder="Enter eFootball room code"
+            autocomplete="off"
+            aria-label="eFootball room code"
+        >
+        <button class="primary-btn" id="roomCodeNoticeSend" type="submit">
+            SEND CODE
+        </button>
+    </form>
+    <div class="room-code-notice-sent hidden" id="roomCodeNoticeSent" role="status">
+        ✓ Code sent to your opponent. Keep this Match Hub open.
+    </div>
+</div>
 
 <div class="container">
 
@@ -797,31 +909,9 @@ button{
                 YOU ARE THE CODE SENDER
             </div>
 
-            <div class="code-area">
-
-                <div class="label">
-                    Enter the actual eFootball room code
-                </div>
-
-                <input
-                    type="text"
-                    id="roomCode"
-                    maxlength="50"
-                    placeholder="Enter eFootball room code"
-                    autocomplete="off"
-                >
-
-                <button
-                    class="primary-btn"
-                    onclick="sendRoomCode()"
-                >
-                    SEND CODE TO OPPONENT
-                </button>
-
-            </div>
-
-            <p class="description warning" style="margin-top:10px;">
-                Check the code carefully before sending it.
+            <p class="description" style="margin-top:12px;">
+                Create the room in eFootball. Enter its code in the GOAL$GAMBIT notification bar above;
+                this Match Hub will remain open while you send it.
             </p>
 
         </div>
@@ -832,30 +922,32 @@ button{
         <div id="receiverArea" class="hidden">
 
             <div class="role-banner">
-                WAITING FOR ROOM CODE
+                YOU WILL RECEIVE THE ROOM CODE AS A MESSAGE
             </div>
 
-            <div
-                class="received-code hidden"
-                id="receivedCodeBox"
-            >
-
-                <small>
-                    ROOM CODE RECEIVED
-                </small>
-
-                <strong id="receivedCode">
-                    ------
-                </strong>
-
+            <div class="room-message hidden" id="receivedCodeBox" role="status" aria-live="polite">
+                <div class="room-message-meta">
+                    ROOM MESSAGE · FROM <span id="roomCodeSender">YOUR OPPONENT</span>
+                </div>
+                <p id="receiverWaiting">
+                    Your opponent is creating the room. We will notify you when the code arrives.
+                </p>
+                <div class="received-code">
+                    <small>eFOOTBALL ROOM CODE</small>
+                    <strong id="receivedCode">------</strong>
+                </div>
+                <button
+                    class="primary-btn"
+                    id="confirmRoomCodeButton"
+                    type="button"
+                    onclick="confirmRoomCode()"
+                >
+                    I RECEIVED THE CODE · I'M READY
+                </button>
             </div>
 
-            <p
-                class="description"
-                id="receiverWaiting"
-                style="margin-top:15px;text-align:center;"
-            >
-                Your opponent is creating the room.
+            <p class="description" id="receiverWaitingFallback" style="margin-top:15px;text-align:center;">
+                Your opponent is creating the room. You will receive a message here when the code is ready.
             </p>
 
         </div>
@@ -924,9 +1016,9 @@ button{
         </div>
 
         <p class="description">
-            Both players must independently enter what they saw on
-            the final eFootball result screen. This allows GOAL$GAMBIT
-            to compare the two submissions.
+            Once both players confirm they are ready, play the eFootball match.
+            When it is finished, enter the final score shown on screen. Both
+            players submit independently so GOAL$GAMBIT can compare results.
         </p>
 
         <div class="score-grid">
@@ -1713,49 +1805,60 @@ function isSender(){
    SENDER / RECEIVER
 ============================================================ */
 
+function updateRoomCodeNotice(){
+
+    const notice = document.getElementById("roomCodeNotice");
+    const form = document.getElementById("roomCodeNoticeForm");
+    const sent = document.getElementById("roomCodeNoticeSent");
+    const copy = document.getElementById("roomCodeNoticeText");
+    if(!notice || !form || !sent) return;
+
+    const hasOpponent = currentMatch &&
+        currentMatch.opponent &&
+        currentMatch.opponent !== "Opponent" &&
+        currentMatch.opponent !== "Searching...";
+    const shouldShow = currentMatch &&
+        currentMatch.backendId &&
+        hasOpponent &&
+        isSender();
+
+    notice.classList.toggle("hidden", !shouldShow);
+    if(!shouldShow) return;
+
+    if(currentMatch.codeSent || currentMatch.roomCode){
+        form.classList.add("hidden");
+        sent.classList.remove("hidden");
+        if(copy) copy.textContent = "Your room code was delivered to your opponent.";
+    }else{
+        form.classList.remove("hidden");
+        sent.classList.add("hidden");
+        if(copy) copy.textContent =
+            "Create your eFootball room, then enter its code here. This Match Hub stays open.";
+    }
+}
+
 function updateSenderReceiver(){
-
-    const sender =
-        document.getElementById(
-            "senderArea"
-        );
-
-
-    const receiver =
-        document.getElementById(
-            "receiverArea"
-        );
-
+    const sender = document.getElementById("senderArea");
+    const receiver = document.getElementById("receiverArea");
 
     if(isSender()){
-
         sender.classList.remove("hidden");
         receiver.classList.add("hidden");
-
     }else{
-
         sender.classList.add("hidden");
         receiver.classList.remove("hidden");
-
     }
 
+    updateRoomCodeNotice();
 
-    if(currentMatch.roomCode){
-
-        if(!isSender()){
-
-            showReceivedCode(
-                currentMatch.roomCode
-            );
-
-        }
-
+    if(currentMatch.roomCode && !isSender()){
+        showReceivedCode(currentMatch.roomCode);
     }
-
 }
 
 
 /* ============================================================
+   SEND ROOM CODE/* ============================================================
    SEND ROOM CODE
 ============================================================ */
 
@@ -1855,40 +1958,39 @@ function sendRoomCode(){
 ============================================================ */
 
 function showReceivedCode(code){
+    const box = document.getElementById("receivedCodeBox");
+    if(box) box.classList.remove("hidden");
 
-    document
-        .getElementById(
-            "receivedCodeBox"
-        )
-        .classList.remove("hidden");
+    const fallback = document.getElementById("receiverWaitingFallback");
+    if(fallback) fallback.classList.add("hidden");
 
+    const senderName = document.getElementById("roomCodeSender");
+    if(senderName) senderName.textContent = currentMatch.opponent || "YOUR OPPONENT";
 
-    document.getElementById(
-        "receivedCode"
-    ).textContent =
-        code;
+    const message = document.getElementById("receiverWaiting");
+    if(message) {
+        message.textContent = "Room code received. Join the room in eFootball, then confirm below when you are ready.";
+        message.classList.add("success");
+    }
 
+    const codeNode = document.getElementById("receivedCode");
+    if(codeNode) codeNode.textContent = code;
 
-    document.getElementById(
-        "receiverWaiting"
-    ).textContent =
-        "Room code received. Join the room in eFootball.";
-
-
-    document.getElementById(
-        "receiverWaiting"
-    ).classList.add("success");
-
-
-    document.getElementById(
-        "matchStatus"
-    ).textContent =
-        "CODE RECEIVED";
-
+    const confirmButton = document.getElementById("confirmRoomCodeButton");
+    if(confirmButton && currentMatch.playerReady) {
+        confirmButton.disabled = true;
+        confirmButton.textContent = "✓ CODE RECEIVED · YOU ARE READY";
+    }
+    const status = document.getElementById("matchStatus");
+    if(status && status.textContent.indexOf("CODE RECEIVED") === -1 &&
+       status.textContent.indexOf("READY") === -1){
+        status.textContent = "CODE RECEIVED";
+    }
 }
 
 
 /* ============================================================
+   OPEN eFOOTBALL/* ============================================================
    OPEN eFOOTBALL
 ============================================================ */
 
@@ -2725,51 +2827,38 @@ function updateVerificationPanel(){
    NOTIFICATIONS
 ============================================================ */
 
+async function ensureMatchNotificationWorker(){
+    if(!("serviceWorker" in navigator)){
+        throw new Error("This browser does not support system notifications.");
+    }
+    return navigator.serviceWorker.register("../sw.js", { scope: "../" });
+}
+
 async function enableNotifications(){
-
     if(!("Notification" in window)){
-
-        updateNotificationBox(
-            "This browser does not support notifications.",
-            "error"
-        );
-
+        updateNotificationBox("This browser does not support system notifications.", "error");
         return;
     }
 
-
-    const permission =
-        await Notification.requestPermission();
-
-
-    if(permission === "granted"){
-
-        updateNotificationBox(
-            "Chrome notifications are enabled for GOAL$GAMBIT.",
-            "success"
-        );
-
-
-        document.getElementById(
-            "notificationButton"
-        ).textContent =
-            "✓ NOTIFICATIONS ENABLED";
-
-
-        notifyUser(
-            "GOAL$GAMBIT",
-            "Notifications are now enabled."
-        );
-
-    }else{
-
-        updateNotificationBox(
-            "Notifications were not allowed. You can enable them in Chrome site settings.",
-            "error"
-        );
-
+    try{
+        await ensureMatchNotificationWorker();
+        const permission = await Notification.requestPermission();
+        if(permission === "granted"){
+            updateNotificationBox(
+                "System notifications are enabled. Room codes appear in the Match Hub while it is open.",
+                "success"
+            );
+            document.getElementById("notificationButton").textContent = "✓ MESSAGE ALERTS ENABLED";
+            notifyUser("GOAL$GAMBIT", "Room-code alerts are enabled.");
+        }else{
+            updateNotificationBox(
+                "Notifications were not allowed. Enable them in your browser or phone site settings.",
+                "error"
+            );
+        }
+    }catch(error){
+        updateNotificationBox(error.message || "Could not set up system notifications.", "error");
     }
-
 }
 
 
@@ -2778,37 +2867,32 @@ async function enableNotifications(){
 ============================================================ */
 
 function updateNotificationStatus(){
-
-    if(!("Notification" in window)){
-
-        updateNotificationBox(
-            "Browser notifications are not supported.",
-            "error"
-        );
-
+    if(!("Notification" in window) || !("serviceWorker" in navigator)){
+        updateNotificationBox("System notifications are not supported in this browser.", "error");
         return;
     }
 
-
     if(Notification.permission === "granted"){
-
-        updateNotificationBox(
-            "Chrome notifications are enabled.",
-            "success"
-        );
-
-
-        document.getElementById(
-            "notificationButton"
-        ).textContent =
-            "✓ NOTIFICATIONS ENABLED";
-
+        ensureMatchNotificationWorker().then(function(){
+            updateNotificationBox(
+                "System message alerts are enabled. Keep the Match Hub open during matchmaking for live room-code alerts.",
+                "success"
+            );
+            document.getElementById("notificationButton").textContent = "✓ MESSAGE ALERTS ENABLED";
+        }).catch(function(){
+            updateNotificationBox(
+                "Notifications are allowed, but this site could not register its notification handler.",
+                "error"
+            );
+        });
+    }else{
+        updateNotificationBox("Enable system alerts to receive room-code messages on your phone.", "");
     }
-
 }
 
 
 /* ============================================================
+   NOTIFICATION BOX/* ============================================================
    NOTIFICATION BOX
 ============================================================ */
 
@@ -2832,43 +2916,26 @@ function updateNotificationBox(
    USER NOTIFICATION
 ============================================================ */
 
-function notifyUser(
-    title,
-    body
-){
+async function notifyUser(title, body, options = {}){
+    if(!("Notification" in window) || Notification.permission !== "granted") return;
 
-    if(
-        "Notification" in window &&
-        Notification.permission === "granted"
-    ){
-
-        const notification =
-            new Notification(
-                title,
-                {
-                    body:body,
-                    icon:"images/chess-logo.png"
-                }
-            );
-
-
-        notification.onclick =
-            () => {
-
-                window.focus();
-
-                notification.close();
-
-                scrollToMatch();
-
-            };
-
+    try{
+        const registration = await ensureMatchNotificationWorker();
+        await registration.showNotification(title, {
+            body: body,
+            icon: new URL("../images/chess-logo.png", location.href).href,
+            tag: options.tag || "goal-gambit-match",
+            renotify: Boolean(options.tag),
+            data: { url: options.url || "pages/match-hub.html" }
+        });
+    }catch(error){
+        console.warn("Could not show match notification:", error);
     }
-
 }
 
 
 /* ============================================================
+   LOCAL MATCH STATE CHECK/* ============================================================
    LOCAL MATCH STATE CHECK
 ============================================================ */
 
@@ -2914,8 +2981,9 @@ function checkMatchState(){
             ){
 
                 notifyUser(
-                    "GOAL$GAMBIT",
-                    "Your opponent has sent the eFootball room code."
+                    "Room code from " + (currentMatch.opponent || "your opponent"),
+                    "eFootball room code: " + currentMatch.roomCode + ". Open GOAL$GAMBIT Match Hub to view it.",
+                    { tag: "goal-gambit-room-code-" + (currentMatch.backendId || "current") }
                 );
 
             }
@@ -3093,6 +3161,7 @@ async function syncFromServer() {
     const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId), { noRedirect: true });
     if (!r.ok) return;
     const m = r.data.match;
+    const previousRoomCode = currentMatch.roomCode;
     const before = JSON.stringify(currentMatch);
 
     currentMatch.player = m.yourName || currentMatch.player;
@@ -3103,6 +3172,16 @@ async function syncFromServer() {
     currentMatch.screenshotSender = currentMatch.codeSender;
     currentMatch.roomCode = m.room_code || null;
     currentMatch.codeSent = !!m.codeSent;
+    if(!previousRoomCode && currentMatch.roomCode && !m.youAreSender){
+        notifyUser(
+            "Room code from " + (m.codeSenderName || currentMatch.opponent || "your opponent"),
+            "eFootball room code: " + currentMatch.roomCode + ". Open GOAL$GAMBIT Match Hub to view it.",
+            {
+                tag: "goal-gambit-room-code-" + currentMatch.backendId,
+                url: "pages/match-hub.html"
+            }
+        );
+    }
     currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
     currentMatch.verificationStatus = m.verificationStatus || null;
     currentMatch.playerReady = !!m.yourReady;
@@ -3155,54 +3234,113 @@ function assignMatchRoles() {
 }
 
 async function sendRoomCode() {
-    if (!currentMatch || !currentMatch.backendId) return;
-    const input = document.getElementById("roomCode");
+    if (!currentMatch || !currentMatch.backendId) {
+        alert("This match is not connected to the server yet.");
+        return;
+    }
+    const input = document.getElementById("roomCodeNoticeInput") || document.getElementById("roomCode");
+    if (!input) {
+        alert("The room-code field is unavailable. Reload the Match Hub and try again.");
+        return;
+    }
     const code = input.value.trim();
     if (!code) {
         alert("Please enter the actual eFootball room code.");
         input.focus();
         return;
     }
-    const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/roomcode", {
-        method: "POST",
-        body: { code: code }
-    });
-    if (!r.ok) {
-        alert(r.data.message || "Could not send the room code.");
+
+    const button = document.getElementById("roomCodeNoticeSend");
+    if(button){
+        button.disabled = true;
+        button.textContent = "SENDING…";
+    }
+
+    let r;
+    try{
+        r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/roomcode", {
+            method: "POST",
+            body: { code: code }
+        });
+    }catch(error){
+        if(button){
+            button.disabled = false;
+            button.textContent = "SEND CODE";
+        }
+        alert(error.message || "Could not reach the server. Your code has not been sent.");
         return;
     }
-    const sent = r.data.match.room_code || code;
+    if (!r.ok) {
+        if(button){
+            button.disabled = false;
+            button.textContent = "SEND CODE";
+        }
+        alert((r.data && r.data.message) || "Could not send the room code.");
+        return;
+    }
+
+    const sent = (r.data.match && r.data.match.room_code) || code;
     currentMatch.roomCode = sent;
     currentMatch.codeSent = true;
     localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
     document.getElementById("matchStatus").textContent = "ROOM CODE SENT";
+    updateRoomCodeNotice();
     document.getElementById("senderArea").innerHTML =
         '<div class="role-banner">✓ ROOM CODE SENT</div>' +
         '<div class="received-code"><small>YOUR ROOM CODE</small><strong>' + escapeHTML(sent) + '</strong></div>' +
-        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code.</p>';
+        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code. Keep the Match Hub open.</p>';
     notifyUser("GOAL$GAMBIT", "Room code sent successfully.");
 }
+
 
 async function toggleReady() {
     if (!currentMatch || !currentMatch.backendId) return;
     const button = document.getElementById("readyButton");
-    button.disabled = true;
-    const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/ready", {
-        method: "POST",
-        body: { ready: true }
-    });
-    if (!r.ok) {
-        button.disabled = false;
-        alert(r.data.message || "Could not mark you as ready.");
+    const receivedButton = document.getElementById("confirmRoomCodeButton");
+    if(button) button.disabled = true;
+    if(receivedButton) receivedButton.disabled = true;
+
+    let r;
+    try{
+        r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/ready", {
+            method: "POST",
+            body: { ready: true }
+        });
+    }catch(error){
+        if(button) button.disabled = false;
+        if(receivedButton) receivedButton.disabled = false;
+        alert(error.message || "Could not reach the server. Try again.");
         return;
     }
-    button.textContent = "✓ YOU ARE READY";
+    if (!r.ok) {
+        if(button) button.disabled = false;
+        if(receivedButton) receivedButton.disabled = false;
+        alert((r.data && r.data.message) || "Could not mark you as ready.");
+        return;
+    }
+    if(button){
+        button.textContent = "✓ YOU ARE READY";
+        button.disabled = true;
+    }
+    if(receivedButton){
+        receivedButton.textContent = "✓ CODE RECEIVED · YOU ARE READY";
+        receivedButton.disabled = true;
+    }
     document.getElementById("yourReady").textContent = "READY";
     notifyUser("GOAL$GAMBIT", "You are marked as ready.");
     await syncFromServer();
 }
 
-// A league fixture opens the hub with ?league=Bronze|Silver|Gold.
+async function confirmRoomCode() {
+    if (!currentMatch || !currentMatch.roomCode) {
+        alert("Wait for the eFootball room code before confirming.");
+        return;
+    }
+    await toggleReady();
+}
+
+
+// A league fixture// A league fixture opens the hub with ?league=Bronze|Silver|Gold.
 // The entry fee was already paid when joining the league, so the
 // match itself has no extra stake. Only league members can play.
 async function startLeagueMatch(league) {
