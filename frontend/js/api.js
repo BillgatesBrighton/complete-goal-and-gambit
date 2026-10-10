@@ -338,6 +338,86 @@
         });
     }
 
+    function decodeVapidPublicKey(value) {
+        var normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+        while (normalized.length % 4) normalized += "=";
+        var raw = window.atob(normalized);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return bytes;
+    }
+
+    // Register this signed-in device for background Web Push. The server returns
+    // only its public VAPID key; the private key remains in backend configuration.
+    async function enablePushNotifications() {
+        if (!getToken()) return { ok: false, message: "Sign in before enabling background alerts." };
+        if (!("Notification" in window) || Notification.permission !== "granted") {
+            return { ok: false, message: "Allow notifications for this site first." };
+        }
+        if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+            return { ok: false, message: "This browser does not support background Web Push." };
+        }
+
+        try {
+            var workerUrl = new URL("../sw.js", location.href);
+            var scopeUrl = new URL("../", location.href);
+            var registration = await navigator.serviceWorker.register(workerUrl.href, { scope: scopeUrl.pathname });
+            await navigator.serviceWorker.ready;
+
+            var keyResponse = await api("/api/push/vapid-public-key", { noRedirect: true });
+            if (!keyResponse.ok || !keyResponse.data || !keyResponse.data.configured || !keyResponse.data.publicKey) {
+                return {
+                    ok: false,
+                    message: keyResponse.data && keyResponse.data.message
+                        ? keyResponse.data.message
+                        : "The backend has not configured Web Push yet."
+                };
+            }
+
+            var applicationServerKey = decodeVapidPublicKey(keyResponse.data.publicKey);
+            var subscription = await registration.pushManager.getSubscription();
+            if (subscription && subscription.options && subscription.options.applicationServerKey) {
+                var existingKey = new Uint8Array(subscription.options.applicationServerKey);
+                var changed = existingKey.length !== applicationServerKey.length;
+                for (var i = 0; !changed && i < existingKey.length; i++) {
+                    if (existingKey[i] !== applicationServerKey[i]) changed = true;
+                }
+                if (changed) {
+                    await subscription.unsubscribe();
+                    subscription = null;
+                }
+            }
+            if (!subscription) {
+                subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: applicationServerKey
+                });
+            }
+
+            var saved = await api("/api/push/subscriptions", {
+                method: "POST",
+                body: { subscription: subscription.toJSON() },
+                noRedirect: true
+            });
+            if (!saved.ok) {
+                return {
+                    ok: false,
+                    message: saved.data && saved.data.message
+                        ? saved.data.message
+                        : "The server could not save this device's notification subscription."
+                };
+            }
+            return { ok: true, message: "Background alerts are connected to this account." };
+        } catch (error) {
+            return {
+                ok: false,
+                message: error && error.message
+                    ? error.message
+                    : "Could not connect background alerts on this device."
+            };
+        }
+    }
+
     window.GG = {
         API_BASE: API_BASE,
         api: api,
