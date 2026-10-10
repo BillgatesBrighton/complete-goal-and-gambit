@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GOAL$GAMBIT · Match Results</title>
+<style>
+:root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa}
+*{box-sizing:border-box}
+body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}
+header{height:64px;padding:0 max(18px,calc((100% - 920px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}
+.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}
+a{color:var(--gold)}
+main{width:min(920px,94%);margin:32px auto 80px}
+h1{font-size:clamp(28px,5vw,38px);margin:0 0 4px;color:var(--gold)}
+.intro,.muted{color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}
+.notice{padding:14px;border-radius:10px;background:#171307;border:1px solid #6b571c;color:#f0d67b;margin:14px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
+label{display:block;color:#bbb;font-size:13px;margin:10px 0 6px}
+input[type=number]{width:100%;padding:14px;border:1px solid #444;border-radius:9px;background:#080808;color:#fff;font:inherit}
+button,.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:9px;padding:12px 16px;margin-top:12px;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
+.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}
+.hidden{display:none!important}
+.error{color:#ff9999}
+.good{color:#8fe0aa}
+.score{font-size:clamp(28px,7vw,42px);font-weight:900;color:var(--gold);text-align:center;letter-spacing:.04em}
+.upload{border:1px dashed #8c7428;border-radius:12px;padding:22px;text-align:center;background:#171307}
+.upload input{max-width:100%;margin:12px auto}
+.preview{display:block;max-width:100%;max-height:420px;margin:16px auto;border-radius:10px}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+@media(max-width:600px){header{padding:0 16px}.grid{grid-template-columns:1fr}.card{padding:18px}}
+</style>
+<script src="../js/api.js"></script>
+</head>
+<body>
+<header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">Konami dashboard</a></header>
+<main>
+  <h1>Match Results</h1>
+  <p class="intro">Enter your final score, then add screenshot evidence if you are selected to upload it.</p>
+  <section class="card">
+    <div id="status" class="notice" role="status" aria-live="polite">Loading match…</div>
+    <p id="matchPlayers" class="muted"></p>
+    <div id="scoreFormWrap" class="hidden">
+      <form id="scoreForm">
+        <div class="grid">
+          <div><label for="yourScore">Your goals</label><input id="yourScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
+          <div><label for="opponentScore">Opponent’s goals</label><input id="opponentScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
+        </div>
+        <button id="submitScoreButton" type="submit">Submit my result</button>
+      </form>
+    </div>
+    <div id="scoreSummary" class="hidden">
+      <h2>Your submitted score</h2>
+      <div id="yourReport" class="score">—</div>
+      <p id="opponentReport" class="muted"></p>
+    </div>
+  </section>
+
+  <section id="screenshotCard" class="card hidden">
+    <h2>Match screenshot</h2>
+    <p id="screenshotMessage" class="muted">After both score reports are submitted, the selected player can upload a result-screen screenshot.</p>
+    <div id="uploadArea" class="upload hidden">
+      <p>Choose a clear JPEG, PNG, or WebP screenshot of the final eFootball score screen (8 MB maximum).</p>
+      <input id="screenshotInput" type="file" accept="image/jpeg,image/png,image/webp">
+      <img id="screenshotPreview" class="preview hidden" alt="Selected match screenshot preview">
+      <button id="uploadButton" type="button">Upload screenshot</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Match status</h2>
+    <p id="detailStatus" class="muted">Waiting for match data…</p>
+    <p id="error" class="error" role="alert"></p>
+    <div class="row">
+      <a class="button secondary" id="roomLink" href="match-room.html">Match room</a>
+      <a class="button secondary" href="konami.html">Konami dashboard</a>
+    </div>
+  </section>
+</main>
+<script>
+(function(){
+  "use strict";
+  if(!GG.requireLogin()) return;
+  var params = new URLSearchParams(location.search);
+  var id = params.get("matchId") || params.get("fixture") || "";
+  var busy = false;
+  var posting = false;
+  var latest = null;
+  var errorNode = document.getElementById("error");
+  var statusNode = document.getElementById("status");
+
+  function isVerification(m){ return ["awaiting_verification","disputed"].indexOf(m.status) !== -1; }
+  function score(value){ return value === null || value === undefined || value === "" ? "—" : String(Number(value)); }
+  function ownSubmitted(m){ return !!(m.youAreCreator ? m.creator_submitted : m.opponent_submitted); }
+  function otherSubmitted(m){ return !!(m.youAreCreator ? m.opponent_submitted : m.creator_submitted); }
+
+  function render(m){
+    latest = m;
+    document.getElementById("matchPlayers").textContent =
+      (m.yourName || "You") + " vs " + (m.opponentName || "Opponent") + " · Match GG-" + m.id;
+    document.getElementById("roomLink").href = "match-room.html?matchId=" + encodeURIComponent(m.id);
+
+    var formWrap = document.getElementById("scoreFormWrap");
+    var summary = document.getElementById("scoreSummary");
+    var statusText = "Match state: " + String(m.status || "unknown").replace(/_/g," ");
+    document.getElementById("detailStatus").textContent = statusText;
+
+    if(m.status === "completed"){
+      var ownFinal = m.youAreCreator ? m.creator_score : m.opponent_score;
+      var otherFinal = m.youAreCreator ? m.opponent_score : m.creator_score;
+      statusNode.textContent = m.verificationStatus === "verified" ? "Result verified" : "Match settled";
+      formWrap.classList.add("hidden");
+      summary.classList.remove("hidden");
+      document.getElementById("yourReport").textContent = score(ownFinal) + " – " + score(otherFinal);
+      document.getElementById("opponentReport").textContent = "Final match score";
+      document.getElementById("screenshotCard").classList.toggle("hidden", !m.screenshotSubmitted);
+      document.getElementById("screenshotMessage").textContent = m.verificationStatus === "verified" ? "Screenshot verified and standings updated." : "Screenshot evidence was received.";
+      return;
+    }
+
+    if(m.status === "cancelled"){
+      statusNode.textContent = "This match was cancelled.";
+      formWrap.classList.add("hidden");
+      summary.classList.add("hidden");
+      document.getElementById("screenshotCard").classList.add("hidden");
+      return;
+    }
+
+    if(m.status === "playing"){
+      if(ownSubmitted(m)){
+        statusNode.textContent = otherSubmitted(m) ? "Both scores received · checking result…" : "Your result is saved · waiting for your opponent";
+        formWrap.classList.add("hidden");
+        summary.classList.remove("hidden");
+        var ownScore = m.youAreCreator ? m.creator_submitted_score : m.opponent_submitted_score;
+        var againstScore = m.youAreCreator ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score;
+        document.getElementById("yourReport").textContent = score(ownScore) + " – " + score(againstScore);
+        document.getElementById("opponentReport").textContent = otherSubmitted(m) ? "Your opponent has also submitted a result." : "Waiting for the other player’s result.";
+      } else {
+        statusNode.textContent = "Match in progress · enter the final score";
+        formWrap.classList.remove("hidden");
+        summary.classList.add("hidden");
+      }
+      document.getElementById("screenshotCard").classList.add("hidden");
+      return;
+    }
+
+    formWrap.classList.add("hidden");
+    summary.classList.remove("hidden");
+    var ownReported = m.youAreCreator ? m.creator_submitted_score : m.opponent_submitted_score;
+    var againstReported = m.youAreCreator ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score;
+    document.getElementById("yourReport").textContent = score(ownReported) + " – " + score(againstReported);
+    document.getElementById("opponentReport").textContent = otherSubmitted(m) ? "Both players submitted scores." : "Waiting for the other player’s result.";
+
+    if(isVerification(m)){
+      document.getElementById("screenshotCard").classList.remove("hidden");
+      if(m.screenshotSubmitted){
+        statusNode.textContent = m.status === "disputed" ? "Screenshot received · admin review" : "Screenshot received · verifying result";
+        document.getElementById("screenshotMessage").textContent = m.status === "disputed"
+          ? "The scores differ. Screenshot evidence is on hold for admin review."
+          : "Screenshot received. The result is being verified.";
+        document.getElementById("uploadArea").classList.add("hidden");
+      } else if(m.youMustUploadScreenshot){
+        statusNode.textContent = "Screenshot required";
+        document.getElementById("screenshotMessage").textContent = "You were selected to provide the final score-screen screenshot.";
+        document.getElementById("uploadArea").classList.remove("hidden");
+      } else {
+        statusNode.textContent = m.status === "disputed" ? "Admin review · waiting for screenshot" : "Waiting for selected screenshot uploader";
+        document.getElementById("screenshotMessage").textContent = "Your opponent was selected to upload the screenshot. The score is held until it is reviewed.";
+        document.getElementById("uploadArea").classList.add("hidden");
+      }
+    } else {
+      statusNode.textContent = "Waiting for the match to start";
+      document.getElementById("screenshotCard").classList.remove("hidden");
+      document.getElementById("screenshotMessage").textContent = "The screenshot option appears here after both players submit their scores.";
+      document.getElementById("uploadArea").classList.add("hidden");
+    }
+  }
+
+  async function load(){
+    if(busy || posting) return;
+    busy = true;
+    try{
+      var m = null;
+      if(!id){
+        var active = await GG.api("/api/efootball/matches/active", {noRedirect:true});
+        if(active.ok && active.data.match) id = String(active.data.match.id);
+      }
+      if(id){
+        var response = await GG.api("/api/efootball/matches/" + encodeURIComponent(id), {noRedirect:true});
+        if(response.ok && response.data.match) m = response.data.match;
+        else if(response.status !== 0) errorNode.textContent = response.data.message || "Could not load the match.";
+      }
+      if(!m){
+        statusNode.textContent = "No active match found. Start matchmaking from the Konami dashboard.";
+        return;
+      }
+      id = String(m.id);
+      if(location.search.indexOf("matchId=") === -1) history.replaceState(null,"","?matchId=" + encodeURIComponent(id));
+      render(m);
+    }catch(error){ errorNode.textContent = error.message || "Unable to load match results."; }
+    finally{ busy = false; }
+  }
+
+  document.getElementById("scoreForm").addEventListener("submit", async function(event){
+    event.preventDefault();
+    if(!id || !latest || latest.status !== "playing" || ownSubmitted(latest)) return;
+    var yourScore = Number(document.getElementById("yourScore").value);
+    var opponentScore = Number(document.getElementById("opponentScore").value);
+    if(!Number.isInteger(yourScore) || !Number.isInteger(opponentScore) || yourScore < 0 || opponentScore < 0 || yourScore > 99 || opponentScore > 99){
+      errorNode.textContent = "Enter whole-number scores from 0 to 99.";
+      return;
+    }
+    posting = true;
+    var button = document.getElementById("submitScoreButton");
+    button.disabled = true;
+    errorNode.textContent = "";
+    var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/result", {
+      method:"POST", body:{yourScore:yourScore,opponentScore:opponentScore}, noRedirect:true
+    });
+    posting = false;
+    button.disabled = false;
+    if(!result.ok){ errorNode.textContent = result.data.message || "The result was not saved. Try again."; return; }
+    await load();
+  });
+
+  document.getElementById("screenshotInput").addEventListener("change", function(){
+    var file = this.files && this.files[0];
+    var preview = document.getElementById("screenshotPreview");
+    if(!file){ preview.classList.add("hidden"); return; }
+    if(["image/jpeg","image/png","image/webp"].indexOf(file.type) === -1 || file.size > 8*1024*1024){
+      errorNode.textContent = "Choose a JPEG, PNG, or WebP image no larger than 8 MB.";
+      this.value = "";
+      preview.classList.add("hidden");
+      return;
+    }
+    errorNode.textContent = "";
+    preview.src = URL.createObjectURL(file);
+    preview.classList.remove("hidden");
+  });
+
+  document.getElementById("uploadButton").addEventListener("click", async function(){
+    var input = document.getElementById("screenshotInput");
+    var file = input.files && input.files[0];
+    if(!file || !id || !latest || !latest.youMustUploadScreenshot || !isVerification(latest)){
+      errorNode.textContent = "Choose a screenshot when this match is waiting for your upload.";
+      return;
+    }
+    posting = true;
+    this.disabled = true;
+    errorNode.textContent = "";
+    document.getElementById("screenshotMessage").textContent = "Uploading screenshot…";
+    var form = new FormData();
+    form.append("screenshot", file, file.name);
+    var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/audit/screenshot", {
+      method:"POST", body:form, noRedirect:true
+    });
+    posting = false;
+    this.disabled = false;
+    if(!result.ok){ errorNode.textContent = result.data.message || "Screenshot upload failed. Try again."; await load(); return; }
+    document.getElementById("screenshotMessage").textContent = result.data.message || "Screenshot received.";
+    input.value = "";
+    document.getElementById("screenshotPreview").classList.add("hidden");
+    await load();
+  });
+
+  load();
+  window.setInterval(load, 2500);
+})();
+</script>
+</body>
+</html>
