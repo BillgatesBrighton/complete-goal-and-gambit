@@ -1,247 +1,594 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#080808">
     <title>GOAL$GAMBIT | Log In</title>
-
     <link rel="stylesheet" href="style.css">
-
+    <style>
+        .auth-main {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 112px 20px 64px;
+            background:
+                radial-gradient(ellipse at 16% 35%, rgba(244,189,32,.10), transparent 35%),
+                radial-gradient(ellipse at 85% 80%, rgba(244,189,32,.06), transparent 30%);
+        }
+        .auth-card {
+            width: min(100%, 980px);
+            display: grid;
+            grid-template-columns: minmax(0, .92fr) minmax(350px, 1.08fr);
+            overflow: hidden;
+            border: 1px solid rgba(244,189,32,.24);
+            border-radius: 24px;
+            background: linear-gradient(145deg, #141414, #090909 72%);
+            box-shadow: 0 28px 90px rgba(0,0,0,.5);
+        }
+        .auth-story {
+            padding: clamp(30px, 5vw, 58px);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 570px;
+            background:
+                linear-gradient(155deg, rgba(244,189,32,.12), transparent 44%),
+                #0b0b0b;
+            border-right: 1px solid rgba(255,255,255,.08);
+        }
+        .auth-mark {
+            color: #f4bd20;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: .18em;
+            text-transform: uppercase;
+        }
+        .auth-story h1 {
+            margin: 0 0 16px;
+            max-width: 420px;
+            font-size: clamp(34px, 5vw, 52px);
+            line-height: 1.05;
+            letter-spacing: -.04em;
+        }
+        .auth-story h1 span { color: #f4bd20; }
+        .auth-story p {
+            max-width: 370px;
+            color: #a8a8a8;
+            font-size: 16px;
+        }
+        .auth-points {
+            display: grid;
+            gap: 13px;
+            margin-top: 36px;
+            color: #dedede;
+            font-size: 14px;
+        }
+        .auth-points span::before {
+            content: "✓";
+            display: inline-grid;
+            place-items: center;
+            width: 21px;
+            height: 21px;
+            margin-right: 10px;
+            border-radius: 50%;
+            background: rgba(244,189,32,.14);
+            color: #f4bd20;
+            font-weight: 900;
+        }
+        .auth-panel {
+            padding: clamp(28px, 5vw, 54px);
+            align-self: center;
+        }
+        .auth-eyebrow {
+            margin: 0 0 8px;
+            color: #f4bd20;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+        }
+        .auth-panel h2 {
+            margin: 0 0 8px;
+            font-size: clamp(27px, 4vw, 34px);
+            line-height: 1.15;
+        }
+        .auth-intro {
+            margin: 0 0 28px;
+            color: #a7a7a7;
+            font-size: 14px;
+        }
+        .auth-form { display: grid; gap: 16px; }
+        .auth-field { display: grid; gap: 7px; }
+        .auth-field label {
+            color: #ededed;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .auth-field input {
+            width: 100%;
+            min-height: 48px;
+            padding: 12px 14px;
+            border: 1px solid rgba(255,255,255,.14);
+            border-radius: 10px;
+            outline: none;
+            background: #080808;
+            color: #fff;
+            font: inherit;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .auth-field input:focus {
+            border-color: #f4bd20;
+            box-shadow: 0 0 0 3px rgba(244,189,32,.13);
+        }
+        .auth-field input::placeholder { color: #777; }
+        .password-control { position: relative; }
+        .password-control input { padding-right: 66px; }
+        .reveal-button {
+            position: absolute;
+            top: 50%;
+            right: 10px;
+            transform: translateY(-50%);
+            border: 0;
+            background: transparent;
+            color: #f4bd20;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+        .auth-submit {
+            width: 100%;
+            min-height: 50px;
+            margin-top: 2px;
+            border: 1px solid #ffd75a;
+            border-radius: 11px;
+            background: linear-gradient(135deg, #f4bd20, #d99c08);
+            color: #17120a;
+            font: inherit;
+            font-weight: 900;
+            cursor: pointer;
+            transition: transform .15s, filter .15s;
+        }
+        .auth-submit:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.07); }
+        .auth-submit:disabled { cursor: wait; opacity: .62; }
+        .auth-links {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: center;
+            margin-top: 18px;
+            color: #aaa;
+            font-size: 13px;
+        }
+        .auth-link, .text-link {
+            border: 0;
+            padding: 0;
+            background: transparent;
+            color: #f4bd20;
+            font: inherit;
+            font-weight: 700;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            cursor: pointer;
+        }
+        .auth-notice {
+            margin: 0;
+            padding: 11px 12px;
+            border-radius: 9px;
+            background: rgba(255,255,255,.06);
+            color: #ededed;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .auth-notice:empty { display: none; }
+        .auth-notice.error {
+            border: 1px solid rgba(255,100,100,.35);
+            background: rgba(120,20,20,.18);
+            color: #ffb7b7;
+        }
+        .auth-notice.success {
+            border: 1px solid rgba(244,189,32,.3);
+            background: rgba(244,189,32,.08);
+            color: #f7dda0;
+        }
+        .auth-small {
+            margin: 18px 0 0;
+            color: #868686;
+            font-size: 12px;
+            line-height: 1.55;
+        }
+        .auth-divider {
+            height: 1px;
+            margin: 22px 0;
+            background: rgba(255,255,255,.09);
+        }
+        [hidden] { display: none !important; }
+        @media (max-width: 760px) {
+            .auth-main { padding: 96px 14px 44px; }
+            .auth-card { grid-template-columns: 1fr; max-width: 520px; }
+            .auth-story {
+                min-height: auto;
+                padding: 27px 26px;
+                border-right: 0;
+                border-bottom: 1px solid rgba(255,255,255,.08);
+            }
+            .auth-story h1 { margin-top: 22px; font-size: 34px; }
+            .auth-story p { font-size: 14px; }
+            .auth-points { display: none; }
+            .auth-panel { padding: 28px 24px 32px; }
+        }
+        @media (max-width: 420px) {
+            .auth-links { align-items: flex-start; flex-direction: column; }
+        }
+    </style>
 </head>
-
 <body>
-
-
 <header class="navbar">
-
     <a href="index.html" class="brand">
-
-        <span class="brand-icon">
-            ♛
-        </span>
-
-        <span>
-            GOAL$GAMBIT
-        </span>
-
+        <span class="brand-icon">♛</span>
+        <span>GOAL$GAMBIT</span>
     </a>
-
-
-    <nav class="desktop-nav">
-
-        <a href="index.html">
-            Home
-        </a>
-
-        <a href="how-it-works.html">
-            How It Works
-        </a>
-
-        <a href="leaderboard.html">
-            Leaderboard
-        </a>
-
+    <nav class="desktop-nav" aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="how-it-works.html">How It Works</a>
+        <a href="leaderboard.html">Leaderboard</a>
     </nav>
-
-
     <div class="nav-actions">
-
-        <a href="login.html" class="login-button">
-            Log In
-        </a>
-
-        <a href="signup.html" class="signup-button">
-            Create Account
-        </a>
-
+        <a href="login.html" class="login-button" aria-current="page">Log In</a>
+        <a href="signup.html" class="signup-button">Create Account</a>
     </div>
-
 </header>
 
+<main class="auth-main">
+    <section class="auth-card" aria-label="Account access">
+        <div class="auth-story">
+            <div class="auth-mark">GOAL$GAMBIT · PLAYER ACCESS</div>
+            <div>
+                <h1>Your next game starts <span>here.</span></h1>
+                <p>Sign in to reach your dashboard, matches, wallet and chess rooms.</p>
+                <div class="auth-points" aria-label="Account security details">
+                    <span>Your account stays yours across devices</span>
+                    <span>Forgotten passwords can be reset by phone</span>
+                    <span>One code, sent only to the number on your account</span>
+                </div>
+            </div>
+            <p class="auth-small">Keep your password and verification code private. GOAL$GAMBIT staff will never ask you to share them.</p>
+        </div>
 
+        <div class="auth-panel">
+            <section id="loginPanel" aria-labelledby="loginHeading">
+                <p class="auth-eyebrow">Welcome back</p>
+                <h2 id="loginHeading">Log in to your account</h2>
+                <p class="auth-intro">Enter the username and password you used when you joined.</p>
 
-<main>
+                <form id="loginForm" class="auth-form" novalidate>
+                    <div class="auth-field">
+                        <label for="username">Username</label>
+                        <input id="username" name="username" type="text" placeholder="Your username"
+                               autocomplete="username" autocapitalize="none" spellcheck="false"
+                               maxlength="30" required>
+                    </div>
+                    <div class="auth-field">
+                        <label for="password">Password</label>
+                        <div class="password-control">
+                            <input id="password" name="password" type="password" placeholder="Your password"
+                                   autocomplete="current-password" required>
+                            <button class="reveal-button" type="button" data-toggle-password="password"
+                                    aria-controls="password" aria-pressed="false">Show</button>
+                        </div>
+                    </div>
+                    <p id="loginMessage" class="auth-notice" role="alert" aria-live="polite"></p>
+                    <button id="loginButton" class="auth-submit" type="submit">Log In</button>
+                </form>
 
-    <section class="final-section">
+                <div class="auth-links">
+                    <button id="forgotPasswordButton" class="auth-link" type="button">Forgot password?</button>
+                    <span>New here? <a href="signup.html" class="text-link">Create an account</a></span>
+                </div>
+            </section>
 
-        <span class="section-label">
-            WELCOME BACK
-        </span>
+            <section id="resetPanel" aria-labelledby="resetHeading" hidden>
+                <p class="auth-eyebrow">Account recovery</p>
+                <h2 id="resetHeading">Reset your password</h2>
+                <p class="auth-intro">We’ll send a one-time code to the phone number already saved on your active account.</p>
 
+                <form id="requestCodeForm" class="auth-form" novalidate>
+                    <div class="auth-field">
+                        <label for="resetUsername">Username</label>
+                        <input id="resetUsername" name="username" type="text" placeholder="Your account username"
+                               autocomplete="username" autocapitalize="none" spellcheck="false"
+                               maxlength="30" required>
+                    </div>
+                    <p id="requestCodeMessage" class="auth-notice" role="alert" aria-live="polite"></p>
+                    <button id="sendCodeButton" class="auth-submit" type="submit">Send phone code</button>
+                </form>
 
-        <h2>
+                <form id="confirmResetForm" class="auth-form" novalidate hidden>
+                    <p id="codeMessage" class="auth-notice success" role="status" aria-live="polite"></p>
+                    <div class="auth-field">
+                        <label for="resetCode">6-digit verification code</label>
+                        <input id="resetCode" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}"
+                               autocomplete="one-time-code" maxlength="6" placeholder="000000" required>
+                    </div>
+                    <div class="auth-field">
+                        <label for="newPassword">New password</label>
+                        <div class="password-control">
+                            <input id="newPassword" name="newPassword" type="password" autocomplete="new-password"
+                                   minlength="8" maxlength="128" placeholder="At least 8 characters" required>
+                            <button class="reveal-button" type="button" data-toggle-password="newPassword"
+                                    aria-controls="newPassword" aria-pressed="false">Show</button>
+                        </div>
+                    </div>
+                    <div class="auth-field">
+                        <label for="confirmPassword">Confirm new password</label>
+                        <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password"
+                               minlength="8" maxlength="128" placeholder="Enter it again" required>
+                    </div>
+                    <p id="confirmResetMessage" class="auth-notice" role="alert" aria-live="polite"></p>
+                    <button id="resetPasswordButton" class="auth-submit" type="submit">Reset password</button>
+                    <div class="auth-links">
+                        <button id="resendCodeButton" class="auth-link" type="button" disabled>Resend code in 60s</button>
+                        <button id="changeResetUsername" class="auth-link" type="button">Use a different username</button>
+                    </div>
+                </form>
 
-            Log in to
+                <div id="resetSuccess" hidden>
+                    <p class="auth-notice success" role="status">Your password has been changed. All previous sign-ins have been closed.</p>
+                    <button id="returnToLoginButton" class="auth-submit" type="button" style="margin-top:18px">Return to log in</button>
+                </div>
 
-            <span>
-                GOAL$GAMBIT.
-            </span>
-
-        </h2>
-
-
-        <p>
-            Continue to your player account.
-        </p>
-
-
-
-        <form
-            id="loginForm"
-            style="max-width:500px;margin:35px auto;text-align:left;"
-        >
-
-
-            <label for="username">
-                Username
-            </label>
-
-
-            <input
-                type="text"
-                id="username"
-                name="username"
-                placeholder="Enter your username"
-                required
-                autocomplete="username"
-                style="width:100%;padding:15px;margin:8px 0 20px;"
-            >
-
-
-
-            <label for="password">
-                Password
-            </label>
-
-
-            <input
-                type="password"
-                id="password"
-                name="password"
-                placeholder="Enter your password"
-                required
-                autocomplete="current-password"
-                style="width:100%;padding:15px;margin:8px 0 20px;"
-            >
-
-
-
-            <button
-                type="submit"
-                class="primary-button large"
-                style="border:0;cursor:pointer;width:100%;"
-            >
-
-                Log In
-
-                <b>
-                    →
-                </b>
-
-            </button>
-
-
-        </form>
-
-
-
-        <p
-            id="loginMessage"
-            style="color:#f4bd20;"
-        ></p>
-
-
-        <p>
-
-            Don't have an account?
-
-            <a
-                href="signup.html"
-                class="text-link"
-            >
-                Create one
-            </a>
-
-        </p>
-
-
+                <div class="auth-divider"></div>
+                <button id="cancelResetButton" class="auth-link" type="button">Back to log in</button>
+                <p class="auth-small">If you don’t receive a code, check that you entered your username correctly, wait a minute before resending, or contact support.</p>
+            </section>
+        </div>
     </section>
-
 </main>
 
-
-
 <footer>
-
     <div class="footer-column">
-
-        <h4>
-            Support
-        </h4>
-
-
-        <a href="contact.html">
-            Contact
-        </a>
-
-
-        <a href="terms.html">
-            Terms
-        </a>
-
-
-        <a href="privacy.html">
-            Privacy
-        </a>
-
+        <h4>Support</h4>
+        <a href="contact.html">Contact</a>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
     </div>
-
 </footer>
-
-
 
 <script src="../js/api.js"></script>
 <script>
-if (GG.getToken()) {
-    location.replace("dashboard.html");
-}
+(function () {
+    "use strict";
 
-document.getElementById("loginForm").addEventListener("submit", async function (event) {
-    event.preventDefault();
+    // Do not redirect just because a token exists: it may be expired or revoked,
+    // which can otherwise trap someone in a login/dashboard redirect loop.
+    var loginPanel = document.getElementById("loginPanel");
+    var resetPanel = document.getElementById("resetPanel");
+    var requestCodeForm = document.getElementById("requestCodeForm");
+    var confirmResetForm = document.getElementById("confirmResetForm");
+    var resetSuccess = document.getElementById("resetSuccess");
+    var resetUsername = "";
+    var resendTimer = null;
 
-    var message = document.getElementById("loginMessage");
-    var button = event.target.querySelector("button[type=submit]");
-    var username = document.getElementById("username").value.trim();
-    var password = document.getElementById("password").value;
-
-    message.textContent = "";
-    button.disabled = true;
-
-    var result = await GG.api("/api/auth/login", {
-        method: "POST",
-        body: { username: username, password: password },
-        noRedirect: true
-    });
-
-    button.disabled = false;
-
-    if (!result.ok) {
-        message.textContent = result.data.message || "Login failed.";
-        return;
+    function showNotice(element, text, kind) {
+        element.textContent = text || "";
+        element.classList.remove("error", "success");
+        if (kind) element.classList.add(kind);
     }
 
-    // The game (Chess / Konami / Both) is stored on the account, so the
-    // right dashboard opens on any device.
-    GG.saveSession(result.data.token, result.data.user, result.data.user.game);
-    location.replace("dashboard.html");
-});
+    function enterReset() {
+        document.getElementById("resetUsername").value = document.getElementById("username").value.trim();
+        loginPanel.hidden = true;
+        resetPanel.hidden = false;
+        requestCodeForm.hidden = false;
+        confirmResetForm.hidden = true;
+        resetSuccess.hidden = true;
+        showNotice(document.getElementById("requestCodeMessage"), "", "");
+        showNotice(document.getElementById("confirmResetMessage"), "", "");
+        document.getElementById("resetUsername").focus();
+    }
+
+    function returnToLogin() {
+        if (resendTimer) {
+            clearInterval(resendTimer);
+            resendTimer = null;
+        }
+        resetPanel.hidden = true;
+        loginPanel.hidden = false;
+        confirmResetForm.hidden = true;
+        requestCodeForm.hidden = false;
+        resetSuccess.hidden = true;
+        document.getElementById("username").value = resetUsername || document.getElementById("resetUsername").value;
+        document.getElementById("password").value = "";
+        document.getElementById("password").focus();
+    }
+
+    function startResendCountdown() {
+        var button = document.getElementById("resendCodeButton");
+        if (resendTimer) clearInterval(resendTimer);
+        var seconds = 60;
+        button.disabled = true;
+        button.textContent = "Resend code in " + seconds + "s";
+        resendTimer = setInterval(function () {
+            seconds -= 1;
+            if (seconds <= 0) {
+                clearInterval(resendTimer);
+                resendTimer = null;
+                button.disabled = false;
+                button.textContent = "Resend code";
+                return;
+            }
+            button.textContent = "Resend code in " + seconds + "s";
+        }, 1000);
+    }
+
+    async function sendCode(username) {
+        var button = document.getElementById("sendCodeButton");
+        button.disabled = true;
+        button.textContent = "Sending…";
+        showNotice(document.getElementById("requestCodeMessage"), "", "");
+        try {
+            var result = await GG.api("/api/auth/password-reset/request", {
+                method: "POST",
+                body: { username: username },
+                noRedirect: true
+            });
+            if (!result.ok) {
+                showNotice(document.getElementById("requestCodeMessage"),
+                    result.data.message || "We couldn’t start password recovery. Please try again.", "error");
+                return false;
+            }
+            resetUsername = username;
+            requestCodeForm.hidden = true;
+            confirmResetForm.hidden = false;
+            showNotice(document.getElementById("codeMessage"),
+                result.data.message || "If an active account matches, a code was sent to its saved phone.", "success");
+            showNotice(document.getElementById("confirmResetMessage"), "", "");
+            document.getElementById("resetCode").value = "";
+            document.getElementById("newPassword").value = "";
+            document.getElementById("confirmPassword").value = "";
+            document.getElementById("resetCode").focus();
+            startResendCountdown();
+            return true;
+        } catch (error) {
+            showNotice(document.getElementById("requestCodeMessage"),
+                "The service could not be reached. Check your connection and try again.", "error");
+            return false;
+        } finally {
+            button.disabled = false;
+            button.textContent = "Send phone code";
+        }
+    }
+
+    document.querySelectorAll("[data-toggle-password]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            var input = document.getElementById(button.getAttribute("data-toggle-password"));
+            var visible = input.type === "password";
+            input.type = visible ? "text" : "password";
+            button.textContent = visible ? "Hide" : "Show";
+            button.setAttribute("aria-pressed", visible ? "true" : "false");
+        });
+    });
+
+    document.getElementById("loginForm").addEventListener("submit", async function (event) {
+        event.preventDefault();
+        var button = document.getElementById("loginButton");
+        var username = document.getElementById("username").value.trim();
+        var password = document.getElementById("password").value;
+        showNotice(document.getElementById("loginMessage"), "", "");
+        if (!username || !password) {
+            showNotice(document.getElementById("loginMessage"), "Enter both your username and password.", "error");
+            return;
+        }
+        button.disabled = true;
+        button.textContent = "Signing in…";
+        try {
+            var result = await GG.api("/api/auth/login", {
+                method: "POST",
+                body: { username: username, password: password },
+                noRedirect: true
+            });
+            if (!result.ok) {
+                showNotice(document.getElementById("loginMessage"),
+                    result.data.message || "We couldn’t sign you in. Check your username and password.", "error");
+                return;
+            }
+            GG.saveSession(result.data.token, result.data.user, result.data.user.game);
+            location.replace("dashboard.html");
+        } catch (error) {
+            showNotice(document.getElementById("loginMessage"),
+                "The service could not be reached. Check your connection and try again.", "error");
+        } finally {
+            button.disabled = false;
+            button.textContent = "Log In";
+        }
+    });
+
+    document.getElementById("forgotPasswordButton").addEventListener("click", enterReset);
+    document.getElementById("cancelResetButton").addEventListener("click", returnToLogin);
+    document.getElementById("returnToLoginButton").addEventListener("click", returnToLogin);
+
+    document.getElementById("requestCodeForm").addEventListener("submit", async function (event) {
+        event.preventDefault();
+        var username = document.getElementById("resetUsername").value.trim();
+        if (!username) {
+            showNotice(document.getElementById("requestCodeMessage"), "Enter your username to continue.", "error");
+            document.getElementById("resetUsername").focus();
+            return;
+        }
+        await sendCode(username);
+    });
+
+    document.getElementById("resendCodeButton").addEventListener("click", function () {
+        if (resetUsername) sendCode(resetUsername);
+    });
+
+    document.getElementById("changeResetUsername").addEventListener("click", function () {
+        confirmResetForm.hidden = true;
+        requestCodeForm.hidden = false;
+        document.getElementById("resetUsername").value = resetUsername;
+        showNotice(document.getElementById("requestCodeMessage"), "", "");
+        if (resendTimer) {
+            clearInterval(resendTimer);
+            resendTimer = null;
+        }
+        document.getElementById("sendCodeButton").textContent = "Send phone code";
+        document.getElementById("sendCodeButton").disabled = false;
+        document.getElementById("resetUsername").focus();
+    });
+
+    document.getElementById("confirmResetForm").addEventListener("submit", async function (event) {
+        event.preventDefault();
+        var code = document.getElementById("resetCode").value.trim();
+        var newPassword = document.getElementById("newPassword").value;
+        var confirmPassword = document.getElementById("confirmPassword").value;
+        var button = document.getElementById("resetPasswordButton");
+        showNotice(document.getElementById("confirmResetMessage"), "", "");
+        if (!/^[0-9]{6}$/.test(code)) {
+            showNotice(document.getElementById("confirmResetMessage"), "Enter the 6-digit code from your phone.", "error");
+            document.getElementById("resetCode").focus();
+            return;
+        }
+        if (newPassword.length < 8 || newPassword.length > 128) {
+            showNotice(document.getElementById("confirmResetMessage"), "Choose a password between 8 and 128 characters.", "error");
+            document.getElementById("newPassword").focus();
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            showNotice(document.getElementById("confirmResetMessage"), "The passwords do not match.", "error");
+            document.getElementById("confirmPassword").focus();
+            return;
+        }
+        button.disabled = true;
+        button.textContent = "Resetting…";
+        try {
+            var result = await GG.api("/api/auth/password-reset/confirm", {
+                method: "POST",
+                body: { username: resetUsername, code: code, newPassword: newPassword },
+                noRedirect: true
+            });
+            if (!result.ok) {
+                showNotice(document.getElementById("confirmResetMessage"),
+                    result.data.message || "The code could not be verified. Check it and try again.", "error");
+                return;
+            }
+            if (resendTimer) {
+                clearInterval(resendTimer);
+                resendTimer = null;
+            }
+            confirmResetForm.hidden = true;
+            resetSuccess.hidden = false;
+            document.getElementById("username").value = resetUsername;
+            document.getElementById("password").value = "";
+        } catch (error) {
+            showNotice(document.getElementById("confirmResetMessage"),
+                "The service could not be reached. Check your connection and try again.", "error");
+        } finally {
+            button.disabled = false;
+            button.textContent = "Reset password";
+        }
+    });
+})();
 </script>
-
-
-
 </body>
-
 </html>
