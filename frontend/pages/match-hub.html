@@ -2997,95 +2997,101 @@ async function ensureMatchNotificationWorker(){
 
 async function enableNotifications(){
 
-    if(!("Notification" in window)){
-
+    if(!("Notification" in window) || !("serviceWorker" in navigator)){
         updateNotificationBox(
             "This browser does not support system notifications.",
             "error"
         );
-
         return;
     }
 
     try{
-        await ensureMatchNotificationWorker();
-        const permission = await Notification.requestPermission();
+        // Request permission from the button gesture before any network work.
+        const permission = Notification.permission === "default"
+            ? await Notification.requestPermission()
+            : Notification.permission;
 
-        if(permission === "granted"){
-            updateNotificationBox(
-                "System notifications are enabled. Room-code messages can alert you while this page is open.",
-                "success"
-            );
-
-            document.getElementById(
-                "notificationButton"
-            ).textContent = "✓ MESSAGE ALERTS ENABLED";
-
-            notifyUser(
-                "GOAL$GAMBIT",
-                "Room-code message alerts are enabled."
-            );
-        }else{
+        if(permission !== "granted"){
             updateNotificationBox(
                 "Notifications were not allowed. Enable them in your browser or phone site settings.",
                 "error"
             );
+            return;
         }
+
+        const setup = await GG.enablePushNotifications();
+        if(!setup.ok){
+            updateNotificationBox(
+                "Browser permission is allowed, but background push is not connected: " + setup.message,
+                "error"
+            );
+            document.getElementById("notificationButton").textContent = "RETRY BACKGROUND ALERTS";
+            return;
+        }
+
+        updateNotificationBox(
+            "Background alerts are connected to your account on this device. Phone and browser settings still control whether alerts are displayed.",
+            "success"
+        );
+        document.getElementById("notificationButton").textContent = "✓ BACKGROUND ALERTS ENABLED";
+        notifyUser("GOAL$GAMBIT", "Background room-code alerts are connected.");
     }catch(error){
         updateNotificationBox(
-            error.message || "Could not set up system notifications.",
+            error && error.message ? error.message : "Could not set up background alerts.",
             "error"
         );
     }
 
 }
 
-
-/* ============================================================
-   NOTIFICATION STATUS
-============================================================ */
-
 function updateNotificationStatus(){
 
-    if(!("Notification" in window) || !("serviceWorker" in navigator)){
-
+    if(!("Notification" in window) || !("serviceWorker" in navigator) || typeof GG.enablePushNotifications !== "function"){
         updateNotificationBox(
-            "System notifications are not supported in this browser.",
+            "Background notifications are not supported in this browser.",
             "error"
         );
-
         return;
     }
 
+    const button = document.getElementById("notificationButton");
     if(Notification.permission === "granted"){
-        ensureMatchNotificationWorker().then(function(){
-            updateNotificationBox(
-                "System message alerts are enabled. Keep the Match Hub open during matchmaking to receive live alerts.",
-                "success"
-            );
-        }).catch(function(){
-            updateNotificationBox(
-                "Notifications are allowed, but this site could not register its notification handler.",
-                "error"
-            );
+        button.disabled = true;
+        button.textContent = "CONNECTING BACKGROUND ALERTS…";
+        GG.enablePushNotifications().then(function(setup){
+            if(setup.ok){
+                updateNotificationBox(
+                    "Background alerts are connected to your account on this device. Phone and browser settings still control whether alerts are displayed.",
+                    "success"
+                );
+                button.textContent = "✓ BACKGROUND ALERTS ENABLED";
+                button.disabled = true;
+            }else{
+                updateNotificationBox(
+                    "Browser permission is allowed, but background push is not connected: " + setup.message,
+                    "error"
+                );
+                button.textContent = "RETRY BACKGROUND ALERTS";
+                button.disabled = false;
+            }
         });
-
-        document.getElementById(
-            "notificationButton"
-        ).textContent = "✓ MESSAGE ALERTS ENABLED";
-    }else{
+    }else if(Notification.permission === "denied"){
+        button.textContent = "NOTIFICATIONS BLOCKED";
+        button.disabled = true;
         updateNotificationBox(
-            "Enable system alerts to receive room-code messages on your phone.",
+            "Notifications are blocked for this site. Allow them in your browser or phone settings, then retry.",
+            "error"
+        );
+    }else{
+        button.textContent = "ENABLE BACKGROUND ALERTS";
+        button.disabled = false;
+        updateNotificationBox(
+            "Enable system alerts to receive room-code messages while the browser is in the background.",
             ""
         );
     }
 
 }
-
-
-/* ============================================================
-   NOTIFICATION BOX
-============================================================ */
 
 function updateNotificationBox(
     message,
