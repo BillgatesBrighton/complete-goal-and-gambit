@@ -66,7 +66,8 @@ async function loadComplaints() {
     var r=await GG.api("/api/admin/complaints"+(includeClearedComplaints?"?includeCleared=true":""));
     if(!r.ok){$("complaintList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load complaints.")+'</div>';return 0;}
     var all=r.data.complaints||[], open=all.filter(function(c){return c.status==="open"||c.status==="investigating";});
-    var view=$("complaintFilter").value==="all"?all:open;
+    var cleared=all.filter(function(c){return !!c.admin_cleared_at;});
+    var view=$("complaintFilter").value==="all"?all:(includeClearedComplaints?open.concat(cleared.filter(function(c){return !open.some(function(x){return Number(x.id)===Number(c.id);});})):open);
     $("complaintList").innerHTML=view.length?view.map(renderComplaint).join(""):'<div class="empty">'+(open.length?"No complaints in this view.":"No open complaints.")+'</div>';
     Object.keys(drafts).forEach(function(id){var x=document.querySelector('#complaintList [data-complaint-id="'+id+'"] [data-note]');if(x)x.value=drafts[id];});
     $("statComplaints").textContent=open.length; $("navComplaints").textContent=open.length; return open.length;
@@ -116,7 +117,7 @@ async function loadAnnouncements() {
     if(!r.ok){$("announcementList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load announcements.")+'</div>';return;}
     var list=r.data.announcements||[];
     $("announcementList").innerHTML=list.length?list.map(function(a){
-        return '<article class="announcement-row"><div><div class="announcement-message">'+esc(a.message)+'</div><div class="meta">'+esc(date(a.created_at))+' · '+(a.active?'Visible to players':'Hidden')+' · '+Number(a.read_count||0)+' reads</div></div>'+(a.active?'<button class="btn" type="button" data-deactivate-announcement="'+Number(a.id)+'">Hide</button>':'<span class="badge">Inactive</span>')+'</article>';
+        return '<article class="announcement-row"><div><div class="announcement-message">'+esc(a.message)+'</div><div class="meta">'+esc(date(a.created_at))+' · '+(a.active?'Visible to players':'Hidden')+'</div></div>'+(a.active?'<button class="btn" type="button" data-deactivate-announcement="'+Number(a.id)+'">Hide</button>':'<span class="badge">Inactive</span>')+'</article>';
     }).join(""):'<div class="empty">No announcements yet.</div>';
 }
 async function loadOverview() {
