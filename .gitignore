@@ -1,7 +1,23 @@
+# Secrets and local environment files
 .env
 .env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Installed dependencies
 node_modules/
 **/node_modules/
+
+# Logs and local data
+*.log
+npm-debug.log*
 *.db
-*.sqlite
-*.sqlite3
+*.sqlite*
+*.sqlite3*
+**/uploads/
+
+# OS files
+Thumbs.db
+.DS_Store
