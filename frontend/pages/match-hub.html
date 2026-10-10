@@ -899,7 +899,7 @@ button{
             Searching for another player...
         </div>
 
-        <button class="danger-btn hidden" id="cancelMatchButton" type="button" onclick="cancelCurrentMatch()">
+        <button class="danger-btn hidden" id="cancelSearchButton" type="button" onclick="cancelCurrentMatch()">
             Cancel Search · Refund Stake
         </button>
 
@@ -920,6 +920,10 @@ button{
             The room is created inside eFootball. GOAL$GAMBIT only
             transfers the room code between the two matched players.
         </p>
+
+        <button class="danger-btn hidden" id="cancelMatchButton" type="button" onclick="cancelCurrentMatch()">
+            Cancel Match · Refund Both Stakes
+        </button>
 
 
         <!-- SENDER -->
@@ -1721,17 +1725,22 @@ function updateInterface(){
 }
 
 function updateCancelSearchButton(){
-    const button = document.getElementById("cancelMatchButton");
-    if(!button) return;
+    const searchButton = document.getElementById("cancelSearchButton");
+    const matchButton = document.getElementById("cancelMatchButton");
     const beforePlay = !!currentMatch && !!currentMatch.backendId &&
         ["waiting", "ready"].includes(currentMatch.status) && !currentMatch.matchStarted;
-    button.classList.toggle("hidden", !beforePlay);
     const paired = !!(currentMatch && currentMatch.opponentId);
     const hasStake = !!(currentMatch && Number(currentMatch.stake) > 0);
-    button.textContent = paired
-        ? (hasStake ? "Cancel Match · Refund Both Stakes" : "Cancel Match")
-        : (hasStake ? "Cancel Search · Refund Stake" : "Cancel Search");
-    button.disabled = !!button.dataset.pending;
+    if(searchButton){
+        searchButton.classList.toggle("hidden", !beforePlay || paired);
+        searchButton.textContent = hasStake ? "Cancel Search · Refund Stake" : "Cancel Search";
+        searchButton.disabled = !!searchButton.dataset.pending;
+    }
+    if(matchButton){
+        matchButton.classList.toggle("hidden", !beforePlay || !paired);
+        matchButton.textContent = hasStake ? "Cancel Match · Refund Both Stakes" : "Cancel Match";
+        matchButton.disabled = !!matchButton.dataset.pending;
+    }
 }
 
 async function cancelCurrentMatch(){
@@ -1746,7 +1755,7 @@ async function cancelCurrentMatch(){
             ? "Cancel this search? Your locked stake will be refunded."
             : "Cancel this search?");
     if(!confirm(confirmation)) return;
-    const button = document.getElementById("cancelMatchButton");
+    const button = document.getElementById(isPaired ? "cancelMatchButton" : "cancelSearchButton");
     if(button){button.dataset.pending="true";button.disabled=true;button.textContent="CANCELLING…";}
     try{
         const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/cancel", { method:"POST", noRedirect:true });
