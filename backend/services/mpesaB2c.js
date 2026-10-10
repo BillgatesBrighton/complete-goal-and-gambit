@@ -1,0 +1,356 @@
+"use strict";
+
+const express = require("express");
+const crypto = require("crypto");
+const daraja = require("../routes/mpesa");
+
+const CALLBACK_TOKEN_BYTES = 32;
+
+function envValue(name) {
+    let value = String(process.env[name] || "").trim();
+    if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+    ) {
+        value = value.slice(1, -1).trim();
+    }
+    return value;
+}
+
+function createCallbackToken() {
+    const token = crypto.randomBytes(CALLBACK_TOKEN_BYTES).toString("base64url");
+    return {
+        token,
+        tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
+        originatorConversationId: "GG" + crypto.randomUUID().replace(/-/g, "")
+    };
+}
+
+function safeText(value, maxLength) {
+    return String(value || "")
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .trim()
+        .slice(0, maxLength);
+}
+
+function callbackUrl(kind, token) {
+    const base = envValue("PUBLIC_BASE_URL");
+    const url = new URL(base);
+    url.pathname = "/api/payments/payout-" + kind + "/" + encodeURIComponent(token);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+}
+
+function configurationIssue() {
+    if (envValue("MPESA_B2C_ENABLED").toLowerCase() !== "true") {
+        return "M-Pesa withdrawals are not enabled.";
+    }
+    if (envValue("MPESA_ENVIRONMENT").toLowerCase() !== "sandbox") {
+        return "B2C withdrawals are restricted to the Daraja sandbox until production is configured separately.";
+    }
+
+    const required = [
+        "MPESA_CONSUMER_KEY",
+        "MPESA_CONSUMER_SECRET",
+        "MPESA_B2C_SHORTCODE",
+        "MPESA_B2C_INITIATOR_NAME",
+        "MPESA_B2C_SECURITY_CREDENTIAL",
+        "PUBLIC_BASE_URL"
+    ];
+    if (required.some(name => !envValue(name))) {
+        return "M-Pesa B2C sandbox configuration is incomplete.";
+    }
+
+    let publicBase;
+    try {
+        publicBase = new URL(envValue("PUBLIC_BASE_URL"));
+    } catch (_) {
+        return "Set a valid public HTTPS callback base URL.";
+    }
+    const host = publicBase.hostname.toLowerCase();
+    const privateHost =
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host === "::1" ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    if (publicBase.protocol !== "https:" || privateHost) {
+        return "The B2C callback base URL must be public HTTPS.";
+    }
+    if (publicBase.username || publicBase.password) {
+        return "The B2C callback URL cannot contain login credentials.";
+    }
+    return null;
+}
+
+function parameterValue(parameters, key) {
+    const rows = parameters && parameters.ResultParameter;
+    if (!Array.isArray(rows)) return null;
+    const item = rows.find(row => row && row.Key === key);
+    return item && item.Value !== undefined ? item.Value : null;
+}
+
+function hashMatches(token, expectedHash) {
+    if (
+        typeof token !== "string" ||
+        !/^[A-Za-z0-9_-]{40,60}$/.test(token) ||
+        typeof expectedHash !== "string" ||
+        !/^[a-f0-9]{64}$/.test(expectedHash)
+    ) {
+        return false;
+    }
+    const actual = crypto.createHash("sha256").update(token).digest();
+    const expected = Buffer.from(expectedHash, "hex");
+    return crypto.timingSafeEqual(actual, expected);
+}
+
+function createMpesaB2c(pool) {
+    const router = express.Router();
+
+    function isConfigured() {
+        return configurationIssue() === null;
+    }
+
+    async function updateProviderState(reference, state, response) {
+        await pool.query(
+            "UPDATE mpesa_payouts SET provider_status=$1, originator_conversation_id=COALESCE(originator_conversation_id, $2), conversation_id=COALESCE($3, conversation_id), updated_at=NOW() WHERE reference=$4 AND status='pending'",
+            [
+                state,
+                safeText(response && response.OriginatorConversationID, 120) || null,
+                safeText(response && response.ConversationID, 120) || null,
+                reference
+            ]
+        );
+    }
+
+    async function finalize(reference, outcome) {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const found = await client.query(
+                "SELECT p.reference, p.user_id, p.status, w.amount AS payout_amount, f.amount AS fee_amount FROM mpesa_payouts p JOIN transactions w ON w.reference=p.reference LEFT JOIN transactions f ON f.reference=p.reference || '-FEE' WHERE p.reference=$1 FOR UPDATE OF p",
+                [reference]
+            );
+            if (!found.rows.length) {
+                await client.query("ROLLBACK");
+                return false;
+            }
+            const payout = found.rows[0];
+            if (payout.status !== "pending") {
+                await client.query("COMMIT");
+                return true;
+            }
+
+            const successful = outcome.success === true;
+            const newStatus = successful ? "completed" : "failed";
+            await client.query(
+                "UPDATE transactions SET status=$1 WHERE reference IN ($2, $3) AND status='pending'",
+                [newStatus, reference, reference + "-FEE"]
+            );
+            if (!successful) {
+                const gross = Number(payout.payout_amount) + Number(payout.fee_amount || 0);
+                await client.query(
+                    "UPDATE wallets SET balance=balance + $1, updated_at=NOW() WHERE user_id=$2",
+                    [gross, payout.user_id]
+                );
+            }
+            await client.query(
+                "UPDATE mpesa_payouts SET status=$1, provider_status=$2, result_code=$3, result_description=$4, receipt=$5, conversation_id=COALESCE($6, conversation_id), updated_at=NOW(), settled_at=NOW() WHERE reference=$7",
+                [
+                    newStatus,
+                    successful ? "completed" : "failed",
+                    outcome.resultCode === null || outcome.resultCode === undefined ? null : String(outcome.resultCode).slice(0, 40),
+                    safeText(outcome.description, 240) || (successful ? "Payout confirmed." : "Payout failed."),
+                    safeText(outcome.receipt, 80) || null,
+                    safeText(outcome.conversationId, 120) || null,
+                    reference
+                ]
+            );
+            await client.query("COMMIT");
+            return true;
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    async function settleCallback(token, kind, body) {
+        const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+        const lookup = await pool.query(
+            "SELECT reference, callback_token_hash, originator_conversation_id, status FROM mpesa_payouts WHERE callback_token_hash=$1",
+            [tokenHash]
+        );
+        if (!lookup.rows.length || !hashMatches(token, lookup.rows[0].callback_token_hash)) {
+            return { found: false };
+        }
+
+        const root = body && body.Result;
+        if (!root || typeof root !== "object") {
+            throw new Error("Invalid Daraja callback payload.");
+        }
+        if (
+            root.OriginatorConversationID &&
+            String(root.OriginatorConversationID) !== String(lookup.rows[0].originator_conversation_id)
+        ) {
+            return { found: false };
+        }
+        const resultCode = root.ResultCode;
+        const success = kind === "result" && Number(resultCode) === 0;
+        const parameters = root.ResultParameters;
+        const accepted = await finalize(lookup.rows[0].reference, {
+            success,
+            resultCode: resultCode === undefined ? null : resultCode,
+            description: safeText(root.ResultDesc, 240) ||
+                (kind === "timeout" ? "Daraja queue timeout." : success ? "Payout confirmed." : "Payout was not completed."),
+            receipt: parameterValue(parameters, "TransactionReceipt"),
+            conversationId: root.ConversationID
+        });
+        return { found: accepted };
+    }
+
+    async function submitPayout(details) {
+        const issue = configurationIssue();
+        if (issue) {
+            return { accepted: false, ambiguous: false, message: issue };
+        }
+
+        const amount = Number(details.amount);
+        if (!Number.isSafeInteger(amount) || amount < 1) {
+            return { accepted: false, ambiguous: false, message: "B2C payout amount must be a whole KSh amount." };
+        }
+
+        let accessToken;
+        try {
+            accessToken = await daraja.getAccessToken();
+        } catch (_) {
+            return {
+                accepted: false,
+                ambiguous: false,
+                message: "Daraja authentication failed. Your withdrawal was not sent."
+            };
+        }
+
+        const payload = {
+            OriginatorConversationID: details.originatorConversationId,
+            InitiatorName: envValue("MPESA_B2C_INITIATOR_NAME"),
+            SecurityCredential: envValue("MPESA_B2C_SECURITY_CREDENTIAL"),
+            CommandID: envValue("MPESA_B2C_COMMAND_ID") || "BusinessPayment",
+            Amount: amount,
+            PartyA: envValue("MPESA_B2C_SHORTCODE"),
+            PartyB: String(details.phone),
+            Remarks: "GOALGAMBIT wallet withdrawal",
+            QueueTimeOutURL: callbackUrl("timeout", details.callbackToken),
+            ResultURL: callbackUrl("result", details.callbackToken),
+            Occassion: "Wallet withdrawal " + details.reference.slice(-24)
+        };
+
+        let response;
+        try {
+            response = await daraja.fetchWithTimeout(
+                daraja.mpesaBaseUrl() + "/mpesa/b2c/v3/paymentrequest",
+                {
+                    method: "POST",
+                    headers: {
+                        Authorization: "Bearer " + accessToken,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(payload)
+                },
+                20000
+            );
+        } catch (_) {
+            await updateProviderState(details.reference, "unknown", null).catch(() => {});
+            return {
+                accepted: false,
+                ambiguous: true,
+                message: "Daraja’s reply was not received. The withdrawal is pending confirmation; do not submit it again."
+            };
+        }
+
+        let data;
+        try {
+            data = await response.json();
+        } catch (_) {
+            data = null;
+        }
+
+        if (!response.ok) {
+            if (response.status >= 500 || response.status === 408 || response.status === 429 || !data) {
+                await updateProviderState(details.reference, "unknown", null).catch(() => {});
+                return {
+                    accepted: false,
+                    ambiguous: true,
+                    message: "Daraja’s reply was not conclusive. The withdrawal is pending confirmation; do not submit it again."
+                };
+            }
+            return {
+                accepted: false,
+                ambiguous: false,
+                message: "Daraja rejected this withdrawal. The wallet will be restored."
+            };
+        }
+
+        if (!data || String(data.ResponseCode) !== "0") {
+            if (data && data.ResponseCode !== undefined) {
+                return {
+                    accepted: false,
+                    ambiguous: false,
+                    message: "Daraja rejected this withdrawal. The wallet will be restored."
+                };
+            }
+            await updateProviderState(details.reference, "unknown", null).catch(() => {});
+            return {
+                accepted: false,
+                ambiguous: true,
+                message: "Daraja’s reply was not conclusive. The withdrawal is pending confirmation; do not submit it again."
+            };
+        }
+
+        await updateProviderState(details.reference, "accepted", data);
+        return { accepted: true, ambiguous: false };
+    }
+
+    router.post("/payout-result/:token", async (req, res) => {
+        try {
+            const result = await settleCallback(req.params.token, "result", req.body);
+            if (!result.found) return res.status(404).json({ ResultCode: 1, ResultDesc: "Unknown callback." });
+            return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+        } catch (_) {
+            return res.status(503).json({ ResultCode: 1, ResultDesc: "Callback settlement will be retried." });
+        }
+    });
+
+    router.post("/payout-timeout/:token", async (req, res) => {
+        try {
+            const result = await settleCallback(req.params.token, "timeout", req.body);
+            if (!result.found) return res.status(404).json({ ResultCode: 1, ResultDesc: "Unknown callback." });
+            return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+        } catch (_) {
+            return res.status(503).json({ ResultCode: 1, ResultDesc: "Callback settlement will be retried." });
+        }
+    });
+
+    return {
+        router,
+        isConfigured,
+        configurationIssue,
+        createCallbackToken,
+        submitPayout,
+        rejectPayout: async function(reference) {
+            return finalize(reference, {
+                success: false,
+                resultCode: null,
+                description: "Daraja rejected the payout request before processing it."
+            });
+        }
+    };
+}
+
+module.exports = createMpesaB2c;
