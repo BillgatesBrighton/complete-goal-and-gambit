@@ -41,6 +41,11 @@ button:disabled{opacity:.55;cursor:not-allowed}
   <p class="intro">Room-code exchange and ready check. Match results are entered on a separate page.</p>
   <section class="card">
     <div id="status" class="notice" role="status" aria-live="polite">Loading your match…</div>
+    <div id="phoneAlertPanel" class="notice">
+      <strong>Phone room-code alerts</strong>
+      <p id="phoneAlertHelp">Enable alerts before opening eFootball, then leave this Match Room open in the background. When you are selected, your phone can notify you to tap back and send the code.</p>
+      <button id="enablePhoneAlerts" class="secondary" type="button">Enable phone alerts</button>
+    </div>
     <div class="grid">
       <div class="cell"><small>Match</small><strong id="matchId">—</strong></div>
       <div class="cell"><small>You</small><strong id="playerName">—</strong></div>
@@ -96,6 +101,100 @@ button:disabled{opacity:.55;cursor:not-allowed}
   var lastMatch = null;
   var statusNode = document.getElementById("status");
   var errorNode = document.getElementById("error");
+  var notificationRegistration = null;
+  var notificationTagPrefix = "gg-efootball-code-";
+
+  function phoneAlertsSupported(){
+    return "Notification" in window && "serviceWorker" in navigator;
+  }
+  async function getNotificationRegistration(){
+    if(notificationRegistration) return notificationRegistration;
+    notificationRegistration = await navigator.serviceWorker.register("../sw.js");
+    await navigator.serviceWorker.ready;
+    return notificationRegistration;
+  }
+  function updatePhoneAlertHelp(){
+    var help = document.getElementById("phoneAlertHelp");
+    var button = document.getElementById("enablePhoneAlerts");
+    if(!phoneAlertsSupported()){
+      help.textContent = "This browser does not support system notifications. Keep the Match Room open to receive match updates.";
+      button.classList.add("hidden");
+    }else if(Notification.permission === "granted"){
+      help.textContent = "Phone alerts are enabled. Leave this Match Room open in the background while you play; tap the alert to open the room-code form.";
+      button.textContent = "✓ Phone alerts enabled";
+      button.disabled = true;
+    }else if(Notification.permission === "denied"){
+      help.textContent = "Phone notifications are blocked for this site. Allow notifications in your browser or phone settings to receive room-code alerts.";
+      button.textContent = "Notifications blocked";
+      button.disabled = true;
+    }
+  }
+  async function enablePhoneAlerts(){
+    if(!phoneAlertsSupported()) return;
+    try{
+      var permission = Notification.permission;
+      if(permission === "default") permission = await Notification.requestPermission();
+      updatePhoneAlertHelp();
+      if(permission === "granted"){
+        await getNotificationRegistration();
+        if(lastMatch) await notifyForMatch(lastMatch);
+      }
+    }catch(_){
+      document.getElementById("phoneAlertHelp").textContent = "Could not enable phone alerts. Check your browser notification settings.";
+    }
+  }
+  async function showSystemAlert(title, body, id, role){
+    if(!phoneAlertsSupported() || Notification.permission !== "granted") return;
+    try{
+      var registration = await getNotificationRegistration();
+      var tag = notificationTagPrefix + role + "-" + id;
+      await registration.showNotification(title, {
+        body: body,
+        tag: tag,
+        renotify: false,
+        requireInteraction: true,
+        actions: [{action:"open-room",title:role === "sender" ? "Enter code" : "View code"}],
+        data: {url:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
+      });
+      localStorage.setItem("goalGambitAlertShown_" + role + "_" + id, "1");
+    }catch(_){}
+  }
+  async function closeSystemAlert(id, role){
+    if(!phoneAlertsSupported()) return;
+    try{
+      var registration = await getNotificationRegistration();
+      var tag = notificationTagPrefix + role + "-" + id;
+      var notifications = await registration.getNotifications({tag:tag});
+      notifications.forEach(function(notification){ notification.close(); });
+    }catch(_){}
+  }
+  async function notifyForMatch(m){
+    if(!m || !m.opponentFound) return;
+    if(m.youAreSender && !m.codeSent){
+      var senderKey = "goalGambitAlertShown_sender_" + m.id;
+      if(!localStorage.getItem(senderKey)){
+        await showSystemAlert(
+          "GOAL$GAMBIT · Send room code",
+          "You were selected to create the eFootball room. Tap to open the code form.",
+          m.id,
+          "sender"
+        );
+      }
+    }else if(m.youAreSender && m.codeSent){
+      await closeSystemAlert(m.id,"sender");
+    }
+    if(!m.youAreSender && m.codeSent){
+      var receiverKey = "goalGambitAlertShown_receiver_" + m.id;
+      if(!localStorage.getItem(receiverKey)){
+        await showSystemAlert(
+          "GOAL$GAMBIT · Room code received",
+          "Your opponent sent the room code. Tap to view it and confirm.",
+          m.id,
+          "receiver"
+        );
+      }
+    }
+  }
 
   function showError(message){ errorNode.textContent = message || ""; }
   function goToResults(matchId){ location.replace("match-results.html?matchId=" + encodeURIComponent(matchId)); }
@@ -161,9 +260,14 @@ button:disabled{opacity:.55;cursor:not-allowed}
       if(location.search.indexOf("matchId=") === -1) history.replaceState(null,"","?matchId=" + encodeURIComponent(id));
       if(isPlaying(m)){ goToResults(id); return; }
       render(m);
+      updatePhoneAlertHelp();
+      await notifyForMatch(m);
     }catch(error){ showError(error.message || "Unable to load the match."); }
     finally{ busy = false; }
   }
+
+  document.getElementById("enablePhoneAlerts").addEventListener("click", enablePhoneAlerts);
+  updatePhoneAlertHelp();
 
   document.getElementById("codeForm").addEventListener("submit", async function(event){
     event.preventDefault();
