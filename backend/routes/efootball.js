@@ -656,8 +656,8 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    // Cancel a search that is still waiting for an opponent. Release the
-    // creator's locked stake atomically with the match status change.
+    // Cancel an unmatched search or a paired match before play starts. Refund
+    // every locked stake atomically with the match status change.
     router.post("/matches/:id/cancel", authenticateToken, async (req, res) => {
         const userId = Number(req.user.userId);
         const matchId = Number(req.params.id);
@@ -670,11 +670,19 @@ module.exports = function (pool, authenticateToken) {
             const locked = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!locked.rows.length) throw Object.assign(new Error("Match not found."), { status: 404 });
             const match = locked.rows[0];
-            if (Number(match.creator_id) !== userId) {
+            const participantIds = [match.creator_id, match.opponent_id]
+                .filter(value => value != null)
+                .map(Number)
+                .filter(id => Number.isSafeInteger(id) && id > 0);
+            if (!participantIds.includes(userId)) {
+                throw Object.assign(new Error("Only a player in this match can cancel it."), { status: 403 });
+            }
+            const isPaired = match.opponent_id != null;
+            if (!isPaired && Number(match.creator_id) !== userId) {
                 throw Object.assign(new Error("Only the player who started this search can cancel it."), { status: 403 });
             }
-            if (match.status !== "waiting" || match.opponent_id != null) {
-                throw Object.assign(new Error("This search can no longer be cancelled."), { status: 409 });
+            if (!(["waiting", "ready"].includes(match.status)) || match.started_at || (match.creator_ready && match.opponent_ready)) {
+                throw Object.assign(new Error("This match has started and can no longer be cancelled."), { status: 409 });
             }
             const stake = Number(match.stake_amount || 0);
             if (stake > 0) {
@@ -683,24 +691,48 @@ module.exports = function (pool, authenticateToken) {
                         SET locked_balance=locked_balance-$1,
                             balance=balance+$1,
                             updated_at=NOW()
-                      WHERE user_id=$2 AND locked_balance >= $1
+                      WHERE user_id=ANY($2::int[]) AND locked_balance >= $1
                       RETURNING user_id`,
-                    [stake, userId]
+                    [stake, participantIds]
                 );
-                if (!refund.rows.length) throw new Error("The locked entry stake could not be refunded safely.");
-                await client.query(
-                    `INSERT INTO transactions
-                        (user_id,transaction_type,amount,currency,status,reference,description)
-                     VALUES ($1,'match_refund',$2,'KES','completed',$3,'eFootball search cancelled - stake refunded')`,
-                    [userId, stake, "EF-CANCEL-" + matchId + "-" + userId]
-                );
+                const refundedUserIds = new Set(refund.rows.map(row => Number(row.user_id)));
+                if (participantIds.some(id => !refundedUserIds.has(id))) {
+                    throw new Error("One or more locked match stakes could not be refunded safely.");
+                }
+                for (const participantId of participantIds) {
+                    await client.query(
+                        `INSERT INTO transactions
+                            (user_id,transaction_type,amount,currency,status,reference,description)
+                         VALUES ($1,'match_refund',$2,'KES','completed',$3,'eFootball match cancelled before play - stake refunded')`,
+                        [participantId, stake, "EF-CANCEL-" + matchId + "-" + participantId]
+                    );
+                }
             }
             await client.query(
-                "UPDATE efootball_matches SET status='cancelled', result_status='cancelled', finished_at=NOW(), settled_at=NOW() WHERE id=$1",
+                "UPDATE efootball_matches SET status='cancelled', result_status='cancelled', finished_at=NOW(), settled_at=NOW() WHERE id=$1 AND status IN ('waiting','ready') AND started_at IS NULL",
                 [matchId]
             );
+            for (const participantId of participantIds) {
+                await createSystemNotification(
+                    client,
+                    participantId,
+                    "match_cancelled",
+                    "Match cancelled",
+                    stake > 0
+                        ? "This match was cancelled before play began. All locked stakes were refunded."
+                        : "This match was cancelled before play began.",
+                    matchId
+                );
+            }
             await client.query("COMMIT");
-            return res.json({ success: true, message: "Search cancelled and any locked stake refunded." });
+            return res.json({
+                success: true,
+                isPaired,
+                refundedPlayers: stake > 0 ? participantIds.length : 0,
+                message: isPaired
+                    ? (stake > 0 ? "Match cancelled. Both players' locked stakes were refunded." : "Match cancelled before play began.")
+                    : (stake > 0 ? "Search cancelled and your locked stake was refunded." : "Search cancelled.")
+            });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
             return res.status(error.status || 400).json({ success: false, message: error.message || "Unable to cancel this search." });
