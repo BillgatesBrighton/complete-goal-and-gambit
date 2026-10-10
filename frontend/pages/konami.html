@@ -105,6 +105,102 @@ body {
     color: #888;
 }
 
+/* Dashboard identity stays with the page heading instead of competing with navigation. */
+.hero #welcomeText {
+    color: #c9b86f;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 2px;
+}
+
+/* Konami chat panel */
+.chat-launcher {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 3001;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 13px 18px;
+    border: 1px solid #f4bd20;
+    border-radius: 999px;
+    background: #f4bd20;
+    color: #080808;
+    font: 900 14px/1 Arial, Helvetica, sans-serif;
+    cursor: pointer;
+    box-shadow: 0 8px 30px #0009;
+}
+.chat-launcher:hover { background: #ffd34f; transform: translateY(-1px); }
+.chat-launcher:focus-visible, .chat-panel button:focus-visible, .chat-panel a:focus-visible {
+    outline: 3px solid #fff;
+    outline-offset: 3px;
+}
+.chat-unread:not([hidden]) {
+    display: inline-grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #b4232c;
+    color: #fff;
+    font-size: 11px;
+}
+.chat-panel[hidden] { display: none; }
+.chat-panel {
+    position: fixed;
+    right: 20px;
+    bottom: 82px;
+    z-index: 3000;
+    display: flex;
+    flex-direction: column;
+    width: min(680px, calc(100vw - 32px));
+    height: min(760px, calc(100dvh - 110px));
+    min-height: 360px;
+    overflow: hidden;
+    border: 1px solid #695719;
+    border-radius: 16px;
+    background: #090909;
+    box-shadow: 0 18px 60px #000b;
+}
+.chat-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 11px 13px;
+    border-bottom: 1px solid #30280f;
+    background: #101010;
+}
+.chat-panel-title { display: flex; flex-direction: column; gap: 3px; min-width: 125px; }
+.chat-panel-title strong { color: #f4bd20; font-size: 14px; }
+.chat-panel-title small { color: #999; font-size: 11px; }
+.chat-panel-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.chat-panel-controls button, .chat-panel-controls a {
+    min-height: 34px;
+    padding: 7px 9px;
+    border: 1px solid #393939;
+    border-radius: 8px;
+    background: #171717;
+    color: #ddd;
+    font-size: 11px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.chat-panel-controls .chat-mode.is-active { border-color: #9b7a1a; color: #f4bd20; background: #211c0d; }
+.chat-panel-controls .chat-close { width: 34px; padding: 0; font-size: 22px; line-height: 1; }
+#konamiChatFrame { flex: 1; width: 100%; min-height: 0; border: 0; background: #080808; }
+@media (max-width: 650px) {
+    .chat-launcher { right: 12px; bottom: 12px; padding: 12px 15px; }
+    .chat-panel { right: 8px; bottom: 70px; width: calc(100vw - 16px); height: calc(100dvh - 82px); min-height: 300px; }
+    .chat-panel-header { align-items: flex-start; flex-direction: column; gap: 8px; }
+    .chat-panel-controls { width: 100%; justify-content: flex-start; }
+    .chat-panel-controls button, .chat-panel-controls a { padding: 7px; }
+}
+
 /* =========================
    WALLET
 ========================= */
@@ -617,7 +713,22 @@ body {
 </head>
 
 
-<body><a href="chat.html" style="position:fixed;right:20px;bottom:20px;z-index:9999;background:#f4bd20;color:#080808;padding:14px 20px;border-radius:999px;font-weight:900;text-decoration:none;box-shadow:0 8px 30px #000">💬 CHAT</a>
+<body>
+<button id="chatLauncher" class="chat-launcher" type="button" aria-expanded="false" aria-controls="chatPanel" aria-label="Open GOAL$GAMBIT chat">
+    <span aria-hidden="true">💬</span><span>CHAT</span><span id="chatUnread" class="chat-unread" hidden></span>
+</button>
+<aside id="chatPanel" class="chat-panel" role="dialog" aria-modal="false" aria-label="GOAL$GAMBIT chat" hidden>
+    <header class="chat-panel-header">
+        <div class="chat-panel-title"><strong>GOAL$GAMBIT Chat</strong><small>Talk with players or contact support</small></div>
+        <div class="chat-panel-controls" aria-label="Chat options">
+            <button class="chat-mode is-active" type="button" data-chat-page="chat-users.html?embedded=1" aria-pressed="true">Players</button>
+            <button class="chat-mode" type="button" data-chat-page="chat-admin.html?embedded=1" aria-pressed="false">Support</button>
+            <a class="chat-full-link" href="chat.html" target="_blank" rel="noopener">Full chat ↗</a>
+            <button id="closeChatPanel" class="chat-close" type="button" aria-label="Close chat">×</button>
+        </div>
+    </header>
+    <iframe id="konamiChatFrame" name="konamiChatFrame" title="GOAL$GAMBIT player chat" data-src="chat-users.html?embedded=1" loading="lazy"></iframe>
+</aside>
 
 
 <!-- =========================
@@ -646,7 +757,7 @@ body {
 
     </div>
 
-    <span style="color:#d4af37;font-weight:700;margin-right:14px;" data-gg="username"></span>
+    
     <a
         href="index.html"
         class="logout">
@@ -2331,6 +2442,65 @@ async function loadLiveKonami() {
 
 loadLiveKonami();
 setInterval(loadLiveKonami, 15000);loadLiveKonami();setInterval(loadLiveKonami,3000);
+</script>
+<script>
+(function () {
+    "use strict";
+    var launcher = document.getElementById("chatLauncher");
+    var panel = document.getElementById("chatPanel");
+    var frame = document.getElementById("konamiChatFrame");
+    var badge = document.getElementById("chatUnread");
+    var closeButton = document.getElementById("closeChatPanel");
+    if (!launcher || !panel || !frame) return;
+
+    function openChat() {
+        panel.hidden = false;
+        launcher.setAttribute("aria-expanded", "true");
+        if (!frame.getAttribute("src")) frame.setAttribute("src", frame.dataset.src);
+    }
+    function closeChat() {
+        panel.hidden = true;
+        launcher.setAttribute("aria-expanded", "false");
+        launcher.focus();
+    }
+    launcher.addEventListener("click", function () {
+        if (panel.hidden) openChat();
+        else closeChat();
+    });
+    closeButton.addEventListener("click", closeChat);
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && !panel.hidden) closeChat();
+    });
+    document.querySelectorAll("[data-chat-page]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            var page = button.dataset.chatPage;
+            if (frame.getAttribute("src") !== page) frame.setAttribute("src", page);
+            document.querySelectorAll("[data-chat-page]").forEach(function (item) {
+                var active = item === button;
+                item.classList.toggle("is-active", active);
+                item.setAttribute("aria-pressed", active ? "true" : "false");
+            });
+            frame.title = button.textContent.trim() === "Support" ?
+                "GOAL$GAMBIT support chat" : "GOAL$GAMBIT player chat";
+        });
+    });
+    async function refreshUnread() {
+        if (!window.GG || typeof GG.api !== "function") return;
+        try {
+            var response = await GG.api("/api/chat/inbox");
+            if (!response.ok) return;
+            var count = Number(response.data.unreadCount || 0);
+            badge.textContent = count > 99 ? "99+" : String(count);
+            badge.hidden = count < 1;
+            launcher.setAttribute("aria-label", count ?
+                "Open GOAL$GAMBIT chat, " + count + " unread messages" :
+                "Open GOAL$GAMBIT chat");
+        } catch (error) {}
+    }
+    refreshUnread();
+    window.setInterval(refreshUnread, 15000);
+    window.addEventListener("focus", refreshUnread);
+})();
 </script>
 </body>
 
