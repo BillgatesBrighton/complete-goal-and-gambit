@@ -881,6 +881,7 @@ body {
 .square.dark .coord-rank,.square.dark .coord-file { color: #fffC; }
 .status-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
@@ -893,6 +894,18 @@ body {
     color: #e8d796;
     font-size: 13px;
 }
+.status-bar #turnMessage { flex: 1 1 240px; }
+.status-bar .cancel-search {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 12px;
+    border-color: #795a1b;
+    background: #241d0e;
+    color: #f4bd20;
+    font-size: 12px;
+}
+.status-bar .cancel-search:hover { background: #33280f; }
+.control-button[hidden] { display: none !important; }
 .status-bar.waiting { color: #c6c6c6; border-color: #333; }
 .status-bar.ready { border-color: #8d711e; }
 .clock.active { box-shadow: 0 0 18px #d4af3730; }
@@ -902,3 +915,4 @@ body {
 .move-row:nth-child(even) { background: #ffffff08; }
 .move-white,.move-black { padding-left: 6px; }
 @keyframes clockPulse { to { background:#301313; box-shadow:0 0 18px #ff3d3d44; } }
+
