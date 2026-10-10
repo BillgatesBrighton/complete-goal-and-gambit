@@ -19,6 +19,8 @@ let localClockAt = 0;
 let legalTargets = [];
 let selectedRequest = 0;
 let movePending = false;
+let cancelPending = false;
+let resignPending = false;
 let timeoutCheckAt = 0;
 let stateVersion = 0;
 
@@ -47,6 +49,7 @@ const gameOverMessageElement = document.getElementById("gameOverMessage");
 const flipButton = document.getElementById("flipButton");
 const drawButton = document.getElementById("drawButton");
 const resignButton = document.getElementById("resignButton");
+const cancelSearchButton = document.getElementById("cancelSearchButton");
 const acceptDrawButton = document.getElementById("acceptDrawButton");
 const declineDrawButton = document.getElementById("declineDrawButton");
 const returnDashboardButton = document.getElementById("returnDashboardButton");
@@ -221,10 +224,12 @@ function applyState(m){
   setInfo();setPlayers();setStatus(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:(m.status==="waiting"?"Searching for an opponent…":m.status==="settling"?"Settling result…":m.status==="cancelled"?"Search cancelled":"Game finished"),m.status==="waiting"||m.status==="settling"?"waiting":"ready");
   if(m.status==="waiting"){
     const turnMessage=document.getElementById("turnMessage");
-    if(turnMessage)turnMessage.textContent="Waiting for another player with the same clock and stake. Your stake is locked; cancel search to refund it.";
+    const bracket=m.ratingBracket;
+    if(turnMessage)turnMessage.textContent=bracket
+      ? "Searching within your " + bracket.minimum + "–" + bracket.maximum + " chess rating bracket, with the same clock and stake. Your stake is locked while you search."
+      : "Searching for a chess player with the same settings. Your stake is locked while you search.";
   }
-  updateCancelButton();renderBoard();
-  const active=state&&state.status==="active";if(drawButton)drawButton.disabled=!active;if(resignButton)resignButton.disabled=!active;
+  updateMatchActions();renderBoard();
   if(m.result)showGameOver(m.result,m.winnerId);
   if(drawPanelElement)drawPanelElement.classList.toggle("hidden",!m.drawOfferUserId||Number(m.drawOfferUserId)===Number(getUserId()));
 }
@@ -288,15 +293,21 @@ async function restoreSavedMatch(){
 }
 async function cancelSearch(){
   if(!matchId||!state||state.status!=="waiting")return;
-  const r=await api("/api/chess/"+matchId+"/cancel",{method:"POST"});
-  if(r.ok){if(Number(localStorage.getItem("goalGambitChessMatchId"))===Number(matchId))localStorage.removeItem("goalGambitChessMatchId");location.href="chess.html"}else setStatus(r.data.message||"Could not cancel.","waiting");
+  if(!confirm("Cancel this search? Any locked stake will be refunded."))return;
+  cancelPending=true;updateMatchActions();
+  try{
+    const r=await api("/api/chess/"+matchId+"/cancel",{method:"POST"});
+    if(r.ok){if(Number(localStorage.getItem("goalGambitChessMatchId"))===Number(matchId))localStorage.removeItem("goalGambitChessMatchId");location.href="chess.html"}
+    else setStatus(r.data.message||"Could not cancel the search.","waiting");
+  }catch(_){setStatus("Could not reach the server. Your search is still active.","waiting")}
+  finally{cancelPending=false;updateMatchActions()}
 }
-function updateCancelButton(){
-  const bar=document.getElementById("statusBar"); if(!bar)return;
-  let btn=document.getElementById("cancelSearchButton");
-  const searching=state&&state.status==="waiting";
-  if(searching&&!btn){btn=document.createElement("button");btn.id="cancelSearchButton";btn.type="button";btn.textContent="Cancel search (refund stake)";btn.style.cssText="margin-left:12px;padding:6px 12px;border-radius:8px;border:1px solid #f4bd20;background:transparent;color:#f4bd20;cursor:pointer";btn.addEventListener("click",cancelSearch);bar.appendChild(btn)}
-  if(!searching&&btn)btn.remove();
+function updateMatchActions(){
+  const waiting=!!state&&state.status==="waiting";
+  const active=!!state&&state.status==="active";
+  if(cancelSearchButton){cancelSearchButton.hidden=!waiting;cancelSearchButton.classList.toggle("hidden",!waiting);cancelSearchButton.disabled=cancelPending}
+  if(drawButton){drawButton.hidden=!active;drawButton.disabled=!active}
+  if(resignButton){resignButton.hidden=!active;resignButton.disabled=!active||resignPending}
 }
 function setupSocket(){
   if(!matchId||!token())return;
@@ -310,11 +321,12 @@ function showGameOver(result,winnerId){
   if(gameOverTitleElement)gameOverTitleElement.textContent=result==="draw"?"Draw":win?"You Win":"You Lose";
   if(gameOverMessageElement)gameOverMessageElement.textContent=result==="draw"?"The match ended in a draw.":win?"Congratulations — the server has settled the match.":"The match has ended. The server has settled the result.";
 }
-async function resign(){if(!matchId)return;if(!confirm("Resign this chess match?"))return;const r=await api("/api/chess/"+matchId+"/resign",{method:"POST"});if(r.ok)applyState(r.data.match);else setStatus(r.data.message||"Unable to resign.","waiting")}
-async function offerDraw(){if(!matchId)return;const r=await api("/api/chess/"+matchId+"/draw",{method:"POST"});setStatus(r.data.message||"Draw offer sent.","waiting")}
+async function resign(){if(!matchId||!state||state.status!=="active")return;if(!confirm("Resign this match? It will be recorded as a loss and the match will be settled."))return;resignPending=true;updateMatchActions();try{const r=await api("/api/chess/"+matchId+"/resign",{method:"POST"});if(r.ok)applyState(r.data.match);else setStatus(r.data.message||"Unable to resign.","waiting")}catch(_){setStatus("Could not reach the server. The match is still active.","waiting")}finally{resignPending=false;updateMatchActions()}}
+async function offerDraw(){if(!matchId||!state||state.status!=="active")return;const r=await api("/api/chess/"+matchId+"/draw",{method:"POST"});setStatus(r.data.message||(r.ok?"Draw offer sent.":"Unable to offer a draw."),r.ok?"ready":"waiting")}
 async function respondDraw(accept){if(!matchId)return;const r=await api("/api/chess/"+matchId+"/draw/respond",{method:"POST",body:{accept}});if(r.ok&&r.data.match)applyState(r.data.match);if(drawPanelElement)drawPanelElement.classList.add("hidden")}
 
 if(flipButton)flipButton.addEventListener("click",()=>{boardFlipped=!boardFlipped;renderBoard()});
+if(cancelSearchButton)cancelSearchButton.addEventListener("click",cancelSearch);
 if(resignButton)resignButton.addEventListener("click",resign);
 if(drawButton)drawButton.addEventListener("click",offerDraw);
 if(acceptDrawButton)acceptDrawButton.addEventListener("click",()=>respondDraw(true));
@@ -341,3 +353,4 @@ if(matchId){loadMatch().then(setupSocket)}else if(window.parent!==window)window.
 // Keep both players' clocks and board state synced if Socket.IO disconnects.
 setInterval(()=>{if(matchId&&state&&(state.status==="waiting"||state.status==="active")&&!document.hidden)loadMatch()},2000);
 clockTimer=setInterval(updateClocks,250);
+
