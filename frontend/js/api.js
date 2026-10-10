@@ -276,7 +276,48 @@
         fillProfile(user);
         var balance = await refreshBalance();
         if (balance !== null) fillBalance(balance);
+        await showDashboardAnnouncements();
         return user;
+    }
+
+    async function showDashboardAnnouncements() {
+        var response = await api("/api/announcements/current");
+        var list = response.ok && response.data && Array.isArray(response.data.announcements)
+            ? response.data.announcements : [];
+        if (!list.length || !document.body) return;
+
+        var region = document.createElement("section");
+        region.setAttribute("aria-label", "Announcements from GOAL$GAMBIT");
+        region.setAttribute("aria-live", "polite");
+        region.style.cssText = "box-sizing:border-box;max-width:1120px;margin:12px auto;padding:0 14px;color:#fff;font:14px/1.5 system-ui,Segoe UI,sans-serif";
+        list.forEach(function (announcement) {
+            var card = document.createElement("article");
+            card.style.cssText = "display:flex;gap:14px;align-items:flex-start;justify-content:space-between;margin:0 0 9px;padding:12px 14px;border:1px solid #b88716;border-left:4px solid #f4bd20;border-radius:10px;background:#19160e;box-shadow:0 5px 18px rgba(0,0,0,.18)";
+            var copy = document.createElement("div");
+            var title = document.createElement("strong");
+            title.textContent = "Announcement from GOAL$GAMBIT";
+            title.style.cssText = "display:block;color:#f4bd20;margin-bottom:3px";
+            var message = document.createElement("div");
+            message.textContent = announcement.message || "";
+            message.style.whiteSpace = "pre-wrap";
+            var when = document.createElement("small");
+            var created = new Date(announcement.created_at);
+            when.textContent = isNaN(created.getTime()) ? "" : created.toLocaleString();
+            when.style.cssText = "display:block;color:#a7adb1;margin-top:5px";
+            copy.append(title, message, when);
+            var dismiss = document.createElement("button");
+            dismiss.type = "button";
+            dismiss.textContent = "Dismiss";
+            dismiss.setAttribute("aria-label", "Dismiss this announcement");
+            dismiss.style.cssText = "flex:none;border:1px solid #555;background:#232629;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font:600 12px system-ui,Segoe UI,sans-serif";
+            dismiss.addEventListener("click", function () {
+                card.remove();
+                if (!region.children.length) region.remove();
+            });
+            card.append(copy, dismiss);
+            region.appendChild(card);
+        });
+        document.body.insertBefore(region, document.body.firstChild);
     }
 
     function fillProfile(user) {
@@ -429,3 +470,4 @@
     initServerStatus();
 
 })();
+
