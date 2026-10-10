@@ -1,0 +1,79 @@
+$ErrorActionPreference = "Stop"
+$backendDir = $PSScriptRoot
+$backendEnvFile = Join-Path $backendDir ".env"
+$desktopEnvFile = [IO.Path]::GetFullPath((Join-Path $backendDir "..\..\.env"))
+$envFile = if (Test-Path -LiteralPath $backendEnvFile) { $backendEnvFile } else { $desktopEnvFile }
+
+if (-not (Test-Path -LiteralPath $envFile)) {
+    Write-Error "The Desktop .env file was not found. Keep it on the Desktop and try again."
+    exit 1
+}
+
+$webPushEnvFile = Join-Path $backendDir ".env.webpush"
+if (-not (Test-Path -LiteralPath $webPushEnvFile)) {
+    Write-Error "Web Push VAPID settings are missing. Configure backend\.env.webpush before enabling the public site."
+    exit 1
+}
+$webPushConfig = Get-Content -LiteralPath $webPushEnvFile -Raw
+if ($webPushConfig -notmatch "(?m)^\s*VAPID_PUBLIC_KEY=\S+" -or $webPushConfig -notmatch "(?m)^\s*VAPID_PRIVATE_KEY=\S+") {
+    Write-Error "Web Push VAPID settings are incomplete. The private key must remain local."
+    exit 1
+}
+
+$activeListener = Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction SilentlyContinue |
+    Where-Object { $_.LocalAddress -in @("127.0.0.1", "0.0.0.0", "::1", "::") } |
+    Select-Object -First 1
+if ($activeListener) {
+    Write-Error "Port 5000 already has a server. Stop the current backend window with Ctrl+C, then run start-online.cmd again."
+    exit 1
+}
+
+$tailscaleCommand = Get-Command tailscale -ErrorAction SilentlyContinue
+if (-not $tailscaleCommand) {
+    Write-Error "Install Tailscale for Windows, sign in, and enable Funnel before starting this script."
+    exit 1
+}
+
+& $tailscaleCommand.Source funnel --bg 5000
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$statusJson = & $tailscaleCommand.Source funnel status --json
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$statusText = $statusJson -join "`n"
+$hostMatch = [regex]::Match($statusText, '(?i)([a-z0-9][a-z0-9.-]*\.ts\.net)(?::\d+)?')
+if (-not $hostMatch.Success) {
+    Write-Error "Tailscale did not return a public HTTPS hostname. Check Funnel status and try again."
+    exit 1
+}
+$hostName = $hostMatch.Groups[1].Value.TrimEnd('.')
+
+$publicBase = "https://$($hostName.TrimEnd('.'))"
+$env:PUBLIC_BASE_URL = $publicBase
+$env:MPESA_CALLBACK_URL = ""
+$env:HOST = "127.0.0.1"
+$env:PORT = "5000"
+$env:NODE_ENV = "production"
+$env:ALLOWED_ORIGINS = "https://billgatesbrighton.github.io"
+$env:ALLOW_TEST_DEPOSITS = "false"
+$env:TEST_WALLET_MODE = "false"
+$env:DOTENV_CONFIG_PATH = $envFile
+
+# Keep PUBLIC_BASE_URL and the other online-only routing values in this process.
+# The existing .env and database configuration are never rewritten here.
+
+
+Write-Host "Public API: $publicBase"
+Write-Host "Callback: $publicBase/api/payments/callback"
+Write-Host "Starting GOAL$GAMBIT. Keep this window and Tailscale running."
+
+Push-Location $backendDir
+try {
+    if (-not (Test-Path (Join-Path $backendDir "node_modules"))) {
+        npm ci --ignore-scripts --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    npm start
+} finally {
+    Pop-Location
+    & $tailscaleCommand.Source funnel reset
+}
