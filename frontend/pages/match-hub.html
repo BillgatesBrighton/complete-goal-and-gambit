@@ -899,7 +899,7 @@ button{
             Searching for another player...
         </div>
 
-        <button class="danger-btn hidden" id="cancelSearchButton" type="button" onclick="cancelMatchSearch()">
+        <button class="danger-btn hidden" id="cancelMatchButton" type="button" onclick="cancelCurrentMatch()">
             Cancel Search · Refund Stake
         </button>
 
@@ -1635,6 +1635,20 @@ function updateInterface(){
         return;
     }
 
+    if(currentMatch.status === "cancelled"){
+        const paired = !!currentMatch.opponentId;
+        const hadStake = Number(currentMatch.stake || 0) > 0;
+        document.getElementById("matchStatus").textContent = paired
+            ? (hadStake ? "MATCH CANCELLED · BOTH STAKES REFUNDED" : "MATCH CANCELLED")
+            : (hadStake ? "SEARCH CANCELLED · STAKE REFUNDED" : "SEARCH CANCELLED");
+        document.getElementById("pairingMessage").textContent = currentMatch.cancelMessage || "This match was cancelled before play began. Any locked stakes were refunded.";
+        ["roomCodeCard", "readyCard", "resultCard", "screenshotCard", "verificationCard", "disputeCard"].forEach(id => {
+            const card = document.getElementById(id);
+            if(card) card.classList.add("hidden");
+        });
+        return;
+    }
+
 
     if(!opponentFound){
 
@@ -1707,18 +1721,32 @@ function updateInterface(){
 }
 
 function updateCancelSearchButton(){
-    const button = document.getElementById("cancelSearchButton");
+    const button = document.getElementById("cancelMatchButton");
     if(!button) return;
-    const searching = !!currentMatch && !!currentMatch.backendId &&
-        currentMatch.status === "waiting" && !currentMatch.opponentId;
-    button.classList.toggle("hidden", !searching);
+    const beforePlay = !!currentMatch && !!currentMatch.backendId &&
+        ["waiting", "ready"].includes(currentMatch.status) && !currentMatch.matchStarted;
+    button.classList.toggle("hidden", !beforePlay);
+    const paired = !!(currentMatch && currentMatch.opponentId);
+    const hasStake = !!(currentMatch && Number(currentMatch.stake) > 0);
+    button.textContent = paired
+        ? (hasStake ? "Cancel Match · Refund Both Stakes" : "Cancel Match")
+        : (hasStake ? "Cancel Search · Refund Stake" : "Cancel Search");
     button.disabled = !!button.dataset.pending;
 }
 
-async function cancelMatchSearch(){
-    if(!currentMatch || !currentMatch.backendId || currentMatch.status !== "waiting" || currentMatch.opponentId) return;
-    if(!confirm("Cancel this search? Any locked stake will be refunded.")) return;
-    const button = document.getElementById("cancelSearchButton");
+async function cancelCurrentMatch(){
+    if(!currentMatch || !currentMatch.backendId || !["waiting", "ready"].includes(currentMatch.status) || currentMatch.matchStarted) return;
+    const isPaired = !!currentMatch.opponentId;
+    const hasStake = Number(currentMatch.stake) > 0;
+    const confirmation = isPaired
+        ? (hasStake
+            ? "Cancel this match before play starts? Both locked stakes will be refunded and both players will be notified."
+            : "Cancel this match before play starts? Both players will be notified.")
+        : (hasStake
+            ? "Cancel this search? Your locked stake will be refunded."
+            : "Cancel this search?");
+    if(!confirm(confirmation)) return;
+    const button = document.getElementById("cancelMatchButton");
     if(button){button.dataset.pending="true";button.disabled=true;button.textContent="CANCELLING…";}
     try{
         const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/cancel", { method:"POST", noRedirect:true });
@@ -1726,13 +1754,19 @@ async function cancelMatchSearch(){
         currentMatch.status = "cancelled";
         currentMatch.backendId = null;
         localStorage.removeItem("goalGambitCurrentMatch");
-        document.getElementById("matchStatus").textContent = "SEARCH CANCELLED · STAKE REFUNDED";
+        document.getElementById("matchStatus").textContent = isPaired
+            ? (Number(result.data.refundedPlayers) > 0 ? "MATCH CANCELLED · BOTH STAKES REFUNDED" : "MATCH CANCELLED")
+            : (Number(result.data.refundedPlayers) > 0 ? "SEARCH CANCELLED · STAKE REFUNDED" : "SEARCH CANCELLED");
         document.getElementById("pairingMessage").textContent = result.data.message || "Search cancelled.";
+        ["roomCodeCard", "readyCard", "resultCard", "screenshotCard", "verificationCard", "disputeCard"].forEach(id => {
+            const card = document.getElementById(id);
+            if(card) card.classList.add("hidden");
+        });
         updateCancelSearchButton();
     }catch(_){
-        alert("Could not reach the server. Your search is still active.");
+        alert("Could not reach the server. The match has not been confirmed as cancelled.");
     }finally{
-        if(button){delete button.dataset.pending;button.disabled=false;button.textContent="Cancel Search · Refund Stake";}
+        if(button){delete button.dataset.pending;button.disabled=false;}
         updateCancelSearchButton();
     }
 }
@@ -3350,7 +3384,7 @@ async function syncFromServer() {
     currentMatch.playerReady = !!m.yourReady;
     currentMatch.opponentReady = !!m.opponentReady;
     currentMatch.status = m.status;
-    if (m.status === "active" || (m.yourReady && m.opponentReady)) currentMatch.matchStarted = true;
+    currentMatch.matchStarted = ["playing", "awaiting_verification", "disputed", "completed"].includes(m.status) || !!(m.yourReady && m.opponentReady);
     currentMatch.resultSubmitted = !!(m.youAreCreator ? m.creator_submitted : m.opponent_submitted);
     currentMatch.serverMatch = m;
     if (m.status === "disputed") currentMatch.status = "disputed";
@@ -3360,7 +3394,12 @@ async function syncFromServer() {
         currentMatch.backendId = null;
         currentMatch.opponent = "Opponent";
     } else if (m.status === "cancelled") {
-        currentMatch.status = "completed";
+        currentMatch.status = "cancelled";
+        currentMatch.matchStarted = false;
+        currentMatch.cancelMessage = Number(m.stake_amount || 0) > 0
+            ? (m.opponentFound ? "The match was cancelled before play began. Both locked stakes were refunded." : "The search was cancelled. Your locked stake was refunded.")
+            : "The match was cancelled before play began.";
+        currentMatch.backendId = null;
     }
 
     if (["awaiting_verification", "disputed"].includes(m.status) || m.verificationStatus) {
@@ -3376,7 +3415,8 @@ async function syncFromServer() {
     }
 
     if (JSON.stringify(currentMatch) !== before) {
-        localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+        if (currentMatch.backendId) localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+        else localStorage.removeItem("goalGambitCurrentMatch");
         loadMatch();
     }
 
