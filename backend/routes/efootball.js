@@ -11,6 +11,7 @@ const { analyzeScreenshot, matchesExpected } = require("../services/imageverific
 module.exports = function (pool, authenticateToken) {
 
     const router = express.Router();
+    const SEARCH_PRESENCE_TTL_SECONDS = 120;
     const screenshotUpload = multer({
         storage: multer.memoryStorage(),
         limits: { fileSize: 8 * 1024 * 1024, files: 1 },
@@ -120,6 +121,79 @@ module.exports = function (pool, authenticateToken) {
                 matchId
             ]
         );
+    }
+
+    // A waiting row is matchable only while its creator is checking in from
+    // the Match Hub. Expired searches are cancelled with their locked stake
+    // returned, so closing a tab cannot leave a player in the queue forever.
+    async function expireStaleSearches(onlyUserId = null) {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const stale = await client.query(
+                `SELECT id, creator_id, stake_amount
+                   FROM efootball_matches
+                  WHERE status='waiting'
+                    AND opponent_id IS NULL
+                    AND (search_last_seen_at IS NULL OR search_last_seen_at < NOW() - ($1::int * INTERVAL '1 second'))
+                    AND ($2::int IS NULL OR creator_id=$2)
+                  ORDER BY COALESCE(search_last_seen_at, created_at), id
+                  LIMIT 100
+                  FOR UPDATE`,
+                [SEARCH_PRESENCE_TTL_SECONDS, onlyUserId]
+            );
+
+            for (const match of stale.rows) {
+                const stake = Number(match.stake_amount || 0);
+                if (stake > 0) {
+                    const refund = await client.query(
+                        `UPDATE wallets
+                            SET locked_balance=locked_balance-$1,
+                                balance=balance+$1,
+                                updated_at=NOW()
+                          WHERE user_id=$2 AND locked_balance >= $1
+                          RETURNING user_id`,
+                        [stake, match.creator_id]
+                    );
+                    if (!refund.rows.length) {
+                        throw new Error("Expired eFootball search stake could not be refunded safely.");
+                    }
+                    await client.query(
+                        `INSERT INTO transactions
+                            (user_id,transaction_type,amount,currency,status,reference,description)
+                         VALUES ($1,'match_refund',$2,'KES','completed',$3,'eFootball search expired - stake refunded')`,
+                        [match.creator_id, stake, "EF-SEARCH-EXPIRED-" + match.id]
+                    );
+                }
+
+                await client.query(
+                    `UPDATE efootball_matches
+                        SET status='cancelled', result_status='search_expired',
+                            finished_at=NOW(), settled_at=NOW()
+                      WHERE id=$1 AND status='waiting' AND opponent_id IS NULL`,
+                    [match.id]
+                );
+                await createSystemNotification(
+                    client,
+                    match.creator_id,
+                    "match_search_expired",
+                    "Match search expired",
+                    stake > 0
+                        ? "Your search expired after the Match Hub stopped checking in. Your locked stake was refunded."
+                        : "Your search expired after the Match Hub stopped checking in. Start a new search when ready.",
+                    match.id
+                );
+            }
+
+            await client.query("COMMIT");
+            return stale.rows.length;
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("eFootball search expiry failed:", error.message);
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     async function getMatchForUser(client, matchId, userId) {
@@ -438,6 +512,12 @@ module.exports = function (pool, authenticateToken) {
             return res.status(400).json({ success: false, message: "A valid tournament is required." });
         }
 
+        try {
+            await expireStaleSearches(userId);
+        } catch (_) {
+            return res.status(503).json({ success: false, message: "An expired search could not be cleared safely. Please retry shortly." });
+        }
+
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -500,6 +580,7 @@ module.exports = function (pool, authenticateToken) {
                     AND waiting.round_name IS NOT DISTINCT FROM $4
                     AND waiting.tournament_id IS NOT DISTINCT FROM $5
                     AND waiting.stake_amount=$6
+                    AND waiting.search_last_seen_at >= NOW() - ($7::int * INTERVAL '1 second')
                     AND waiting_player.account_status='active'
                     AND waiting_player.game IN ('konami','both')
                     AND NOT EXISTS (
@@ -509,7 +590,7 @@ module.exports = function (pool, authenticateToken) {
                            AND (other.creator_id=waiting.creator_id OR other.opponent_id=waiting.creator_id)
                     )
                   ORDER BY waiting.created_at, waiting.id LIMIT 1 FOR UPDATE OF waiting SKIP LOCKED`,
-                [userId, mode, league, roundName, tournamentId, stake]
+                [userId, mode, league, roundName, tournamentId, stake, SEARCH_PRESENCE_TTL_SECONDS]
             );
 
             if (candidate.rows.length) {
@@ -552,7 +633,7 @@ module.exports = function (pool, authenticateToken) {
             }
 
             const created = await client.query(
-                "INSERT INTO efootball_matches (creator_id,mode,league,round_name,tournament_id,stake_amount,room_code,status,creator_ready,opponent_ready,code_sent,creator_submitted,opponent_submitted) VALUES ($1,$2,$3,$4,$5,$6,$7,'waiting',FALSE,FALSE,FALSE,FALSE,FALSE) RETURNING id",
+                "INSERT INTO efootball_matches (creator_id,mode,league,round_name,tournament_id,stake_amount,room_code,status,creator_ready,opponent_ready,code_sent,creator_submitted,opponent_submitted,search_last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'waiting',FALSE,FALSE,FALSE,FALSE,FALSE,NOW()) RETURNING id",
                 [userId, mode, league, roundName, tournamentId, stake, roomCode()]
             );
             const matchId = created.rows[0].id;
@@ -628,6 +709,36 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
+    // Renew a waiting search only while the player is still checking in.
+    router.post("/matches/:id/heartbeat", authenticateToken, async (req, res) => {
+        const userId = Number(req.user.userId);
+        const matchId = Number(req.params.id);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid match ID." });
+        }
+        try {
+            const renewed = await pool.query(
+                `UPDATE efootball_matches
+                    SET search_last_seen_at=NOW()
+                  WHERE id=$1 AND creator_id=$2 AND status='waiting' AND opponent_id IS NULL
+                    AND search_last_seen_at >= NOW() - ($3::int * INTERVAL '1 second')
+                  RETURNING id`,
+                [matchId, userId, SEARCH_PRESENCE_TTL_SECONDS]
+            );
+            if (!renewed.rows.length) {
+                await expireStaleSearches(userId).catch(() => {});
+                return res.status(409).json({
+                    success: false,
+                    expired: true,
+                    message: "This search is no longer active. Any unmatched stake is being refunded; start a new search when ready."
+                });
+            }
+            return res.json({ success: true, expiresInSeconds: SEARCH_PRESENCE_TTL_SECONDS });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: "Unable to renew this match search." });
+        }
+    });
+
     /* =====================================================
        GET MATCH
        ===================================================== */
@@ -684,6 +795,11 @@ module.exports = function (pool, authenticateToken) {
         const matchId = Number(req.params.id);
         if (!Number.isSafeInteger(matchId) || matchId <= 0) {
             return res.status(400).json({ success: false, message: "Invalid match ID." });
+        }
+        try {
+            await expireStaleSearches();
+        } catch (_) {
+            return res.status(503).json({ success: false, message: "Expired searches could not be cleared safely. Please retry shortly." });
         }
         const client = await pool.connect();
         try {
@@ -1520,9 +1636,13 @@ module.exports = function (pool, authenticateToken) {
     );
 
 
+    const searchExpiryTimer = setInterval(() => {
+        expireStaleSearches().catch(() => {});
+    }, 15000);
+    if (typeof searchExpiryTimer.unref === "function") searchExpiryTimer.unref();
+
     return router;
 };
-
 
 
 
