@@ -142,7 +142,9 @@ button:disabled{opacity:.55;cursor:not-allowed}
         formWrap.classList.remove("hidden");
         summary.classList.add("hidden");
       }
-      document.getElementById("screenshotCard").classList.add("hidden");
+      document.getElementById("screenshotCard").classList.remove("hidden");
+      document.getElementById("screenshotMessage").textContent = "Screenshot upload unlocks here after both players submit their scores. Only the selected player can upload it.";
+      document.getElementById("uploadArea").classList.add("hidden");
       return;
     }
 
