@@ -103,6 +103,9 @@
 
         <div id="statusBar" class="status-bar" aria-live="polite">
             <span id="turnMessage">Connecting to chess server…</span>
+            <button id="cancelSearchButton" class="control-button cancel-search hidden" type="button" hidden>
+                Cancel Search · Refund Stake
+            </button>
         </div>
 
 
@@ -112,15 +115,17 @@
             <button
                 id="drawButton"
                 class="control-button"
-                type="button">
+                type="button"
+                hidden>
                 Offer Draw
             </button>
 
             <button
                 id="resignButton"
                 class="control-button resign"
-                type="button">
-                Resign
+                type="button"
+                hidden>
+                Resign Match
             </button>
 
         </div>
@@ -315,3 +320,4 @@
 
 </body>
 </html>
+
