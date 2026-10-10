@@ -1878,7 +1878,9 @@ function renderStats() {
     document.getElementById(
         "gamesPlayed"
     ).textContent =
-        records.length;
+        records.filter(function (record) {
+            return String(record.status || "").toLowerCase() !== "cancelled";
+        }).length;
 
 
     document.getElementById(
@@ -2233,13 +2235,58 @@ updateDashboard();
 function openDeposit()  { location.href = "wallet.html"; }
 function openWithdraw() { location.href = "wallet.html"; }
 
+function mapServerKonamiMatch(match) {
+    function scoreOrNull(value) {
+        if (value === null || value === undefined || value === "") return null;
+        const score = Number(value);
+        return Number.isFinite(score) ? score : null;
+    }
+
+    const ownReported = scoreOrNull(match.youAreCreator
+        ? match.creator_submitted_score
+        : match.opponent_submitted_score);
+    const opponentReported = scoreOrNull(match.youAreCreator
+        ? match.creator_submitted_opponent_score
+        : match.opponent_submitted_opponent_score);
+    const ownFinal = scoreOrNull(match.youAreCreator ? match.creator_score : match.opponent_score);
+    const opponentFinal = scoreOrNull(match.youAreCreator ? match.opponent_score : match.creator_score);
+    const ownScore = match.status === "completed" ? ownFinal : ownReported;
+    const rivalScore = match.status === "completed" ? opponentFinal : opponentReported;
+    const hasScores = ownScore !== null && rivalScore !== null;
+    let result = "Under review";
+
+    if (match.status === "completed" && hasScores) {
+        result = ownScore > rivalScore ? "Win" : ownScore < rivalScore ? "Loss" : "Draw";
+    } else if (match.status === "disputed") {
+        result = "Disputed · review";
+    } else if (match.status === "cancelled") {
+        result = "Cancelled";
+    }
+
+    return {
+        id: match.id,
+        date: match.finished_at || match.created_at,
+        mode: match.league ? match.league + " League" :
+            String(match.mode || "Ranked").replace(/\b\w/g, function (c) { return c.toUpperCase(); }),
+        opponent: match.opponentName || "Opponent",
+        playerScore: ownScore,
+        opponentScore: rivalScore,
+        score: hasScores ? ownScore + " - " + rivalScore : "—",
+        result: result,
+        status: match.status
+    };
+}
+
 async function loadKonamiData() {
     const user = await GG.initDashboard("konami");
     if (!user) return;
 
     const history = await GG.api("/api/efootball/matches/history/mine");
-    if (history.ok && Array.isArray(history.data.games)) {
-        localStorage.setItem("goalGambitGameRecords", JSON.stringify(history.data.games));
+    if (history.ok && Array.isArray(history.data.matches)) {
+        localStorage.setItem(
+            "goalGambitGameRecords",
+            JSON.stringify(history.data.matches.map(mapServerKonamiMatch))
+        );
     }
 
     const tx = await GG.api("/api/wallet/transactions?limit=50");
@@ -2273,8 +2320,17 @@ setInterval(function () { GG.refreshBalance(); }, 10000);
 window.addEventListener("pageshow", function (e) { if (e.persisted) loadKonamiData(); });
 </script>
 <script>
-async function loadLiveKonami(){const r=await GG.api("/api/efootball/dashboard");if(!r.ok||!r.data.success)return;const d=r.data;if(d.wallet){GG.fillBalance(Number(d.wallet.balance||0));const b=document.getElementById("balance");if(b)b.textContent=GG.formatMoney(d.wallet.balance);}const records=d.history||[],rb=document.getElementById("recordsBody");if(rb)rb.innerHTML=records.length?records.slice(0,20).map(x=>`<tr><td>${x.date?new Date(x.date).toLocaleDateString():"-"}</td><td>${GG.escapeHTML(x.mode||"-")}</td><td>${GG.escapeHTML(x.opponent||"-")}</td><td>${x.playerScore} - ${x.opponentScore}</td><td>${GG.escapeHTML(x.result||"-")}</td></tr>`).join(""):`<tr><td colspan="5" class="no-records">No games recorded yet.</td></tr>`;let w=0,dr=0,l=0;records.forEach(x=>{if(x.result==="win")w++;else if(x.result==="draw")dr++;else if(x.result==="loss")l++;});["gamesPlayed","wins","draws","losses"].forEach((id,i)=>{const e=document.getElementById(id);if(e)e.textContent=[records.length,w,dr,l][i];});const tx=document.getElementById("transactions"),ts=d.transactions||[];if(tx)tx.innerHTML=ts.length?ts.slice(0,20).map(t=>`<div class="transaction"><span>${GG.escapeHTML(t.description||t.type)}</span><strong>${GG.formatMoney(t.amount)}</strong></div>`).join(""):`<div class="no-records">No wallet transactions yet.</div>`;const box=document.getElementById("activeMatch"),at=document.getElementById("activeMatchText");if(box&&at){box.style.display=d.activeMatchId?"block":"none";if(d.activeMatchId)at.textContent="Match #"+d.activeMatchId+" is active — open Match Hub";}}
-loadLiveKonami();setInterval(loadLiveKonami,3000);
+async function loadLiveKonami() {
+    const r = await GG.api("/api/efootball/matches/history/mine");
+    if (!r.ok || !Array.isArray(r.data.matches)) return;
+
+    const records = r.data.matches.map(mapServerKonamiMatch);
+    localStorage.setItem("goalGambitGameRecords", JSON.stringify(records));
+    if (typeof updateDashboard === "function") updateDashboard();
+}
+
+loadLiveKonami();
+setInterval(loadLiveKonami, 15000);loadLiveKonami();setInterval(loadLiveKonami,3000);
 </script>
 </body>
 
