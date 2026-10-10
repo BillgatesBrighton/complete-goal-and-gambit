@@ -28,6 +28,19 @@ ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user';
 ALTER TABLE users ALTER COLUMN account_status SET DEFAULT 'active';
 
 
+CREATE TABLE IF NOT EXISTS password_reset_codes (
+    user_id           INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    code_hash         VARCHAR(64) NOT NULL,
+    expires_at        TIMESTAMPTZ NOT NULL,
+    attempts          INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    requested_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    request_count     INTEGER NOT NULL DEFAULT 1 CHECK (request_count >= 1),
+    consumed_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_codes_expiry
+    ON password_reset_codes(expires_at);
+
 CREATE TABLE IF NOT EXISTS wallets (
     id              SERIAL PRIMARY KEY,
     user_id         INTEGER       NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -187,6 +200,9 @@ CREATE TABLE IF NOT EXISTS efootball_matches (
     round_name           VARCHAR(50),
     stake_amount         NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (stake_amount >= 0),
     room_code            VARCHAR(20) NOT NULL UNIQUE,
+    room_code_revision   INTEGER NOT NULL DEFAULT 0 CHECK (room_code_revision >= 0),
+    code_correction_requested_at TIMESTAMPTZ,
+    code_correction_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     status               VARCHAR(20) NOT NULL DEFAULT 'waiting',
     creator_ready        BOOLEAN NOT NULL DEFAULT FALSE,
     opponent_ready       BOOLEAN NOT NULL DEFAULT FALSE,
@@ -283,6 +299,67 @@ CREATE INDEX IF NOT EXISTS idx_system_notifications_user
 CREATE INDEX IF NOT EXISTS idx_system_notifications_unread
     ON system_notifications(user_id, read_at)
     WHERE read_at IS NULL;
+-- Authenticated, multi-device Web Push subscriptions and durable delivery history.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id                  BIGSERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint            TEXT NOT NULL UNIQUE,
+    p256dh              TEXT NOT NULL,
+    auth                TEXT NOT NULL,
+    expiration_time     TIMESTAMPTZ,
+    user_agent          VARCHAR(300),
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active
+    ON push_subscriptions(user_id, active);
+
+CREATE TABLE IF NOT EXISTS push_notification_events (
+    id                  BIGSERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    match_id            BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL,
+    event_key           VARCHAR(180) NOT NULL,
+    title               VARCHAR(160) NOT NULL,
+    body                VARCHAR(240) NOT NULL,
+    target_path         VARCHAR(300) NOT NULL,
+    clicked_at          TIMESTAMPTZ,
+    click_action        VARCHAR(30),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_push_events_user_created
+    ON push_notification_events(user_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS push_delivery_jobs (
+    id                  BIGSERIAL PRIMARY KEY,
+    event_id            BIGINT NOT NULL REFERENCES push_notification_events(id) ON DELETE CASCADE,
+    subscription_id     BIGINT NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+    status              VARCHAR(20) NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued', 'sending', 'accepted', 'failed')),
+    attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at         TIMESTAMPTZ,
+    last_http_status    INTEGER,
+    last_error          VARCHAR(240),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(event_id, subscription_id)
+);
+CREATE INDEX IF NOT EXISTS idx_push_jobs_pending
+    ON push_delivery_jobs(status, next_attempt_at, id)
+    WHERE status IN ('queued', 'sending');
+
+CREATE TABLE IF NOT EXISTS push_delivery_attempts (
+    id                  BIGSERIAL PRIMARY KEY,
+    job_id              BIGINT NOT NULL REFERENCES push_delivery_jobs(id) ON DELETE CASCADE,
+    attempt_number      INTEGER NOT NULL CHECK (attempt_number > 0),
+    outcome             VARCHAR(20) NOT NULL,
+    http_status         INTEGER,
+    error_summary       VARCHAR(240),
+    attempted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(job_id, attempt_number)
+);
 
 
 -- ======================================================
@@ -298,6 +375,11 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS creator_submitted_opponen
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_submitted_score INTEGER;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_submitted_opponent_score INTEGER;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS external_room_code VARCHAR(50);
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS room_code_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_id BIGINT REFERENCES efootball_tournaments(id) ON DELETE SET NULL;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
@@ -367,8 +449,92 @@ CREATE TABLE IF NOT EXISTS complaints (
     resolved_at TIMESTAMPTZ
 );
 ALTER TABLE complaints ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS complaint_ref VARCHAR(40);
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS match_id BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS priority VARCHAR(20) NOT NULL DEFAULT 'normal';
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS resolution_reason TEXT;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'support';
+UPDATE complaints SET complaint_ref = 'GG-' || LPAD(id::text, 10, '0') WHERE complaint_ref IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_complaints_reference ON complaints(complaint_ref);
 CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_complaints_reporter ON complaints(reporter_id);
+CREATE INDEX IF NOT EXISTS idx_complaints_match ON complaints(match_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_case_events (
+    id BIGSERIAL PRIMARY KEY,
+    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_role VARCHAR(20) NOT NULL,
+    event_type VARCHAR(50) NOT NULL,
+    from_status VARCHAR(30),
+    to_status VARCHAR(30),
+    message TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_complaint_case_events_case
+    ON complaint_case_events(complaint_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_admin_notes (
+    id BIGSERIAL PRIMARY KEY,
+    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    note TEXT NOT NULL CHECK (length(trim(note)) BETWEEN 1 AND 4000),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_complaint_admin_notes_case
+    ON complaint_admin_notes(complaint_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_evidence_requests (
+    id BIGSERIAL PRIMARY KEY,
+    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    request_type VARCHAR(20) NOT NULL CHECK (request_type IN ('evidence','clarification')),
+    message TEXT NOT NULL CHECK (length(trim(message)) BETWEEN 1 AND 2000),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    fulfilled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_complaint_evidence_requests_case
+    ON complaint_evidence_requests(complaint_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_evidence (
+    id BIGSERIAL PRIMARY KEY,
+    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    match_id BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL,
+    verification_id BIGINT REFERENCES efootball_result_verifications(id) ON DELETE SET NULL,
+    request_id BIGINT REFERENCES complaint_evidence_requests(id) ON DELETE SET NULL,
+    uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    storage_key VARCHAR(64) NOT NULL UNIQUE,
+    mime_type VARCHAR(40) NOT NULL CHECK (mime_type IN ('image/jpeg','image/png','image/webp')),
+    byte_size INTEGER NOT NULL CHECK (byte_size BETWEEN 1 AND 8388608),
+    purpose VARCHAR(40) NOT NULL DEFAULT 'complaint',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_complaint_evidence_case
+    ON complaint_evidence(complaint_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_complaint_evidence_match
+    ON complaint_evidence(match_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS efootball_result_corrections (
+    id BIGSERIAL PRIMARY KEY,
+    match_id BIGINT NOT NULL REFERENCES efootball_matches(id) ON DELETE RESTRICT,
+    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE RESTRICT,
+    admin_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    old_creator_score INTEGER,
+    old_opponent_score INTEGER,
+    old_winner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    new_creator_score INTEGER NOT NULL,
+    new_opponent_score INTEGER NOT NULL,
+    new_winner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reason TEXT NOT NULL CHECK (length(trim(reason)) >= 10),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(complaint_id)
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_result_corrections_match
+    ON efootball_result_corrections(match_id, created_at DESC);
 
 
 -- ============================================================
