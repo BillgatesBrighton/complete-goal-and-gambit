@@ -169,8 +169,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
         document.getElementById("submitScoreButton").textContent = "Submit my result";
       }
       document.getElementById("screenshotCard").classList.remove("hidden");
-      document.getElementById("screenshotMessage").textContent = "Select the final score screenshot here. After both score reports are submitted, the selected player can upload it from this page.";
-      document.getElementById("uploadHelp").textContent = "Choose a clear JPEG, PNG, or WebP final score-screen screenshot (8 MB maximum). The upload button appears if you are selected after both reports arrive.";
+      document.getElementById("screenshotMessage").textContent = "If the two score reports match, the result settles automatically. If they differ, the selected player can upload a screenshot here for admin review.";
+      document.getElementById("uploadHelp").textContent = "For a disputed result, upload a clear JPEG, PNG, or WebP final score-screen screenshot (8 MB maximum). One player is selected after both reports arrive.";
             document.getElementById("uploadArea").classList.add("hidden");
       document.getElementById("uploadButton").classList.add("hidden");
       document.getElementById("uploadButton").disabled = true;
@@ -179,7 +179,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
     var canCorrect = isVerification(m) && canEditScore(m);
     if(canCorrect){
-      statusNode.textContent = "Both score reports are saved. You can correct your report until the screenshot is uploaded.";
+      statusNode.textContent = "The reports differ. Correct your scores to match, or provide the requested screenshot for admin review.";
       formWrap.classList.remove("hidden");
       summary.classList.remove("hidden");
       var correctionYourInput = document.getElementById("yourScore");
