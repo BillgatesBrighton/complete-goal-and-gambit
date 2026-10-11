@@ -157,7 +157,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
       document.getElementById("screenshotCard").classList.remove("hidden");
       document.getElementById("screenshotMessage").textContent = "Select the final score screenshot here. After both score reports are submitted, the selected player can upload it from this page.";
       document.getElementById("uploadHelp").textContent = "Choose a clear JPEG, PNG, or WebP final score-screen screenshot (8 MB maximum). The upload button appears if you are selected after both reports arrive.";
-      document.getElementById("uploadArea").classList.remove("hidden");
+            document.getElementById("uploadArea").classList.add("hidden");
       document.getElementById("uploadButton").classList.add("hidden");
       document.getElementById("uploadButton").disabled = true;
       return;
