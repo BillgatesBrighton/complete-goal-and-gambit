@@ -69,7 +69,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
       <div id="codeBox" class="notice hidden">
         <div class="muted">eFOOTBALL ROOM CODE</div>
         <div id="receivedCode" class="code"></div>
-        <p class="muted">Join this room in eFootball, then confirm below.</p>
+        <p class="muted">Join this room in eFootball, then confirm receipt below.</p><button id="receivedButton" type="button">I RECEIVED THE CODE</button><p id="receiptStatus" class="muted" aria-live="polite"></p>
       </div>
     </section>
 
@@ -85,7 +85,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     </section>
 
     <div class="row">
-      <a class="button secondary" href="https://www.konami.com/efootball/" target="_blank" rel="noopener">Open eFootball</a>
+      <!-- Open the installed eFootball app manually; this page does not launch it. -->
       <button id="cancelButton" class="danger hidden" type="button">Cancel match</button>
       <a class="button secondary" href="konami.html">Back to dashboard</a>
     </div>
@@ -266,13 +266,13 @@ button:disabled{opacity:.55;cursor:not-allowed}
     document.getElementById("receiverWaiting").classList.toggle("hidden", !!m.codeSent);
     document.getElementById("codeBox").classList.toggle("hidden", !m.codeSent || !!m.youAreSender);
     document.getElementById("receivedCode").textContent = !m.youAreSender && m.codeSent ? (m.room_code || "") : "";
-    document.getElementById("readyPanel").classList.toggle("hidden", !m.codeSent);
+    document.getElementById("readyPanel").classList.toggle("hidden", !m.codeReceived);document.getElementById("receivedButton").classList.toggle("hidden", !m.codeSent || !!m.youAreSender || !!m.codeReceived);document.getElementById("receiptStatus").textContent=m.codeReceived?"Room code received successfully.":(m.youAreSender?"Waiting for receiver to confirm receipt.":"Copy the code, join the room in eFootball, then confirm receipt.");
     document.getElementById("yourReady").textContent = m.yourReady ? "Ready" : "Not ready";
     document.getElementById("opponentReady").textContent = m.opponentReady ? "Ready" : "Waiting";
     document.getElementById("matchState").textContent = m.status === "playing" ? "In progress" : "Waiting for both players";
     var readyButton = document.getElementById("readyButton");
-    readyButton.disabled = !!m.yourReady || !m.codeSent;
-    readyButton.textContent = m.yourReady ? "✓ You are ready" : (m.youAreSender ? "I created the room and I’m ready" : "I received the code and I’m ready");
+    readyButton.disabled = !!m.yourReady || !m.codeReceived;
+    readyButton.textContent = m.yourReady ? "✓ You are ready" : "I’m Ready";
   }
 
   async function load(){
@@ -321,8 +321,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
     await load();
   });
 
-  document.getElementById("readyButton").addEventListener("click", async function(){
-    if(!id || !lastMatch || !lastMatch.codeSent) return;
+  document.getElementById("receivedButton").addEventListener("click",async function(){if(!id||!lastMatch||lastMatch.youAreSender||lastMatch.codeReceived||!lastMatch.codeSent)return;var button=this;button.disabled=true;showError("");try{var result=await GG.api("/api/efootball/matches/"+encodeURIComponent(id)+"/code-received",{method:"POST",body:{},noRedirect:true});if(!result.ok){showError(result.data.message||"Could not confirm receipt.");button.disabled=false;return;}await load();}catch(_){showError("Could not reach the server. Receipt was not confirmed.");button.disabled=false;}});document.getElementById("readyButton").addEventListener("click", async function(){
+    if(!id || !lastMatch || !lastMatch.codeReceived) return;
     var button = this;
     button.disabled = true;
     showError("");
