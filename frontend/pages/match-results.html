@@ -45,8 +45,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
     <div id="scoreFormWrap" class="hidden">
       <form id="scoreForm">
         <div class="grid">
-          <div><label for="yourScore">Your goals</label><input id="yourScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
-          <div><label for="opponentScore">Opponent’s goals</label><input id="opponentScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
+          <div><label id="yourScoreLabel" for="yourScore">Your account goals</label><input id="yourScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
+          <div><label id="opponentScoreLabel" for="opponentScore">Opponent account goals</label><input id="opponentScore" type="number" inputmode="numeric" min="0" max="99" step="1" required></div>
         </div>
         <button id="submitScoreButton" type="submit">Submit my result</button>
       </form>
@@ -103,6 +103,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
     return isTrue(submitted) || (score !== null && score !== undefined && score !== "");
   }
   function otherSubmitted(m){ return isTrue(isCreator(m) ? m.opponent_submitted : m.creator_submitted); }
+  function ownScore(m){ return isCreator(m) ? (m.creator_submitted_score ?? m.creator_score) : (m.opponent_submitted_score ?? m.opponent_score); }
+  function ownAgainst(m){ return isCreator(m) ? (m.creator_submitted_opponent_score ?? m.opponent_score) : (m.opponent_submitted_opponent_score ?? m.creator_score); }
   function canUpload(m){ return isVerification(m) && isTrue(m.youMustUploadScreenshot); }
 
   function render(m){
@@ -116,6 +118,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
     var statusText = "Match state: " + String(m.status || "unknown").replace(/_/g," ");
     var scoreCheck = String(m.scoreCheck || "").toLowerCase();
     document.getElementById("detailStatus").textContent = statusText;
+    document.getElementById("yourScoreLabel").textContent = (m.yourName || "Your account") + " goals";
+    document.getElementById("opponentScoreLabel").textContent = (m.opponentName || "Opponent account") + " goals";
 
     if(m.status === "completed"){
       var ownFinal = isCreator(m) ? m.creator_score : m.opponent_score;
@@ -142,17 +146,23 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
     if(m.status === "playing"){
       if(ownSubmitted(m)){
-        statusNode.textContent = otherSubmitted(m) ? "Both scores received · checking result…" : "Your result is saved · waiting for your opponent";
-        formWrap.classList.add("hidden");
+        statusNode.textContent = otherSubmitted(m)
+          ? "Both players have reported a score. You can correct yours while the match is open."
+          : "Your result is saved. You can correct it while waiting for your opponent.";
+        formWrap.classList.remove("hidden");
         summary.classList.remove("hidden");
-        var ownScore = isCreator(m) ? m.creator_submitted_score : m.opponent_submitted_score;
-        var againstScore = isCreator(m) ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score;
-        document.getElementById("yourReport").textContent = score(ownScore) + " – " + score(againstScore);
+        var yourInput = document.getElementById("yourScore");
+        var opponentInput = document.getElementById("opponentScore");
+        if(document.activeElement !== yourInput && yourInput.value === "" && ownScore(m) != null) yourInput.value = String(ownScore(m));
+        if(document.activeElement !== opponentInput && opponentInput.value === "" && ownAgainst(m) != null) opponentInput.value = String(ownAgainst(m));
+        document.getElementById("submitScoreButton").textContent = "Update my score report";
+        document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
         document.getElementById("opponentReport").textContent = otherSubmitted(m) ? "Your opponent has also submitted a result." : "Waiting for the other player’s result.";
       } else {
-        statusNode.textContent = "Match in progress · enter the final score";
+        statusNode.textContent = "Match in progress · enter the final score for each named player";
         formWrap.classList.remove("hidden");
         summary.classList.add("hidden");
+        document.getElementById("submitScoreButton").textContent = "Submit my result";
       }
       document.getElementById("screenshotCard").classList.remove("hidden");
       document.getElementById("screenshotMessage").textContent = "Select the final score screenshot here. After both score reports are submitted, the selected player can upload it from this page.";
@@ -239,7 +249,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
   document.getElementById("scoreForm").addEventListener("submit", async function(event){
     event.preventDefault();
-    if(!id || !latest || latest.status !== "playing" || ownSubmitted(latest)) return;
+    if(!id || !latest || latest.status !== "playing") return;
     var yourScore = Number(document.getElementById("yourScore").value);
     var opponentScore = Number(document.getElementById("opponentScore").value);
     if(!Number.isInteger(yourScore) || !Number.isInteger(opponentScore) || yourScore < 0 || opponentScore < 0 || yourScore > 99 || opponentScore > 99){

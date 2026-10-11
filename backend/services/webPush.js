@@ -57,12 +57,20 @@ async function enqueueNotification(client, userId, notification) {
     const inserted = await client.query(
         `INSERT INTO push_notification_events
             (user_id, match_id, event_key, title, body, target_path)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (user_id, event_key) DO NOTHING
+         SELECT $1, $2, $3, $4, $5, $6
+          WHERE NOT EXISTS (
+              SELECT 1 FROM push_notification_events
+               WHERE user_id=$1 AND event_key=$3
+          )
+         ON CONFLICT DO NOTHING
          RETURNING id`,
         [recipientId, matchId, eventKey, title, body, targetPath]
     );
     let eventId = inserted.rows[0] && Number(inserted.rows[0].id);
+    if (!eventId) {
+        const existing = await client.query("SELECT id FROM push_notification_events WHERE user_id=$1 AND event_key=$2", [recipientId, eventKey]);
+        eventId = existing.rows[0] && Number(existing.rows[0].id);
+    }
     if (!eventId) {
         const existing = await client.query(
             "SELECT id FROM push_notification_events WHERE user_id=$1 AND event_key=$2",
@@ -74,9 +82,13 @@ async function enqueueNotification(client, userId, notification) {
     if (inserted.rows.length) {
         await client.query(
             `INSERT INTO push_delivery_jobs (event_id, subscription_id)
-             SELECT $1, id FROM push_subscriptions
-              WHERE user_id=$2 AND active=TRUE
-             ON CONFLICT (event_id, subscription_id) DO NOTHING`,
+             SELECT $1, s.id FROM push_subscriptions s
+              WHERE s.user_id=$2 AND s.active=TRUE
+                AND NOT EXISTS (
+                    SELECT 1 FROM push_delivery_jobs j
+                     WHERE j.event_id=$1 AND j.subscription_id=s.id
+                )
+             ON CONFLICT DO NOTHING`,
             [eventId, recipientId]
         );
     }

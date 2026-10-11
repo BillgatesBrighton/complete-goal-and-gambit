@@ -123,24 +123,31 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             [userId, type, title, message, matchId]
         );
 
-        // Enqueue in the same database transaction as the in-app alert so the
-        // user's subscribed devices receive the same match update in background.
+        // Push delivery is non-critical; a push queue schema mismatch must not roll back the in-app alert or match update.
         if (pushService && typeof pushService.enqueueNotification === "function" &&
             pushService.status().configured && inserted.rows[0]) {
-            const notificationType = String(type || "");
-            const page = /result|screenshot|disput|verif|review/i.test(notificationType)
-                ? "match-results"
-                : (/search_expired/i.test(notificationType) || !matchId ? "match-hub" : "match-room");
-            const pushType = notificationType === "room_code_sender"
-                ? "room-code-needed"
-                : (notificationType === "room_code" ? "room-code-sent" : "efootball-system");
-            await pushService.enqueueNotification(client, Number(userId), {
-                eventKey: pushType + ":" + String(inserted.rows[0].id),
-                title: title,
-                body: message,
-                matchId: matchId,
-                page: page
-            });
+            await client.query("SAVEPOINT efootball_push_enqueue");
+            try {
+                const notificationType = String(type || "");
+                const page = /result|screenshot|disput|verif|review/i.test(notificationType)
+                    ? "match-results"
+                    : (/search_expired/i.test(notificationType) || !matchId ? "match-hub" : "match-room");
+                const pushType = notificationType === "room_code_sender"
+                    ? "room-code-needed"
+                    : (notificationType === "room_code" ? "room-code-sent" : "efootball-system");
+                await pushService.enqueueNotification(client, Number(userId), {
+                    eventKey: pushType + ":" + String(inserted.rows[0].id),
+                    title: title,
+                    body: message,
+                    matchId: matchId,
+                    page: page
+                });
+                await client.query("RELEASE SAVEPOINT efootball_push_enqueue");
+            } catch (error) {
+                await client.query("ROLLBACK TO SAVEPOINT efootball_push_enqueue").catch(() => {});
+                await client.query("RELEASE SAVEPOINT efootball_push_enqueue").catch(() => {});
+                console.error("eFootball push enqueue failed:", error.message);
+            }
         }
     }
 
@@ -1238,10 +1245,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({ success: false, message: "Results can be submitted after both players are ready and the match is playing." });
             }
-            if ((isCreator && match.creator_submitted) || (isOpponent && match.opponent_submitted)) {
-                await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "You have already submitted your result." });
-            }
+            // Allow a player to correct or retry their own score while the match is still playing.
 
             if (isCreator) {
                 await client.query(
