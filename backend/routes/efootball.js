@@ -1277,7 +1277,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     : (randomInt(0, 2) === 0 ? Number(current.creator_id) : Number(current.opponent_id));
 
             await client.query(
-                "INSERT INTO efootball_result_verifications (match_id,selected_player_id,status,score_check) VALUES ($1,$2,'pending_screenshot',$3) ON CONFLICT (match_id) DO UPDATE SET selected_player_id=EXCLUDED.selected_player_id,status='pending_screenshot',score_check=EXCLUDED.score_check",
+                "INSERT INTO efootball_result_verifications (match_id,selected_player_id,status,score_check) VALUES ($1,$2,'pending_screenshot',$3)  ",
                 [matchId, selectedPlayerId, agreed ? "awaiting_screenshot" : "disputed"]
             );
 
