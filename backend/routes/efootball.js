@@ -1298,6 +1298,17 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 throw new Error("Could not select a valid screenshot uploader for this match.");
             }
 
+            // Only mismatched first-round reports reach round 2. If the selected
+            // uploader is submitting round 2, save the screenshot first so any
+            // resulting admin dispute always has its evidence attached.
+            if (roundNo === 2 && userId === Number(selected.selected_player_id) && !selected.screenshot_path) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({
+                    success: false,
+                    message: "Upload the match screenshot before submitting your second-round score. Admin will receive the screenshot if the second reports also differ."
+                });
+            }
+
             const prior = await client.query(
                 "SELECT score_for,score_against FROM efootball_result_reports WHERE match_id=$1 AND user_id=$2 AND round_no=$3",
                 [matchId, userId, roundNo]
@@ -1419,9 +1430,16 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return "Round " + Number(report.round_no) + " - " + report.username + ": " +
                     Number(report.score_for) + "-" + Number(report.score_against);
             });
+            if (!selected.screenshot_path) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({
+                    success: false,
+                    message: "Admin review cannot open without the selected player's match screenshot. Upload it and refresh the result page."
+                });
+            }
             const description = "The players submitted different score reports in both rounds. The result and locked stake are on hold for admin review.\n\n" +
                 reportLines.join("\n") +
-                (selected.screenshot_path ? "\n\nA match screenshot is attached to the verification record." : "\n\nThe selected uploader can still add the match screenshot from the match results page.");
+                "\n\nA match screenshot is attached to the verification record.";
             const complaintRef = "GG-" + randomUUID().replace(/-/g, "").slice(0, 24).toUpperCase();
             const existingCase = await client.query(
                 "SELECT id,complaint_ref FROM complaints WHERE match_id=$1 AND source='efootball_result_dispute' ORDER BY id DESC LIMIT 1 FOR UPDATE",
@@ -1450,7 +1468,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 [userId, matchId]
             );
             await client.query(
-                "UPDATE efootball_result_verifications SET status=CASE WHEN screenshot_path IS NULL THEN 'pending_screenshot' ELSE 'review_required' END,score_check='disputed' WHERE match_id=$1",
+                "UPDATE efootball_result_verifications SET status='review_required',score_check='disputed' WHERE match_id=$1",
                 [matchId]
             );
             const disputeMessage = "The second score reports also differ. Admin case " + caseRow.complaint_ref + " is open; the result and any locked stake remain on hold.";

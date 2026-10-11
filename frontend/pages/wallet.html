@@ -576,7 +576,9 @@ var TYPE_LABELS = {
 
     match_winnings: "Match Winnings",
 
-    match_loss: "Match Loss"
+    match_loss: "Match Loss",
+
+    stake_forfeiture: "Disputed Stake Transferred"
 
 };
 
@@ -810,7 +812,8 @@ async function loadTransactions() {
 
                 if (
                     t.type === "match_loss" ||
-                    t.type === "stake_lock"
+                    t.type === "stake_lock" ||
+                    t.type === "stake_forfeiture"
                 ) {
 
                     className = "match-loss";

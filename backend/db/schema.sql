@@ -568,6 +568,54 @@ CREATE TABLE IF NOT EXISTS efootball_result_corrections (
 CREATE INDEX IF NOT EXISTS idx_efootball_result_corrections_match
     ON efootball_result_corrections(match_id, created_at DESC);
 
+-- Dedicated administrator wallet. Funds may enter only through audited
+-- administrator dispute resolutions; no player deposit route targets it.
+CREATE TABLE IF NOT EXISTS admin_wallets (
+    admin_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
+    balance     NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (balance >= 0),
+    currency    VARCHAR(3) NOT NULL DEFAULT 'KES',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_wallet_transactions (
+    id              BIGSERIAL PRIMARY KEY,
+    admin_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    transaction_type VARCHAR(40) NOT NULL,
+    amount          NUMERIC(12,2) NOT NULL,
+    currency        VARCHAR(3) NOT NULL DEFAULT 'KES',
+    status          VARCHAR(20) NOT NULL DEFAULT 'completed',
+    reference       VARCHAR(120) NOT NULL UNIQUE,
+    description     TEXT,
+    complaint_id    BIGINT REFERENCES complaints(id) ON DELETE RESTRICT,
+    match_id        BIGINT REFERENCES efootball_matches(id) ON DELETE RESTRICT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_wallet_transactions_recent
+    ON admin_wallet_transactions(admin_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS admin_mpesa_payouts (
+    reference                  VARCHAR(120) PRIMARY KEY REFERENCES admin_wallet_transactions(reference) ON DELETE CASCADE,
+    admin_id                   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    recipient_phone            VARCHAR(15) NOT NULL,
+    callback_token_hash        CHAR(64) NOT NULL UNIQUE,
+    status                     VARCHAR(20) NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending', 'completed', 'failed')),
+    provider_status            VARCHAR(20) NOT NULL DEFAULT 'requesting'
+                               CHECK (provider_status IN ('requesting', 'accepted', 'unknown', 'completed', 'failed')),
+    originator_conversation_id VARCHAR(120) UNIQUE,
+    conversation_id            VARCHAR(120),
+    result_code                VARCHAR(40),
+    result_description         TEXT,
+    receipt                    VARCHAR(80),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    settled_at                 TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_mpesa_payout_one_pending
+    ON admin_mpesa_payouts(admin_id)
+    WHERE status='pending';
+
 
 -- ============================================================
 -- ADMIN ANNOUNCEMENTS (ADMIN -> ALL USERS)

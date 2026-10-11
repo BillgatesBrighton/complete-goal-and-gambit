@@ -116,9 +116,10 @@ function createMpesaB2c(pool) {
         return configurationIssue() === null;
     }
 
-    async function updateProviderState(reference, state, response) {
+    async function updateProviderState(reference, state, response, walletType) {
+        const payoutTable = walletType === "admin" ? "admin_mpesa_payouts" : "mpesa_payouts";
         await pool.query(
-            "UPDATE mpesa_payouts SET provider_status=$1, originator_conversation_id=COALESCE(originator_conversation_id, $2), conversation_id=COALESCE($3, conversation_id), updated_at=NOW() WHERE reference=$4 AND status='pending'",
+            `UPDATE ${payoutTable} SET provider_status=$1, originator_conversation_id=COALESCE(originator_conversation_id, $2), conversation_id=COALESCE($3, conversation_id), updated_at=NOW() WHERE reference=$4 AND status='pending'`,
             [
                 state,
                 safeText(response && response.OriginatorConversationID, 120) || null,
@@ -132,10 +133,18 @@ function createMpesaB2c(pool) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            const found = await client.query(
+            let walletType = "player";
+            let found = await client.query(
                 "SELECT p.reference, p.user_id, p.status, w.amount AS payout_amount, f.amount AS fee_amount FROM mpesa_payouts p JOIN transactions w ON w.reference=p.reference LEFT JOIN transactions f ON f.reference=p.reference || '-FEE' WHERE p.reference=$1 FOR UPDATE OF p",
                 [reference]
             );
+            if (!found.rows.length) {
+                walletType = "admin";
+                found = await client.query(
+                    "SELECT p.reference,p.admin_id AS user_id,p.status,w.amount AS payout_amount,f.amount AS fee_amount FROM admin_mpesa_payouts p JOIN admin_wallet_transactions w ON w.reference=p.reference LEFT JOIN admin_wallet_transactions f ON f.reference=p.reference || '-FEE' WHERE p.reference=$1 FOR UPDATE OF p",
+                    [reference]
+                );
+            }
             if (!found.rows.length) {
                 await client.query("ROLLBACK");
                 return false;
@@ -148,19 +157,17 @@ function createMpesaB2c(pool) {
 
             const successful = outcome.success === true;
             const newStatus = successful ? "completed" : "failed";
-            await client.query(
-                "UPDATE transactions SET status=$1 WHERE reference IN ($2, $3) AND status='pending'",
-                [newStatus, reference, reference + "-FEE"]
-            );
+            const ledgerTable = walletType === "admin" ? "admin_wallet_transactions" : "transactions";
+            const payoutTable = walletType === "admin" ? "admin_mpesa_payouts" : "mpesa_payouts";
+            await client.query(`UPDATE ${ledgerTable} SET status=$1 WHERE reference IN ($2, $3) AND status='pending'`, [newStatus, reference, reference + "-FEE"]);
             if (!successful) {
                 const gross = Number(payout.payout_amount) + Number(payout.fee_amount || 0);
-                await client.query(
-                    "UPDATE wallets SET balance=balance + $1, updated_at=NOW() WHERE user_id=$2",
-                    [gross, payout.user_id]
-                );
+                const walletTable = walletType === "admin" ? "admin_wallets" : "wallets";
+                const ownerColumn = walletType === "admin" ? "admin_id" : "user_id";
+                await client.query(`UPDATE ${walletTable} SET balance=balance + $1, updated_at=NOW() WHERE ${ownerColumn}=$2`, [gross, payout.user_id]);
             }
             await client.query(
-                "UPDATE mpesa_payouts SET status=$1, provider_status=$2, result_code=$3, result_description=$4, receipt=$5, conversation_id=COALESCE($6, conversation_id), updated_at=NOW(), settled_at=NOW() WHERE reference=$7",
+                `UPDATE ${payoutTable} SET status=$1, provider_status=$2, result_code=$3, result_description=$4, receipt=$5, conversation_id=COALESCE($6, conversation_id), updated_at=NOW(), settled_at=NOW() WHERE reference=$7`,
                 [
                     newStatus,
                     successful ? "completed" : "failed",
@@ -183,10 +190,16 @@ function createMpesaB2c(pool) {
 
     async function settleCallback(token, kind, body) {
         const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-        const lookup = await pool.query(
+        let lookup = await pool.query(
             "SELECT reference, callback_token_hash, originator_conversation_id, status FROM mpesa_payouts WHERE callback_token_hash=$1",
             [tokenHash]
         );
+        if (!lookup.rows.length) {
+            lookup = await pool.query(
+                "SELECT reference,callback_token_hash,originator_conversation_id,status FROM admin_mpesa_payouts WHERE callback_token_hash=$1",
+                [tokenHash]
+            );
+        }
         if (!lookup.rows.length || !hashMatches(token, lookup.rows[0].callback_token_hash)) {
             return { found: false };
         }
@@ -266,7 +279,7 @@ function createMpesaB2c(pool) {
                 20000
             );
         } catch (_) {
-            await updateProviderState(details.reference, "unknown", null).catch(() => {});
+            await updateProviderState(details.reference, "unknown", null, details.walletType).catch(() => {});
             return {
                 accepted: false,
                 ambiguous: true,
@@ -283,7 +296,7 @@ function createMpesaB2c(pool) {
 
         if (!response.ok) {
             if (response.status >= 500 || response.status === 408 || response.status === 429 || !data) {
-                await updateProviderState(details.reference, "unknown", null).catch(() => {});
+                await updateProviderState(details.reference, "unknown", null, details.walletType).catch(() => {});
                 return {
                     accepted: false,
                     ambiguous: true,
@@ -305,7 +318,7 @@ function createMpesaB2c(pool) {
                     message: "Daraja rejected this withdrawal. The wallet will be restored."
                 };
             }
-            await updateProviderState(details.reference, "unknown", null).catch(() => {});
+            await updateProviderState(details.reference, "unknown", null, details.walletType).catch(() => {});
             return {
                 accepted: false,
                 ambiguous: true,
@@ -313,7 +326,7 @@ function createMpesaB2c(pool) {
             };
         }
 
-        await updateProviderState(details.reference, "accepted", data);
+        await updateProviderState(details.reference, "accepted", data, details.walletType);
         return { accepted: true, ambiguous: false };
     }
 

@@ -16,7 +16,7 @@ function concealDashboard(message, clearData) {
     ["accountDialog", "complaintDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
     urls.concat(complaintUrls).forEach(function(url) { URL.revokeObjectURL(url); });
     urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = ""; users = [];
-    ["resultList", "complaintList", "complaintView", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
+    ["resultList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
         var node = $(id); if (node) node.replaceChildren();
     });
     if ($("adminName")) $("adminName").textContent = "Admin";
@@ -84,14 +84,24 @@ function renderComplaint(c) {
     return h+'</div></article>';
 }
 async function loadComplaints() {
-    var params=new URLSearchParams({status:$("complaintFilter").value,page:String(complaintPage),limit:"20",q:complaintQuery});
-    if(includeClearedComplaints)params.set("includeCleared","true");
-    var r=await GG.api("/api/admin/complaint-cases?"+params.toString());
-    if(!r.ok){$("complaintList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load complaints.")+'</div>';return 0;}
-    var list=r.data.complaints||[],counts=r.data.counts||{};
-    complaintPages=Number(r.data.pages)||1;complaintPage=Number(r.data.page)||1;
-    $("complaintList").innerHTML=list.length?list.map(renderComplaint).join(""):'<div class="empty">No complaints in this view.</div>';
-    $("complaintsPageLabel").textContent="Page "+complaintPage+" of "+complaintPages+" · "+Number(r.data.total||0)+" cases";
+    function paramsFor(status){var params=new URLSearchParams({status:status,page:String(complaintPage),limit:"20",q:complaintQuery});if(includeClearedComplaints)params.set("includeCleared","true");return params;}
+    var results=await Promise.all([
+        GG.api("/api/admin/complaint-cases?"+paramsFor("active").toString()),
+        GG.api("/api/admin/complaint-cases?"+paramsFor("closed").toString())
+    ]);
+    var activeResult=results[0],closedResult=results[1];
+    if(!activeResult.ok){$("activeComplaintList").innerHTML='<div class="empty">'+esc(activeResult.data.message||"Could not load open complaints.")+'</div>';}
+    if(!closedResult.ok){$("resolvedComplaintList").innerHTML='<div class="empty">'+esc(closedResult.data.message||"Could not load resolved complaints.")+'</div>';}
+    var activeData=activeResult.ok?activeResult.data:{},closedData=closedResult.ok?closedResult.data:{};
+    var activeList=activeData.complaints||[],closedList=closedData.complaints||[];
+    var counts=activeData.counts||closedData.counts||{};
+    complaintPages=Math.max(1,Number(activeData.pages)||1,Number(closedData.pages)||1);
+    complaintPage=Math.max(1,Number(activeData.page)||Number(closedData.page)||1);
+    if(activeResult.ok)$("activeComplaintList").innerHTML=activeList.length?activeList.map(renderComplaint).join(""):'<div class="empty">No open complaints.</div>';
+    if(closedResult.ok)$("resolvedComplaintList").innerHTML=closedList.length?closedList.map(renderComplaint).join(""):'<div class="empty">No resolved or dismissed complaints.</div>';
+    $("activeComplaintCount").textContent=String(Number(counts.open||0)+Number(counts.investigating||0)+Number(counts.awaiting_player||0)+Number(counts.awaiting_evidence||0)+Number(counts.escalated||0));
+    $("resolvedComplaintCount").textContent=String(Number(counts.resolved||0)+Number(counts.dismissed||0));
+    $("complaintsPageLabel").textContent="Page "+complaintPage+" of "+complaintPages+" per box";
     $("complaintsPrev").disabled=complaintPage<=1;$("complaintsNext").disabled=complaintPage>=complaintPages;
     var active=Number(counts.open||0)+Number(counts.investigating||0)+Number(counts.awaiting_player||0)+Number(counts.awaiting_evidence||0)+Number(counts.escalated||0);
     $("statComplaints").textContent=active; $("navComplaints").textContent=active; return active;
@@ -123,9 +133,13 @@ function renderComplaintCase(c){
     h+='<form data-case-note-form="'+Number(c.id)+'" class="form"><label class="wide">Add private investigation note<textarea class="note" name="note" maxlength="4000" required placeholder="Only authorized admins can read this note."></textarea></label><button class="btn gold" type="submit">Save private note</button></form>';
     if(!["resolved","dismissed"].includes(c.status)){
         h+='<h3>Contact a player</h3><form data-case-request-form="'+Number(c.id)+'" class="form"><label>Player<select name="userId" class="select" required>'+participantOptions+'</select></label><label>Request<select name="requestType" class="select"><option value="evidence">Request evidence</option><option value="clarification">Ask for clarification</option></select></label><label class="wide">Private message<textarea class="note" name="message" maxlength="2000" required placeholder="Explain what information would help resolve this case."></textarea></label><button class="btn gold" type="submit">Send private request</button><span class="help">Sent to the player’s support inbox and in-app notifications; Web Push is queued when subscribed.</span></form>';
-        h+='<h3>Case status / decision</h3><form data-case-status-form="'+Number(c.id)+'" class="form"><label>Status<select name="status" class="select"><option value="open">New</option><option value="investigating">Under review</option><option value="awaiting_player">Awaiting player response</option><option value="awaiting_evidence">Awaiting evidence</option><option value="escalated">Escalated</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label><label class="wide">Resolution or dismissal reason<textarea name="reason" class="note" maxlength="2000" placeholder="Required when resolving or dismissing."></textarea></label><button class="btn gold" type="submit">Save status</button></form>';
+        h+='<h3>Case status / decision</h3><form data-case-status-form="'+Number(c.id)+'" class="form"><label>Status<select name="status" class="select"><option value="open">New</option><option value="investigating">Under review</option><option value="awaiting_player">Awaiting player response</option><option value="awaiting_evidence">Awaiting evidence</option><option value="escalated">Escalated</option>'+(c.source==="efootball_result_dispute"&&["disputed","awaiting_verification"].includes(c.match_status)?"":'<option value="resolved">Resolved</option><option value="dismissed">Dismissed</option>')+'</select></label><label class="wide">Resolution or dismissal reason<textarea name="reason" class="note" maxlength="2000" placeholder="Required when resolving or dismissing."></textarea></label><button class="btn gold" type="submit">Save status</button></form>';
         if(c.match_id&&["disputed","awaiting_verification"].includes(c.match_status)){
-            h+='<h3>Result decision</h3><div class="warn">A correction requires actual evidence, a reason, explicit confirmation, and an unsettled match. Settled financial results are referred to reconciliation.</div><form data-case-decision-form="'+Number(c.id)+'" class="form"><label>'+esc(creatorName)+' verified goals<input class="score" name="creatorScore" type="number" min="0" max="99" step="1" value="'+(c.creator_score==null?"":Number(c.creator_score))+'"></label><label>'+esc(opponentName)+' verified goals<input class="score" name="opponentScore" type="number" min="0" max="99" step="1" value="'+(c.opponent_score==null?"":Number(c.opponent_score))+'"></label><label class="wide">Decision reason<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Document the evidence and platform rule used."></textarea></label><div class="actions wide"><button class="btn" type="button" data-case-decision="uphold">Uphold recorded result</button><button class="btn red" type="button" data-case-decision="reject">Reject unsupported report</button><button class="btn gold" type="button" data-case-decision="correct">Correct result and settle</button></div></form>';
+            h+='<h3>Result decision</h3><div class="warn">Enter the scores you verified from the screenshot. Resolving this result credits the winner or refunds both players on a draw, updates standings, and moves the complaint to Resolved.</div><form data-case-decision-form="'+Number(c.id)+'" class="form"><label>'+esc(creatorName)+' verified goals<input class="score" name="creatorScore" type="number" min="0" max="99" step="1" value="'+(c.creator_score==null?"":Number(c.creator_score))+'"></label><label>'+esc(opponentName)+' verified goals<input class="score" name="opponentScore" type="number" min="0" max="99" step="1" value="'+(c.opponent_score==null?"":Number(c.opponent_score))+'"></label><label class="wide">Decision reason<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Document the evidence and platform rule used."></textarea></label><div class="actions wide"><button class="btn gold" type="button" data-case-decision="correct">Settle score & mark complaint Resolved</button></div></form>';
+        }
+        if(c.source==="efootball_result_dispute"&&c.match_status==="disputed"&&Number(c.stake_amount)>0){
+            var transferTotal=(Number(c.stake_amount)*2).toFixed(2);
+            h+='<h3>Final disputed-stake outcome</h3><div class="warn">If this complaint cannot be settled from the reports, you can close the match and transfer both locked stakes (KSh '+esc(transferTotal)+') to your administrator withdrawal wallet. This is final: players are not refunded and no winner is recorded.</div><form data-case-forfeit-form="'+Number(c.id)+'" class="form"><label class="wide">Reason for transferring the stakes<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Record why the dispute cannot be resolved from the evidence."></textarea></label><div class="actions wide"><button class="btn red" type="button" data-case-forfeit="'+Number(c.id)+'">Transfer both stakes to my admin wallet & resolve</button></div></form>';
         }
     }else h+='<div class="warn">'+esc(c.status)+': '+esc(c.resolution_reason||"No public resolution reason was recorded.")+'</div>';
     h+='</section>';
@@ -176,6 +190,16 @@ async function complaintDecision(button){
     var r=await GG.api("/api/admin/complaint-cases/"+encodeURIComponent(id)+"/decision",{method:"POST",body:body});
     if(!r.ok){say(r.data.message||"Could not save the decision.","error");return;}
     say(r.data.message||"Decision saved.","ok");await refresh(true);await openComplaint(id);
+}
+async function forfeitDisputedStakes(button){
+    var form=button.closest("[data-case-forfeit-form]"),id=form&&form.dataset.caseForfeitForm,reason=form&&form.elements.reason.value.trim();
+    if(!id||!reason||reason.length<10){say("Enter a reason of at least 10 characters before transferring the stakes.","error");return;}
+    if(!confirm("Final resolution: transfer both players’ locked stakes to your administrator withdrawal wallet, cancel the match, record no winner, and resolve the complaint? Players will not be refunded."))return;
+    button.disabled=true;
+    var r=await GG.api("/api/admin/complaint-cases/"+encodeURIComponent(id)+"/forfeit-stakes",{method:"POST",body:{confirm:true,reason:reason}});
+    if(!r.ok){button.disabled=false;say(r.data.message||"Could not transfer the disputed stakes.","error");return;}
+    say(r.data.message+" Amount: "+GG.formatMoney(r.data.amount)+".","ok");
+    await loadAdminWallet();await refresh(true);await openComplaint(id);
 }
 async function loadThreads() {
     var r=await GG.api("/api/admin/support"+(includeCleared?"?includeCleared=true":""));
@@ -229,13 +253,23 @@ async function loadOverview() {
     var r=await GG.api("/api/admin/overview"); if(!r.ok)return;
     var u=r.data.users||{}; $("statRestricted").textContent=(Number(u.suspended)||0)+(Number(u.closed)||0);
 }
+async function loadAdminWallet() {
+    var r=await GG.api("/api/admin/wallet");
+    if(!r.ok){$("adminWalletBalance").textContent="Unavailable";$("adminWalletTransactions").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load administrator wallet.")+'</div>';return;}
+    var wallet=r.data.wallet||{},items=r.data.transactions||[];
+    $("adminWalletBalance").textContent=GG.formatMoney(wallet.balance||0);
+    $("adminWalletTransactions").innerHTML=items.length?items.map(function(t){
+        return '<article class="activity-item"><strong>'+esc(String(t.transaction_type||"wallet activity").replace(/_/g," "))+' · '+esc(GG.formatMoney(t.amount))+'</strong><br>'+esc(t.status||"completed")+' · '+esc(date(t.created_at))+(t.reference?'<br>Ref: '+esc(t.reference):"")+(t.description?'<br>'+esc(t.description):"")+'</article>';
+    }).join(""):'<div class="empty">No administrator wallet activity yet. Resolved dispute transfers appear here.</div>';
+}
 function editing(id) { var r=$(id),a=document.activeElement;return !!(r&&a&&r.contains(a)&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT")); }
 async function refresh(force) {
     if(!adminAuthorized||busy||document.hidden)return; busy=true; $("live").textContent="Updating…";
     try {
         var tasks=[loadOverview()];
         if(force||!editing("resultList"))tasks.push(loadResults());
-        if(force||!editing("complaintList"))tasks.push(loadComplaints());
+        if(force||!editing("complaintSearch"))tasks.push(loadComplaints());
+        if(force||!editing("adminWalletWithdrawForm"))tasks.push(loadAdminWallet());
         if(force||!editing("accounts"))tasks.push(loadUsers());
         if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
         tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
@@ -331,22 +365,22 @@ async function clearThreadAction(btn) {
 }
 
 $("resultFilter").addEventListener("change",function(){loadResults();});
-$("complaintFilter").addEventListener("change",function(){complaintPage=1;loadComplaints();});
 $("refresh").addEventListener("click",function(){refresh(true);});
 $("logout").addEventListener("click",function(){GG.logout();});
 $("searchUsers").addEventListener("click",loadUsers);
 $("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadUsers();}});
 $("userSearch").addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(loadUsers,250);});
 $("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b)resultAction(b);});
-$("complaintList").addEventListener("click",function(e){var open=e.target.closest("[data-open-complaint]");if(open){openComplaint(open.dataset.openComplaint);return;}var b=e.target.closest("[data-complaint-visibility]");if(b)complaintVisibilityAction(b);});
+$("complaints").addEventListener("click",function(e){var open=e.target.closest("[data-open-complaint]");if(open){openComplaint(open.dataset.openComplaint);return;}var b=e.target.closest("[data-complaint-visibility]");if(b)complaintVisibilityAction(b);});
 $("userList").addEventListener("click",function(e){var view=e.target.closest("[data-view-dashboard]");if(view){viewUserDashboard(view);return;}var del=e.target.closest("[data-delete-account]");if(del){deleteAccount(del);return;}var b=e.target.closest("[data-status]");if(b)statusAction(b);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});
 $("announcementForm").addEventListener("submit",async function(e){e.preventDefault();var input=$("announcementMessage"),message=input.value.trim();if(!message)return;$("sendAnnouncement").disabled=true;var r=await GG.api("/api/admin/announcements",{method:"POST",body:{message:message}});$("sendAnnouncement").disabled=false;if(!r.ok){say(r.data.message||"Announcement was not published.","error");return;}input.value="";say(r.data.message||"Announcement published.","ok");await loadAnnouncements();});
+$("adminWalletWithdrawForm").addEventListener("submit",async function(e){e.preventDefault();var form=this,amount=Number(form.elements.amount.value),phone=form.elements.phone.value.trim();if(!Number.isSafeInteger(amount)||amount<1||amount>1000000||!phone){$("adminWalletMessage").textContent="Enter a whole KSh amount and valid M-Pesa number.";return;}var fee=Math.round(amount*0.05),payout=amount-fee;if(payout<1){$("adminWalletMessage").textContent="Withdrawal amount is too small after the 5% fee.";return;}if(!confirm("Withdraw KSh "+amount+" from your administrator wallet to "+phone+"? The 5% fee is KSh "+fee+"; estimated payout is KSh "+payout+"."))return;var button=$("adminWalletWithdrawButton");button.disabled=true;$("adminWalletMessage").textContent="Submitting withdrawal to Daraja…";var r=await GG.api("/api/admin/wallet/withdraw",{method:"POST",body:{amount:amount,phone:phone}});button.disabled=false;$("adminWalletMessage").textContent=r.data.message||(r.ok?"Withdrawal submitted.":"Withdrawal was not submitted.");$("adminWalletMessage").className="notice "+(r.ok?"ok":"error");if(r.ok){form.elements.amount.value="";await loadAdminWallet();}});
 $("accountDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-account]"))this.close();});
 $("complaintDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-complaint]"))this.close();});
 $("complaintDialog").addEventListener("close",function(){complaintUrls.forEach(URL.revokeObjectURL);complaintUrls=[];currentComplaintId=null;});
 $("complaintView").addEventListener("submit",function(e){e.preventDefault();var f=e.target.closest("[data-case-status-form]");if(f){complaintCaseStatus(f);return;}f=e.target.closest("[data-case-note-form]");if(f){complaintPrivateNote(f);return;}f=e.target.closest("[data-case-request-form]");if(f)complaintPlayerRequest(f);});
-$("complaintView").addEventListener("click",function(e){var b=e.target.closest("[data-case-decision]");if(b)complaintDecision(b);});
+$("complaintView").addEventListener("click",function(e){var b=e.target.closest("[data-case-decision]");if(b){complaintDecision(b);return;}b=e.target.closest("[data-case-forfeit]");if(b)forfeitDisputedStakes(b);});
 $("searchComplaints").addEventListener("click",function(){complaintQuery=$("complaintSearch").value.trim();complaintPage=1;loadComplaints();});
 $("complaintSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();$("searchComplaints").click();}});
 $("complaintsPrev").addEventListener("click",function(){if(complaintPage>1){complaintPage--;loadComplaints();}});

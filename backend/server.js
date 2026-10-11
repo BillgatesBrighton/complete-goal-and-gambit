@@ -31,6 +31,7 @@ const mpesaB2cFactory = require("./services/mpesaB2c");
 const mpesaC2bFactory = require("./services/mpesaC2b");
 const adminRoutes = require("./routes/admin");
 const adminComplaintCases = require("./routes/adminComplaintCases");
+const adminWalletRoutes = require("./routes/adminWallet");
 const chatRoutes = require("./routes/chat");
 const authenticateToken = require("./middleware/authMiddleware");
 const gameAccess = require("./middleware/gameAccess");
@@ -801,6 +802,11 @@ app.use(
 app.use(
     "/api/admin/complaint-cases",
     adminComplaintCases(pool, authenticateToken, pushService)
+);
+
+app.use(
+    "/api/admin/wallet",
+    adminWalletRoutes(pool, authenticateToken, mpesaB2c)
 );
 
 app.get("/api/announcements/current", authenticateToken, async function(req, res) {
