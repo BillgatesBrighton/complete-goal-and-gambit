@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS efootball_matches (
     room_code_revision   INTEGER NOT NULL DEFAULT 0 CHECK (room_code_revision >= 0),
     code_correction_requested_at TIMESTAMPTZ,
     code_correction_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    status               VARCHAR(20) NOT NULL DEFAULT 'waiting',
+    status               VARCHAR(30) NOT NULL DEFAULT 'waiting',
     creator_ready        BOOLEAN NOT NULL DEFAULT FALSE,
     opponent_ready       BOOLEAN NOT NULL DEFAULT FALSE,
     creator_score        INTEGER,
@@ -217,6 +217,9 @@ CREATE TABLE IF NOT EXISTS efootball_matches (
     finished_at           TIMESTAMPTZ,
     settled_at            TIMESTAMPTZ
 );
+-- 'awaiting_verification' is 21 characters; keep enough room for every
+-- supported match state on databases created with the older VARCHAR(20).
+ALTER TABLE efootball_matches ALTER COLUMN status TYPE VARCHAR(30);
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS search_last_seen_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_status ON efootball_matches(status);
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_creator ON efootball_matches(creator_id);
