@@ -272,7 +272,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const safe = { ...match };
         // room_code is an internal unique placeholder required by the legacy
         // table. Never expose it as if it were the real Konami room code.
-        safe.room_code = shownCode;
+        safe.room_code = shownCode && senderId !== Number(userId) ? shownCode : null;
         safe.opponentFound = Boolean(match.opponent_id);
         safe.youAreCreator = isCreator;
         safe.youAreSender = senderId !== null && senderId === Number(userId);
@@ -285,7 +285,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         safe.opponentName = isCreator ? match.opponent_username : match.creator_username;
         safe.yourReady = Boolean(isCreator ? match.creator_ready : match.opponent_ready);
         safe.opponentReady = Boolean(isCreator ? match.opponent_ready : match.creator_ready);
-        safe.codeSent = Boolean(match.code_sent && shownCode);
+        safe.codeSent = Boolean(match.code_sent && shownCode); safe.codeReceived = Boolean((senderId === Number(match.creator_id) || senderId === Number(match.opponent_id)) && match.code_received_at && Number(match.code_received_by) === (senderId === Number(match.creator_id) ? Number(match.opponent_id) : Number(match.creator_id)));
         safe.verificationStatus = match.verification_status || null;
         safe.scoreCheck = match.score_check || null;
         safe.screenshotSubmitted = Boolean(match.screenshot_submitted);
@@ -987,9 +987,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     return res.status(409).json({ success: false, message: "This match is no longer waiting for players to get ready." });
                 }
 
-                if (!match.code_sent || !match.external_room_code) {
+                if (!match.code_sent || !match.external_room_code || !match.code_received_at || Number(match.code_received_by) === Number(match.code_sender_id)) {
                     await client.query("ROLLBACK");
-                    return res.status(409).json({ success: false, message: "Wait for the selected player to send the room code before marking ready." });
+                    return res.status(409).json({ success: false, message: "The receiver must confirm receipt of the room code before either player can mark ready." });
                 }
 
                 if (isCreator) {
@@ -1210,7 +1210,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
        RESULT SUBMISSION
        ===================================================== */
 
-    router.post("/matches/:id/result", authenticateToken, async (req, res) => {
+    router.post("/matches/:id/code-received",authenticateToken,async(req,res)=>{const u=Number(req.user.userId),id=Number(req.params.id);if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({success:false,message:"Invalid match ID."});const c=await pool.connect();try{await c.query("BEGIN");const q=await c.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE",[id]);if(!q.rows.length){await c.query("ROLLBACK");return res.status(404).json({success:false,message:"Match not found."});}const m=q.rows[0],a=Number(m.creator_id),b=Number(m.opponent_id);if(u!==a&&u!==b){await c.query("ROLLBACK");return res.status(403).json({success:false,message:"Not a match participant."});}if(!b||!m.code_sent||!m.external_room_code||m.code_correction_requested_at||!["waiting","ready"].includes(m.status)||m.started_at){await c.query("ROLLBACK");return res.status(409).json({success:false,message:"Room code is not waiting for receipt."});}let s=Number(m.code_sender_id);if(s!==a&&s!==b){s=u===a?b:a;await c.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2",[s,id]);}if(s===u){await c.query("ROLLBACK");return res.status(403).json({success:false,message:"Only the receiver can confirm the code."});}if(m.code_received_at&&Number(m.code_received_by)!==u){await c.query("ROLLBACK");return res.status(409).json({success:false,message:"Receipt already confirmed."});}if(!m.code_received_at)await c.query("UPDATE efootball_matches SET code_received_at=NOW(),code_received_by=$1 WHERE id=$2",[u,id]);const match=await getMatchForUser(c,id,u);await c.query("COMMIT");return res.json({success:true,message:"Room code received successfully.",match});}catch(e){await c.query("ROLLBACK").catch(()=>{});console.error("Room-code receipt confirmation failed.");return res.status(500).json({success:false,message:"Unable to confirm receipt."});}finally{c.release();}});router.post("/matches/:id/result", authenticateToken, async (req, res) => {
         const userId = Number(req.user.userId);
         const score = Number(req.body && (req.body.score !== undefined ? req.body.score : req.body.yourScore));
         const opponentScore = Number(req.body && (req.body.opponent_score !== undefined ? req.body.opponent_score : req.body.opponentScore));
