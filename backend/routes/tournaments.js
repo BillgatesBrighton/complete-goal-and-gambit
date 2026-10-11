@@ -20,6 +20,7 @@ module.exports = function (pool, authenticateToken) {
     // The listing is user-specific because each card shows whether the
     // signed-in player has already entered.
     router.get("/", authenticateToken, async (req, res) => {
+        res.set("Cache-Control", "no-store");
         try {
             const result = await pool.query(
                 `SELECT t.id, t.name, t.tier, t.entry_fee, t.max_players,
@@ -46,6 +47,7 @@ module.exports = function (pool, authenticateToken) {
     });
 
     router.get("/:id/status", authenticateToken, async (req, res) => {
+        res.set("Cache-Control", "no-store");
         const id = parseId(req.params.id);
         if (!id) {
             return res.status(400).json({ success: false, message: "Invalid tournament ID." });
