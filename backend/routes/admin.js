@@ -80,12 +80,23 @@ module.exports = function(pool, authenticateToken) {
                         m.creator_id,m.opponent_id,m.creator_submitted_score,m.creator_submitted_opponent_score,
                         m.opponent_submitted_score,m.opponent_submitted_opponent_score,
                         creator.username AS creator_username,opponent.username AS opponent_username,
-                        selected.username AS selected_username
+                        selected.username AS selected_username,
+                        COALESCE(report_history.reports,'[]'::jsonb) AS reports
                  FROM efootball_result_verifications v
                  JOIN efootball_matches m ON m.id=v.match_id
                  JOIN users creator ON creator.id=m.creator_id
                  LEFT JOIN users opponent ON opponent.id=m.opponent_id
                  JOIN users selected ON selected.id=v.selected_player_id
+                 LEFT JOIN LATERAL (
+                     SELECT jsonb_agg(jsonb_build_object(
+                         'roundNo',r.round_no,'username',u.username,
+                         'scoreFor',r.score_for,'scoreAgainst',r.score_against,
+                         'submittedAt',r.submitted_at
+                     ) ORDER BY r.round_no,r.submitted_at,u.username) AS reports
+                     FROM efootball_result_reports r
+                     JOIN users u ON u.id=r.user_id
+                     WHERE r.match_id=m.id
+                 ) report_history ON TRUE
                  ORDER BY CASE WHEN v.status IN ('pending_screenshot','submitted','review_required') THEN 0 ELSE 1 END,
                           v.created_at DESC
                  LIMIT 200`

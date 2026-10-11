@@ -381,6 +381,7 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS creator_submitted_score I
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS creator_submitted_opponent_score INTEGER;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_submitted_score INTEGER;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_submitted_opponent_score INTEGER;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS result_round SMALLINT NOT NULL DEFAULT 1;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS external_room_code VARCHAR(50);
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS room_code_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested_at TIMESTAMPTZ;
@@ -407,6 +408,30 @@ ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS score_check 
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS review_note TEXT;
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS efootball_result_reports (
+    id BIGSERIAL PRIMARY KEY,
+    match_id BIGINT NOT NULL REFERENCES efootball_matches(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    round_no SMALLINT NOT NULL CHECK (round_no IN (1,2)),
+    score_for INTEGER NOT NULL CHECK (score_for BETWEEN 0 AND 99),
+    score_against INTEGER NOT NULL CHECK (score_against BETWEEN 0 AND 99),
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(match_id,user_id,round_no)
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_result_reports_match
+    ON efootball_result_reports(match_id, round_no, submitted_at);
+
+INSERT INTO efootball_result_verifications(match_id,selected_player_id,status,score_check)
+SELECT m.id,
+       CASE WHEN random() < 0.5 THEN m.creator_id ELSE m.opponent_id END,
+       'awaiting_scores','awaiting_scores'
+  FROM efootball_matches m
+ WHERE m.opponent_id IS NOT NULL
+   AND m.status IN ('playing','awaiting_verification','disputed')
+   AND NOT EXISTS (
+       SELECT 1 FROM efootball_result_verifications v WHERE v.match_id=m.id
+   );
 
 
 -- ======================================================

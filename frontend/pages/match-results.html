@@ -38,7 +38,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 <header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">Konami dashboard</a></header>
 <main>
   <h1>Match Results</h1>
-  <p class="intro">Enter your final score, then add screenshot evidence if you are selected to upload it.</p>
+  <p class="intro">The selected player can attach a screenshot while entering the score. If the first reports differ, both players submit again; a second mismatch goes to admin.</p>
   <section class="card">
     <div id="status" class="notice" role="status" aria-live="polite">Loading match…</div>
     <p id="matchPlayers" class="muted"></p>
@@ -62,7 +62,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     <h2>Match screenshot</h2>
     <p id="screenshotMessage" class="muted">After both score reports are submitted, the selected player can upload a result-screen screenshot.</p>
     <div id="uploadArea" class="upload">
-      <p id="uploadHelp">Choose the final score-screen image here. After both score reports arrive, the selected player can upload it.</p>
+      <p id="uploadHelp">Choose the final score-screen image here. The selected player may upload it before either score report is submitted.</p>
       <label class="button secondary" for="screenshotInput">Choose screenshot</label>
       <input id="screenshotInput" type="file" accept="image/jpeg,image/png,image/webp">
       <img id="screenshotPreview" class="preview hidden" alt="Selected match screenshot preview">
@@ -92,26 +92,31 @@ button:disabled{opacity:.55;cursor:not-allowed}
   var errorNode = document.getElementById("error");
   var statusNode = document.getElementById("status");
 
+  var complaintRedirectScheduled = false;
   function isVerification(m){ return ["awaiting_verification","disputed"].indexOf(m.status) !== -1; }
   function score(value){ return value === null || value === undefined || value === "" ? "—" : String(Number(value)); }
   function isCreator(m){ return m.youAreCreator === true || m.youAreCreator === 1 || m.youAreCreator === "true"; }
   function isTrue(value){ return value === true || value === 1 || value === "true"; }
   function ownSubmitted(m){
-    var creator = isCreator(m);
-    var submitted = creator ? m.creator_submitted : m.opponent_submitted;
-    var score = creator ? m.creator_submitted_score : m.opponent_submitted_score;
-    return isTrue(submitted) || (score !== null && score !== undefined && score !== "");
+    return isTrue(isCreator(m) ? m.creator_submitted : m.opponent_submitted);
   }
   function otherSubmitted(m){ return isTrue(isCreator(m) ? m.opponent_submitted : m.creator_submitted); }
   function canEditScore(m){
     if(typeof m.canEditScore !== "undefined") return isTrue(m.canEditScore);
-    return ["playing","awaiting_verification","disputed"].includes(m.status) && !isTrue(m.screenshotSubmitted);
+    return m.status === "playing" && !ownSubmitted(m);
   }
-  function ownScore(m){ return isCreator(m) ? (m.creator_submitted_score ?? m.creator_score) : (m.opponent_submitted_score ?? m.opponent_score); }
-  function ownAgainst(m){ return isCreator(m) ? (m.creator_submitted_opponent_score ?? m.opponent_score) : (m.opponent_submitted_opponent_score ?? m.creator_score); }
-  function canUpload(m){ return isVerification(m) && isTrue(m.youMustUploadScreenshot); }
+  function ownScore(m){ return isCreator(m) ? m.creator_submitted_score : m.opponent_submitted_score; }
+  function ownAgainst(m){ return isCreator(m) ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score; }
+  function canUpload(m){ return ["playing","awaiting_verification","disputed"].includes(m.status) && isTrue(m.youMustUploadScreenshot) && !isTrue(m.screenshotSubmitted); }
 
   function render(m){
+    var previousRound = latest ? Number(latest.resultRound || latest.result_round || 1) : null;
+    var currentRound = Number(m.resultRound || m.result_round || 1);
+    if(previousRound !== null && previousRound !== currentRound){
+      document.getElementById("yourScore").value = "";
+      document.getElementById("opponentScore").value = "";
+      errorNode.textContent = "";
+    }
     latest = m;
     document.getElementById("matchPlayers").textContent =
       (m.yourName || "You") + " vs " + (m.opponentName || "Opponent") + " · Match GG-" + m.id;
@@ -119,13 +124,18 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
     var formWrap = document.getElementById("scoreFormWrap");
     var summary = document.getElementById("scoreSummary");
+    var screenshotCard = document.getElementById("screenshotCard");
+    var uploadArea = document.getElementById("uploadArea");
+    var uploadButton = document.getElementById("uploadButton");
     var statusText = "Match state: " + String(m.status || "unknown").replace(/_/g," ");
-    var scoreCheck = String(m.scoreCheck || "").toLowerCase();
+    var roundNo = Number(m.resultRound || m.result_round || 1);
+    var status = m.status;
+
     document.getElementById("detailStatus").textContent = statusText;
     document.getElementById("yourScoreLabel").textContent = (m.yourName || "Your account") + " goals";
     document.getElementById("opponentScoreLabel").textContent = (m.opponentName || "Opponent account") + " goals";
 
-    if(m.status === "completed"){
+    if(status === "completed"){
       var ownFinal = isCreator(m) ? m.creator_score : m.opponent_score;
       var otherFinal = isCreator(m) ? m.opponent_score : m.creator_score;
       statusNode.textContent = m.verificationStatus === "verified" ? "Result verified" : "Match settled";
@@ -133,109 +143,114 @@ button:disabled{opacity:.55;cursor:not-allowed}
       summary.classList.remove("hidden");
       document.getElementById("yourReport").textContent = score(ownFinal) + " – " + score(otherFinal);
       document.getElementById("opponentReport").textContent = "Final match score";
-      document.getElementById("screenshotCard").classList.toggle("hidden", !m.screenshotSubmitted);
-      document.getElementById("uploadArea").classList.add("hidden");
-      document.getElementById("uploadButton").classList.add("hidden");
-      document.getElementById("screenshotMessage").textContent = m.verificationStatus === "verified" ? "Screenshot verified and standings updated." : "Screenshot evidence was received.";
+      screenshotCard.classList.toggle("hidden", !isTrue(m.screenshotSubmitted));
+      uploadArea.classList.add("hidden");
+      uploadButton.classList.add("hidden");
+      document.getElementById("screenshotMessage").textContent = m.verificationStatus === "verified" ? "Screenshot evidence was reviewed and the result was settled." : "Screenshot evidence was received.";
       return;
     }
 
-    if(m.status === "cancelled"){
+    if(status === "cancelled"){
       statusNode.textContent = "This match was cancelled.";
       formWrap.classList.add("hidden");
       summary.classList.add("hidden");
-      document.getElementById("screenshotCard").classList.add("hidden");
+      screenshotCard.classList.add("hidden");
       return;
     }
 
-    if(m.status === "playing"){
-      if(ownSubmitted(m)){
-        statusNode.textContent = otherSubmitted(m)
-          ? "Both players have reported a score. You can correct yours while the match is open."
-          : "Your result is saved. You can correct it while waiting for your opponent.";
-        formWrap.classList.remove("hidden");
-        summary.classList.remove("hidden");
-        var yourInput = document.getElementById("yourScore");
-        var opponentInput = document.getElementById("opponentScore");
-        if(document.activeElement !== yourInput && yourInput.value === "" && ownScore(m) != null) yourInput.value = String(ownScore(m));
-        if(document.activeElement !== opponentInput && opponentInput.value === "" && ownAgainst(m) != null) opponentInput.value = String(ownAgainst(m));
-        document.getElementById("submitScoreButton").textContent = "Update my score report";
-        document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
-        document.getElementById("opponentReport").textContent = otherSubmitted(m) ? "Your opponent has also submitted a result." : "Waiting for the other player’s result.";
-      } else {
-        statusNode.textContent = "Match in progress · enter the final score for each named player";
-        formWrap.classList.remove("hidden");
-        summary.classList.add("hidden");
-        document.getElementById("submitScoreButton").textContent = "Submit my result";
-      }
-      document.getElementById("screenshotCard").classList.remove("hidden");
-      document.getElementById("screenshotMessage").textContent = "If the two score reports match, the result settles automatically. If they differ, the selected player can upload a screenshot here for admin review.";
-      document.getElementById("uploadHelp").textContent = "For a disputed result, upload a clear JPEG, PNG, or WebP final score-screen screenshot (8 MB maximum). One player is selected after both reports arrive.";
-            document.getElementById("uploadArea").classList.add("hidden");
-      document.getElementById("uploadButton").classList.add("hidden");
-      document.getElementById("uploadButton").disabled = true;
-      return;
-    }
-
-    var canCorrect = isVerification(m) && canEditScore(m);
-    if(canCorrect){
-      statusNode.textContent = "The reports differ. Correct your scores to match, or provide the requested screenshot for admin review.";
-      formWrap.classList.remove("hidden");
-      summary.classList.remove("hidden");
-      var correctionYourInput = document.getElementById("yourScore");
-      var correctionOpponentInput = document.getElementById("opponentScore");
-      if(document.activeElement !== correctionYourInput && correctionYourInput.value === "" && ownScore(m) != null) correctionYourInput.value = String(ownScore(m));
-      if(document.activeElement !== correctionOpponentInput && correctionOpponentInput.value === "" && ownAgainst(m) != null) correctionOpponentInput.value = String(ownAgainst(m));
-      document.getElementById("submitScoreButton").textContent = ownSubmitted(m) ? "Update my score report" : "Submit my result";
-    } else {
+    if(status === "disputed" && isTrue(m.adminComplaintSubmitted)){
       formWrap.classList.add("hidden");
       summary.classList.remove("hidden");
+      screenshotCard.classList.toggle("hidden", !isTrue(m.screenshotSubmitted) && !isTrue(m.youMustUploadScreenshot));
+      uploadArea.classList.toggle("hidden", !canUpload(m));
+      uploadButton.classList.toggle("hidden", !canUpload(m));
+      uploadButton.disabled = !(document.getElementById("screenshotInput").files && document.getElementById("screenshotInput").files[0]);
+      statusNode.textContent = "Admin case " + (m.adminComplaintRef || "submitted") + " is open.";
+      document.getElementById("screenshotMessage").textContent = m.screenshotSubmitted
+        ? "The screenshot and both rounds of scores are attached to the admin case."
+        : (isTrue(m.youMustUploadScreenshot)
+          ? "Your screenshot is still needed for the open admin case. Upload it now or add it later from the match page."
+          : "The selected player can add screenshot evidence to the open admin case.");
+      document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+      document.getElementById("opponentReport").textContent = "Both score rounds differed. Any locked stake is held until admin review.";
+      if(!complaintRedirectScheduled){
+        complaintRedirectScheduled = true;
+        document.getElementById("detailStatus").textContent = "Complaint submitted. Returning to the Konami dashboard in a few seconds.";
+        window.setTimeout(function(){ location.replace("konami.html"); }, 3500);
+      }
+      return;
     }
-    var ownReported = isCreator(m) ? m.creator_submitted_score : m.opponent_submitted_score;
-    var againstReported = isCreator(m) ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score;
-    document.getElementById("yourReport").textContent = score(ownReported) + " – " + score(againstReported);
-    document.getElementById("opponentReport").textContent = otherSubmitted(m) ? "Both players submitted scores." : "Waiting for the other player’s result.";
+
+    if(status === "playing"){
+      screenshotCard.classList.remove("hidden");
+      document.getElementById("screenshotMessage").textContent = roundNo === 2
+        ? "Round 1 reports differed. Both players must submit their score again. The selected player can attach the screenshot here."
+        : "The selected player can attach the match screenshot while entering scores. If the first reports differ, both players will submit again.";
+      document.getElementById("uploadHelp").textContent = "Attach the final eFootball score screen (JPEG, PNG, or WebP, 8 MB maximum). The selected uploader is the same for both score rounds.";
+      if(isTrue(m.screenshotSubmitted)){
+        uploadArea.classList.add("hidden");
+        uploadButton.classList.add("hidden");
+        document.getElementById("screenshotMessage").textContent = "Screenshot saved. It will be included if the result needs admin review.";
+      } else if(isTrue(m.youMustUploadScreenshot)){
+        uploadArea.classList.remove("hidden");
+        uploadButton.classList.remove("hidden");
+        uploadButton.disabled = !(document.getElementById("screenshotInput").files && document.getElementById("screenshotInput").files[0]);
+        document.getElementById("screenshotMessage").textContent = "You are the selected screenshot uploader. You can choose the screenshot now while entering the score.";
+      } else {
+        uploadArea.classList.add("hidden");
+        uploadButton.classList.add("hidden");
+        document.getElementById("screenshotMessage").textContent = "The other player was selected to submit the screenshot.";
+      }
+
+      if(canEditScore(m)){
+        formWrap.classList.remove("hidden");
+        summary.classList.add("hidden");
+        document.getElementById("submitScoreButton").textContent = "Submit round " + roundNo + " score";
+        statusNode.textContent = roundNo === 2
+          ? "Round 2 of 2 · enter the final score again"
+          : "Enter the final score for each named player";
+      } else {
+        formWrap.classList.add("hidden");
+        summary.classList.remove("hidden");
+        document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+        document.getElementById("opponentReport").textContent = otherSubmitted(m)
+          ? "Both players submitted round " + roundNo + ". Checking the reports…"
+          : "Your round " + roundNo + " report is saved. Waiting for your opponent.";
+        statusNode.textContent = "Round " + roundNo + " submitted";
+      }
+      return;
+    }
 
     if(isVerification(m)){
-      document.getElementById("screenshotCard").classList.remove("hidden");
-      if(m.screenshotSubmitted){
-        statusNode.textContent = m.status === "disputed" ? "Screenshot received · admin review" : "Screenshot received · verifying result";
-        if(scoreCheck === "disputed"){
-          document.getElementById("screenshotMessage").textContent = "The two submitted score reports differ. The screenshot is on hold for admin review; the result and standings are not finalized.";
-        } else if(scoreCheck === "mismatch"){
-          document.getElementById("screenshotMessage").textContent = "OCR detected a score that does not match the submitted result. Admin review is required; the result and standings remain on hold.";
-        } else if(scoreCheck === "uncertain"){
-          document.getElementById("screenshotMessage").textContent = "OCR could not read a confident score. Admin review is required; the result and standings remain on hold.";
-        } else {
-          document.getElementById("screenshotMessage").textContent = m.status === "disputed"
-            ? "Screenshot received. The result is on hold for admin review."
-            : "Screenshot received. The result is being verified.";
-        }
-        document.getElementById("uploadArea").classList.add("hidden");
-      } else if(isTrue(m.youMustUploadScreenshot)){
-        statusNode.textContent = "Screenshot required";
-        document.getElementById("screenshotMessage").textContent = scoreCheck === "disputed"
-          ? "The two submitted score reports differ. You were selected to upload the final score-screen screenshot for admin review."
-          : "You were selected to provide the final score-screen screenshot.";
-        document.getElementById("uploadHelp").textContent = "Upload a clear JPEG, PNG, or WebP screenshot of the final eFootball score screen (8 MB maximum).";
-        document.getElementById("uploadArea").classList.remove("hidden");
-        document.getElementById("uploadButton").classList.remove("hidden");
-        document.getElementById("uploadButton").disabled = !(document.getElementById("screenshotInput").files && document.getElementById("screenshotInput").files[0]);
+      formWrap.classList.add("hidden");
+      summary.classList.remove("hidden");
+      screenshotCard.classList.remove("hidden");
+      document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+      document.getElementById("opponentReport").textContent = "The match is held for admin review.";
+      if(isTrue(m.screenshotSubmitted)){
+        uploadArea.classList.add("hidden");
+        uploadButton.classList.add("hidden");
+        statusNode.textContent = "Screenshot received · admin review";
+        document.getElementById("screenshotMessage").textContent = "The screenshot and score reports are held for an admin decision.";
+      } else if(canUpload(m)){
+        uploadArea.classList.remove("hidden");
+        uploadButton.classList.remove("hidden");
+        uploadButton.disabled = !(document.getElementById("screenshotInput").files && document.getElementById("screenshotInput").files[0]);
+        statusNode.textContent = "Admin review · screenshot requested";
+        document.getElementById("screenshotMessage").textContent = "You were selected to attach the final score screenshot to the admin case.";
       } else {
-        statusNode.textContent = m.status === "disputed" ? "Admin review · waiting for screenshot" : "Waiting for selected screenshot uploader";
-        document.getElementById("screenshotMessage").textContent = scoreCheck === "disputed"
-          ? "The two submitted score reports differ. The selected player was asked to upload a screenshot; the result and standings remain on hold for review."
-          : "Your opponent was selected to upload the screenshot. The score is held until it is reviewed.";
-        document.getElementById("uploadArea").classList.add("hidden");
-        document.getElementById("uploadButton").classList.add("hidden");
+        uploadArea.classList.add("hidden");
+        uploadButton.classList.add("hidden");
+        statusNode.textContent = "Admin review · waiting for screenshot";
+        document.getElementById("screenshotMessage").textContent = "The selected player can upload the final score screenshot.";
       }
-    } else {
-      statusNode.textContent = "Waiting for the match to start";
-      document.getElementById("screenshotCard").classList.remove("hidden");
-      document.getElementById("screenshotMessage").textContent = "The screenshot option becomes available here once the match starts.";
-      document.getElementById("uploadArea").classList.add("hidden");
-      document.getElementById("uploadButton").classList.add("hidden");
+      return;
     }
+
+    formWrap.classList.add("hidden");
+    summary.classList.add("hidden");
+    screenshotCard.classList.add("hidden");
+    statusNode.textContent = "Waiting for the match to start";
   }
 
   async function load(){
@@ -279,7 +294,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     var result;
     try {
       result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/result", {
-        method:"POST", body:{yourScore:yourScore,opponentScore:opponentScore}, noRedirect:true
+        method:"POST", body:{yourScore:yourScore,opponentScore:opponentScore,resultRound:Number(latest.resultRound||1)}, noRedirect:true
       });
     } catch(error) {
       errorNode.textContent = error.message || "Connection failed. Your result was not confirmed; try again.";
@@ -321,7 +336,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     posting = true;
     this.disabled = true;
     errorNode.textContent = "";
-    document.getElementById("screenshotMessage").textContent = "Uploading screenshot… OCR may take up to 15 seconds. If the score is unreadable or does not match, admin review will be required.";
+    document.getElementById("screenshotMessage").textContent = "Uploading screenshot… OCR checks may take up to 15 seconds.";
     var form = new FormData();
     form.append("screenshot", file, file.name);
     var uploadButton = this;
@@ -345,6 +360,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     await load();
   });
 
+  window.addEventListener("gg:match-update",function(event){if(!event.detail||String(event.detail.matchId)===String(id))load();});
   load();
   window.setInterval(load, 2500);
 })();

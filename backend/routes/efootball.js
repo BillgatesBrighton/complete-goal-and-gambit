@@ -151,6 +151,22 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         }
     }
 
+    async function ensureResultVerification(client, match) {
+        const existing = await client.query(
+            "SELECT id,selected_player_id,screenshot_path FROM efootball_result_verifications WHERE match_id=$1 ORDER BY id LIMIT 1 FOR UPDATE",
+            [match.id]
+        );
+        if (existing.rows[0]) return existing.rows[0];
+        const participants = [Number(match.creator_id), Number(match.opponent_id)].filter(Number.isSafeInteger);
+        if (participants.length !== 2) return null;
+        const selectedPlayerId = participants[randomInt(0, participants.length)];
+        const inserted = await client.query(
+            "INSERT INTO efootball_result_verifications(match_id,selected_player_id,status,score_check) VALUES($1,$2,'awaiting_scores','awaiting_scores') RETURNING id,selected_player_id,screenshot_path",
+            [match.id, selectedPlayerId]
+        );
+        return inserted.rows[0];
+    }
+
     // A waiting row is matchable only while its creator is checking in from
     // the Match Hub. Expired searches are cancelled with their locked stake
     // returned, so closing a tab cannot leave a player in the queue forever.
@@ -238,7 +254,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 v.status AS verification_status,
                 v.score_check AS score_check,
                 (v.screenshot_path IS NOT NULL) AS screenshot_submitted,
-                v.selected_player_id AS screenshot_sender_id
+                v.selected_player_id AS screenshot_sender_id,
+                EXISTS (SELECT 1 FROM complaints c WHERE c.match_id=m.id AND c.source='efootball_result_dispute') AS admin_complaint_submitted,
+                (SELECT c.complaint_ref FROM complaints c WHERE c.match_id=m.id AND c.source='efootball_result_dispute' ORDER BY c.id DESC LIMIT 1) AS admin_complaint_ref
 
             FROM efootball_matches m
 
@@ -302,7 +320,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         safe.scoreCheck = match.score_check || null;
         safe.screenshotSubmitted = Boolean(match.screenshot_submitted);
         safe.youMustUploadScreenshot = match.screenshot_sender_id != null && Number(match.screenshot_sender_id) === Number(userId);
-        safe.canEditScore = ["playing", "awaiting_verification", "disputed"].includes(match.status) && !safe.screenshotSubmitted;
+        safe.resultRound = Number(match.result_round || 1);
+        safe.adminComplaintSubmitted = Boolean(match.admin_complaint_submitted);
+        safe.adminComplaintRef = match.admin_complaint_ref || null;
+        const ownSubmitted = isCreator ? Boolean(match.creator_submitted) : Boolean(match.opponent_submitted);
+        safe.canEditScore = match.status === "playing" && !ownSubmitted;
         return safe;
     }
 
@@ -1069,6 +1091,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         [match.id]
                     );
 
+                    await ensureResultVerification(client, updated);
+
                     await createSystemNotification(
                         client,
                         updated.creator_id,
@@ -1232,6 +1256,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const userId = Number(req.user.userId);
         const score = Number(req.body && (req.body.score !== undefined ? req.body.score : req.body.yourScore));
         const opponentScore = Number(req.body && (req.body.opponent_score !== undefined ? req.body.opponent_score : req.body.opponentScore));
+        const requestedRound = Number(req.body && req.body.resultRound);
         const matchId = Number(req.params.id);
         if (!Number.isSafeInteger(matchId) || matchId <= 0 || !validScore(score) || !validScore(opponentScore)) {
             return res.status(400).json({ success: false, message: "Enter both scores as whole numbers from 0 to 99." });
@@ -1245,40 +1270,58 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("ROLLBACK");
                 return res.status(404).json({ success: false, message: "Match not found." });
             }
+
             const match = found.rows[0];
-            const isCreator = Number(match.creator_id) === userId;
-            const isOpponent = Number(match.opponent_id) === userId;
-            if (!isCreator && !isOpponent) {
+            const userIsCreator = Number(match.creator_id) === userId;
+            const userIsOpponent = Number(match.opponent_id) === userId;
+            if (!userIsCreator && !userIsOpponent) {
                 await client.query("ROLLBACK");
                 return res.status(403).json({ success: false, message: "You are not part of this match." });
             }
-            if (!match.opponent_id || !["playing", "awaiting_verification", "disputed"].includes(match.status) || match.settled_at) {
+            if (!match.opponent_id || match.status !== "playing" || match.settled_at) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "Scores can only be submitted for a match that has started and is not settled." });
+                return res.status(409).json({ success: false, message: "Scores can only be submitted while this match is in progress." });
             }
-            // The match row lock serializes both players' submissions. Reuse the
-            // existing verification row instead of relying on ON CONFLICT, since
-            // older production databases may not have the matching unique index.
-            const verificationResult = await client.query(
-                "SELECT id,selected_player_id,screenshot_path FROM efootball_result_verifications WHERE match_id=$1 ORDER BY id LIMIT 1 FOR UPDATE",
-                [matchId]
-            );
-            const existingVerification = verificationResult.rows[0] || null;
-            if (existingVerification && existingVerification.screenshot_path) {
+            const roundNo = Number(match.result_round || 1);
+            if (roundNo !== 1 && roundNo !== 2) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "A screenshot has already been submitted. Score changes are locked for admin review." });
+                return res.status(409).json({ success: false, message: "This match result is already under admin review." });
             }
-            // Each participant may correct their own report until evidence has
-            // been uploaded. This also makes a retry safe after a phone timeout.
+            if (Number.isInteger(requestedRound) && requestedRound > 0 && requestedRound !== roundNo) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "The score page is on an older submission round. Refresh the match before submitting again." });
+            }
 
-            if (isCreator) {
+            const participants = [Number(match.creator_id), Number(match.opponent_id)];
+            const selected = await ensureResultVerification(client, match);
+            if (!selected || !participants.includes(Number(selected.selected_player_id))) {
+                throw new Error("Could not select a valid screenshot uploader for this match.");
+            }
+
+            const prior = await client.query(
+                "SELECT score_for,score_against FROM efootball_result_reports WHERE match_id=$1 AND user_id=$2 AND round_no=$3",
+                [matchId, userId, roundNo]
+            );
+            if (prior.rows.length &&
+                (Number(prior.rows[0].score_for) !== score || Number(prior.rows[0].score_against) !== opponentScore)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "You already submitted this round. The score is locked while the other player reports." });
+            }
+            if (!prior.rows.length) {
                 await client.query(
-                    "UPDATE efootball_matches SET creator_submitted=TRUE, creator_submitted_score=$1, creator_submitted_opponent_score=$2 WHERE id=$3",
+                    "INSERT INTO efootball_result_reports(match_id,user_id,round_no,score_for,score_against) VALUES($1,$2,$3,$4,$5)",
+                    [matchId, userId, roundNo, score, opponentScore]
+                );
+            }
+
+            if (userIsCreator) {
+                await client.query(
+                    "UPDATE efootball_matches SET creator_submitted=TRUE,creator_submitted_score=$1,creator_submitted_opponent_score=$2 WHERE id=$3",
                     [score, opponentScore, matchId]
                 );
             } else {
                 await client.query(
-                    "UPDATE efootball_matches SET opponent_submitted=TRUE, opponent_submitted_score=$1, opponent_submitted_opponent_score=$2 WHERE id=$3",
+                    "UPDATE efootball_matches SET opponent_submitted=TRUE,opponent_submitted_score=$1,opponent_submitted_opponent_score=$2 WHERE id=$3",
                     [score, opponentScore, matchId]
                 );
             }
@@ -1286,43 +1329,34 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const currentResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             const current = currentResult.rows[0];
             if (!current.creator_submitted || !current.opponent_submitted) {
-                if (["awaiting_verification", "disputed"].includes(match.status)) {
-                    await client.query(
-                        "UPDATE efootball_matches SET status='playing',result_status=NULL,submitted_by=NULL WHERE id=$1 AND status IN ('awaiting_verification','disputed')",
-                        [matchId]
-                    );
-                }
                 const safeMatch = await getMatchForUser(client, matchId, userId);
                 await client.query("COMMIT");
                 return res.json({
                     success: true, pending: true, settled: false, disputed: false,
-                    message: "Your score is recorded. Waiting for your opponent to submit theirs.",
+                    message: "Your round " + roundNo + " score is saved. Waiting for the other player to submit.",
                     match: safeMatch
                 });
             }
 
             const creatorScore = Number(current.creator_submitted_score);
             const creatorOpponentScore = Number(current.creator_submitted_opponent_score);
-            const agreed = creatorScore === Number(current.opponent_submitted_opponent_score) &&
+            const reportsAgree = creatorScore === Number(current.opponent_submitted_opponent_score) &&
                 creatorOpponentScore === Number(current.opponent_submitted_score);
-            const participants = [Number(current.creator_id), Number(current.opponent_id)];
 
-            if (agreed) {
+            if (reportsAgree) {
                 const settlement = await settleEfootballMatch(client, current, {
                     creatorScore,
                     opponentScore: creatorOpponentScore
                 }, userId);
-                if (existingVerification) {
-                    await client.query(
-                        "UPDATE efootball_result_verifications SET status='verified',score_check='matched' WHERE id=$1 AND screenshot_path IS NULL",
-                        [existingVerification.id]
-                    );
-                }
+                await client.query(
+                    "UPDATE efootball_result_verifications SET status='verified',score_check='matched' WHERE match_id=$1",
+                    [matchId]
+                );
                 const message = settlement.winnerId
                     ? (Number(settlement.payout) > 0
-                        ? `Both score reports match. The result was settled automatically and KSh ${Number(settlement.payout).toFixed(2)} was credited to the winner.`
-                        : "Both score reports match. The result was settled automatically; no stake was attached.")
-                    : "Both score reports match. The draw was settled automatically and both stakes were returned.";
+                        ? "Both players' round " + roundNo + " reports match. KSh " + Number(settlement.payout).toFixed(2) + " was credited to the winner."
+                        : "Both players' round " + roundNo + " reports match. The result was settled.")
+                    : "Both players' round " + roundNo + " reports match. It was a draw and both stakes were returned.";
                 for (const participantId of participants) {
                     await createSystemNotification(client, participantId, "match_result_settled", "Match Result Settled", message, matchId);
                     await queuePush(client, participantId, {
@@ -1339,61 +1373,97 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 emitMatchUpdate(Number(current.opponent_id), matchId, "result-settled");
                 wakePushQueue();
                 return res.json({
-                    success: true,
-                    pending: false,
-                    settled: true,
-                    disputed: false,
-                    verificationRequired: false,
-                    settlement,
-                    message,
+                    success: true, pending: false, settled: true, disputed: false,
+                    verificationRequired: false, settlement, message, match: safeMatch
+                });
+            }
+
+            if (roundNo === 1) {
+                await client.query(
+                    "UPDATE efootball_matches SET result_round=2,creator_submitted=FALSE,opponent_submitted=FALSE,creator_submitted_score=NULL,creator_submitted_opponent_score=NULL,opponent_submitted_score=NULL,opponent_submitted_opponent_score=NULL,result_status='resubmission',submitted_by=NULL WHERE id=$1",
+                    [matchId]
+                );
+                await client.query(
+                    "UPDATE efootball_result_verifications SET status='resubmit',score_check='round1_mismatch' WHERE match_id=$1 AND screenshot_path IS NULL",
+                    [matchId]
+                );
+                const message = "The first score reports differ. Both players must enter their scores again for round 2.";
+                for (const participantId of participants) {
+                    await createSystemNotification(client, participantId, "match_result_resubmission", "Please Re-enter the Result", message, matchId);
+                    await queuePush(client, participantId, {
+                        eventKey: "efootball-match:" + matchId + ":resubmit:" + participantId,
+                        matchId,
+                        title: "Submit Scores Again",
+                        body: message,
+                        page: "match-results"
+                    });
+                }
+                const safeMatch = await getMatchForUser(client, matchId, userId);
+                await client.query("COMMIT");
+                emitMatchUpdate(Number(current.creator_id), matchId, "result-resubmission");
+                emitMatchUpdate(Number(current.opponent_id), matchId, "result-resubmission");
+                wakePushQueue();
+                return res.json({
+                    success: true, pending: true, settled: false, disputed: false,
+                    resubmit: true, resultRound: 2,
+                    message: "The first reports did not match. Both players must submit their scores again.",
                     match: safeMatch
                 });
             }
 
-            const selectedPlayerId = existingVerification &&
-                participants.includes(Number(existingVerification.selected_player_id))
-                    ? Number(existingVerification.selected_player_id)
-                    : (randomInt(0, 2) === 0 ? participants[0] : participants[1]);
-            if (existingVerification) {
+            const detailResult = await client.query(
+                "SELECT r.round_no,u.username,r.score_for,r.score_against,r.submitted_at FROM efootball_result_reports r JOIN users u ON u.id=r.user_id WHERE r.match_id=$1 ORDER BY r.round_no,r.submitted_at,u.username",
+                [matchId]
+            );
+            const reportLines = detailResult.rows.map(function (report) {
+                return "Round " + Number(report.round_no) + " - " + report.username + ": " +
+                    Number(report.score_for) + "-" + Number(report.score_against);
+            });
+            const description = "The players submitted different score reports in both rounds. The result and locked stake are on hold for admin review.\n\n" +
+                reportLines.join("\n") +
+                (selected.screenshot_path ? "\n\nA match screenshot is attached to the verification record." : "\n\nThe selected uploader can still add the match screenshot from the match results page.");
+            const complaintRef = "GG-" + randomUUID().replace(/-/g, "").slice(0, 24).toUpperCase();
+            const existingCase = await client.query(
+                "SELECT id,complaint_ref FROM complaints WHERE match_id=$1 AND source='efootball_result_dispute' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                [matchId]
+            );
+            let caseRow = existingCase.rows[0];
+            if (!caseRow) {
+                const created = await client.query(
+                    "INSERT INTO complaints(complaint_ref,reporter_id,reported_user_id,match_id,category,subject,description,status,priority,source) VALUES($1,$2,$3,$4,'match-dispute',$5,$6,'open','high','efootball_result_dispute') RETURNING id,complaint_ref",
+                    [complaintRef, userId, userIsCreator ? Number(current.opponent_id) : Number(current.creator_id), matchId, "eFootball score dispute - Match #" + matchId, description]
+                );
+                caseRow = created.rows[0];
                 await client.query(
-                    "UPDATE efootball_result_verifications SET selected_player_id=$1,status='pending_screenshot',score_check='disputed' WHERE id=$2 AND screenshot_path IS NULL",
-                    [selectedPlayerId, existingVerification.id]
+                    "INSERT INTO complaint_case_events(complaint_id,actor_id,actor_role,event_type,to_status,message,metadata) VALUES($1,$2,'system','created','open',$3,$4::jsonb)",
+                    [caseRow.id, userId, "Both score submissions differed in rounds 1 and 2.", JSON.stringify({ matchId: matchId, resultRound: 2 })]
                 );
             } else {
                 await client.query(
-                    "INSERT INTO efootball_result_verifications (match_id,selected_player_id,status,score_check) VALUES ($1,$2,'pending_screenshot',$3)",
-                    [matchId, selectedPlayerId, "disputed"]
+                    "UPDATE complaints SET description=$1,updated_at=NOW() WHERE id=$2",
+                    [description, caseRow.id]
                 );
             }
 
             await client.query(
-                "UPDATE efootball_matches SET status='disputed', result_status='disputed', submitted_by=$1 WHERE id=$2",
+                "UPDATE efootball_matches SET status='disputed',result_status='disputed',submitted_by=$1 WHERE id=$2",
                 [userId, matchId]
             );
-            const disputeMessage = "The two score reports do not match. The result is on hold for screenshot evidence and admin review.";
-            await createSystemNotification(client, current.creator_id, "match_disputed", "Result Disputed", disputeMessage, matchId);
-            await createSystemNotification(client, current.opponent_id, "match_disputed", "Result Disputed", disputeMessage, matchId);
-            await createSystemNotification(
-                client, selectedPlayerId, "result_verification", "Screenshot Needed",
-                "Upload the final match screenshot on the match page. The admin will decide any score dispute.", matchId
+            await client.query(
+                "UPDATE efootball_result_verifications SET status=CASE WHEN screenshot_path IS NULL THEN 'pending_screenshot' ELSE 'review_required' END,score_check='disputed' WHERE match_id=$1",
+                [matchId]
             );
+            const disputeMessage = "The second score reports also differ. Admin case " + caseRow.complaint_ref + " is open; the result and any locked stake remain on hold.";
             for (const participantId of participants) {
+                await createSystemNotification(client, participantId, "match_disputed", "Result Sent to Admin", disputeMessage, matchId);
                 await queuePush(client, participantId, {
                     eventKey: "efootball-match:" + matchId + ":result-disputed:" + participantId,
                     matchId,
-                    title: "Result Disputed",
+                    title: "Result Sent to Admin",
                     body: disputeMessage,
                     page: "match-results"
                 });
             }
-            await queuePush(client, selectedPlayerId, {
-                eventKey: "efootball-match:" + matchId + ":screenshot-needed",
-                matchId,
-                title: "Screenshot Needed",
-                body: "You were selected to upload the final eFootball score screenshot for admin review.",
-                page: "match-results"
-            });
-
             const safeMatch = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
             emitMatchUpdate(Number(current.creator_id), matchId, "result-disputed");
@@ -1401,8 +1471,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             wakePushQueue();
             return res.json({
                 success: true, pending: true, settled: false, disputed: true,
-                verificationRequired: true, pendingAdminReview: true,
-                message: "The scores disagree. The match is on hold for screenshot evidence and admin review.",
+                pendingAdminReview: true, complaintRef: caseRow.complaint_ref,
+                message: "Both rounds differed. Case " + caseRow.complaint_ref + " was sent to the admin with both players' reports.",
                 match: safeMatch
             });
         } catch (error) {
@@ -1503,22 +1573,41 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP" && file.mimetype === "image/webp") extension = ".webp";
         if (!extension) return res.status(400).json({ success: false, message: "The uploaded file is not a valid JPEG, PNG or WebP image." });
 
-        let storedName = null;
         const uploadDirectory = path.join(__dirname, "..", "uploads", "match-verification");
+        const storedName = randomUUID() + extension;
+        const storedPath = path.join(uploadDirectory, storedName);
+        let fileWritten = false;
+        const client = await pool.connect();
         try {
-            const permission = await pool.query(
-                "SELECT v.selected_player_id, v.screenshot_path, m.status AS match_status FROM efootball_result_verifications v JOIN efootball_matches m ON m.id=v.match_id WHERE v.match_id=$1",
-                [matchId]
-            );
-            if (!permission.rows.length) return res.status(404).json({ success: false, message: "No screenshot verification is waiting for this match." });
-            const record = permission.rows[0];
-            if (Number(record.selected_player_id) !== userId) return res.status(403).json({ success: false, message: "You were not selected to submit this screenshot." });
-            if (!["awaiting_verification", "disputed"].includes(record.match_status)) return res.status(409).json({ success: false, message: "This match is not waiting for screenshot verification." });
-            if (record.screenshot_path) return res.status(409).json({ success: false, message: "A screenshot has already been submitted for this match." });
+            await client.query("BEGIN");
+            const matchResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            if (!matchResult.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({ success: false, message: "Match not found." });
+            }
+            const match = matchResult.rows[0];
+            if (Number(match.creator_id) !== userId && Number(match.opponent_id) !== userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "You are not part of this match." });
+            }
+            if (!["playing", "awaiting_verification", "disputed"].includes(match.status) || match.settled_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Screenshot upload is only available while this match is active or under review." });
+            }
+            const verification = await ensureResultVerification(client, match);
+            if (!verification || Number(verification.selected_player_id) !== userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "Only the player selected for this match can submit its screenshot." });
+            }
+            if (verification.screenshot_path) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "A screenshot has already been submitted for this match." });
+            }
+            await client.query("COMMIT");
 
             await fs.promises.mkdir(uploadDirectory, { recursive: true });
-            storedName = randomUUID() + extension;
-            await fs.promises.writeFile(path.join(uploadDirectory, storedName), buffer, { flag: "wx" });
+            await fs.promises.writeFile(storedPath, buffer, { flag: "wx" });
+            fileWritten = true;
 
             let analysis = { text: "", candidates: [] };
             try {
@@ -1527,80 +1616,59 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 console.error("Screenshot OCR unavailable:", ocrError.message);
             }
 
-            const client = await pool.connect();
-            try {
-                await client.query("BEGIN");
-                const locked = await client.query(
-                    "SELECT v.id AS verification_id,v.selected_player_id,v.screenshot_path,m.id AS match_id,m.status AS match_status,m.creator_id,m.opponent_id,m.creator_submitted_score,m.creator_submitted_opponent_score FROM efootball_result_verifications v JOIN efootball_matches m ON m.id=v.match_id WHERE v.match_id=$1 FOR UPDATE OF v,m",
-                    [matchId]
-                );
-                if (!locked.rows.length || Number(locked.rows[0].selected_player_id) !== userId) {
-                    await client.query("ROLLBACK");
-                    return res.status(403).json({ success: false, message: "You are not authorized to submit this screenshot." });
-                }
-                const current = locked.rows[0];
-                if (current.screenshot_path) {
-                    await client.query("ROLLBACK");
-                    try { await fs.promises.unlink(path.join(uploadDirectory, storedName)); } catch (_) {}
-                    storedName = null;
-                    return res.status(409).json({ success: false, message: "A screenshot has already been submitted." });
-                }
-                const disputed = current.match_status === "disputed";
-                const matched = !disputed && matchesExpected(
-                    analysis.candidates,
-                    current.creator_submitted_score,
-                    current.creator_submitted_opponent_score
-                );
-                const scoreCheck = disputed ? "disputed" : matched ? "matched" : analysis.candidates.length ? "mismatch" : "uncertain";
-                await client.query(
-                    "UPDATE efootball_result_verifications SET screenshot_path=$1,submitted_at=NOW(),status=$2,screenshot_ocr_text=$3,detected_score_candidates=$4::jsonb,score_check=$5 WHERE id=$6",
-                    [storedName, matched ? "verified" : "review_required", analysis.text, JSON.stringify(analysis.candidates), scoreCheck, current.verification_id]
-                );
+            await client.query("BEGIN");
+            const locked = await client.query(
+                "SELECT v.id AS verification_id,v.selected_player_id,v.screenshot_path,m.status AS match_status,m.settled_at,m.creator_id,m.opponent_id FROM efootball_result_verifications v JOIN efootball_matches m ON m.id=v.match_id WHERE v.match_id=$1 FOR UPDATE OF v,m",
+                [matchId]
+            );
+            if (!locked.rows.length) {
+                await client.query("ROLLBACK");
+                await fs.promises.unlink(storedPath).catch(() => {});
+                return res.status(409).json({ success: false, message: "This match is no longer accepting screenshot evidence." });
+            }
+            const current = locked.rows[0];
+            if (Number(current.selected_player_id) !== userId ||
+                (Number(current.creator_id) !== userId && Number(current.opponent_id) !== userId)) {
+                await client.query("ROLLBACK");
+                await fs.promises.unlink(storedPath).catch(() => {});
+                return res.status(403).json({ success: false, message: "Only the selected match participant can submit this screenshot." });
+            }
+            if (current.screenshot_path) {
+                await client.query("ROLLBACK");
+                await fs.promises.unlink(storedPath).catch(() => {});
+                return res.status(409).json({ success: false, message: "A screenshot has already been submitted for this match." });
+            }
+            if (!["playing", "awaiting_verification", "disputed"].includes(current.match_status) || current.settled_at) {
+                await client.query("ROLLBACK");
+                await fs.promises.unlink(storedPath).catch(() => {});
+                return res.status(409).json({ success: false, message: "This match is no longer accepting screenshot evidence." });
+            }
 
-                let settlement = null;
-                if (matched) {
-                    const matchResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
-                    const match = matchResult.rows[0];
-                    settlement = await settleEfootballMatch(client, match, {
-                        creatorScore: match.creator_submitted_score,
-                        opponentScore: match.creator_submitted_opponent_score
-                    }, userId);
-                    const message = "The screenshot score matched both submitted results. Your match has been verified and the standings updated.";
-                    await createSystemNotification(client, Number(match.creator_id), "match_verified", "Result Verified", message, matchId);
-                    await createSystemNotification(client, Number(match.opponent_id), "match_verified", "Result Verified", message, matchId);
-                } else {
-                    await client.query(
-                        "UPDATE efootball_matches SET status='disputed',result_status='disputed' WHERE id=$1 AND status<>'completed'",
-                        [matchId]
-                    );
-                    const message = "The screenshot score could not confirm the submitted result. An admin will review the evidence; any locked match funds remain on hold.";
-                    await createSystemNotification(client, Number(current.creator_id), "match_admin_review", "Admin Review Required", message, matchId);
-                    await createSystemNotification(client, Number(current.opponent_id), "match_admin_review", "Admin Review Required", message, matchId);
-                }
-                await client.query("COMMIT");
-                return res.json({
-                    success: true,
-                    verified: matched,
-                    pendingAdminReview: !matched,
-                    scoreCheck: scoreCheck,
-                    scoreCandidates: analysis.candidates,
-                    settlement: settlement,
-                    message: matched
-                        ? "Screenshot score matched. The result and standings are updated."
-                        : "Screenshot stored securely. OCR could not verify the exact score, so an admin must review it."
-                });
-            } catch (error) {
-                try { await client.query("ROLLBACK"); } catch (_) {}
-                throw error;
-            } finally {
-                client.release();
-            }
+            const underReview = current.match_status === "disputed" || current.match_status === "awaiting_verification";
+            await client.query(
+                "UPDATE efootball_result_verifications SET screenshot_path=$1,submitted_at=NOW(),status=$2,screenshot_ocr_text=$3,detected_score_candidates=$4::jsonb,score_check=$5 WHERE id=$6",
+                [storedName, underReview ? "review_required" : "awaiting_scores", analysis.text, JSON.stringify(analysis.candidates), underReview ? "disputed" : "awaiting_scores", current.verification_id]
+            );
+            const message = underReview
+                ? "Screenshot evidence was added to the open admin review. The result remains on hold."
+                : "Screenshot saved. It will be included if the two score rounds need admin review.";
+            await createSystemNotification(client, Number(current.creator_id), "match_screenshot_received", "Match Screenshot Saved", message, matchId);
+            await createSystemNotification(client, Number(current.opponent_id), "match_screenshot_received", "Match Screenshot Saved", message, matchId);
+            await client.query("COMMIT");
+            return res.json({
+                success: true,
+                screenshotSubmitted: true,
+                pendingAdminReview: underReview,
+                scoreCandidates: analysis.candidates,
+                message
+            });
         } catch (error) {
-            if (storedName) {
-                try { await fs.promises.unlink(path.join(uploadDirectory, storedName)); } catch (_) {}
-            }
+            try { await client.query("ROLLBACK"); } catch (_) {}
+            if (fileWritten) await fs.promises.unlink(storedPath).catch(() => {});
             console.error("Screenshot verification error:", error.message);
             return res.status(500).json({ success: false, message: "Unable to process the screenshot. Please try again." });
+        } finally {
+            client.release();
         }
     });
     /* =====================================================
