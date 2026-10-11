@@ -2,31 +2,130 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080808">
-  <title>GOAL$GAMBIT | Chess tournaments</title>
+  <title>GOAL$GAMBIT | Chess tournament tables</title>
   <style>
+    :root{color-scheme:dark;--bg:#080808;--panel:#111;--line:#292929;--gold:#f4bd20;--muted:#aaa}
     *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#080808;color:#fff;font:16px/1.6 Arial,Helvetica,sans-serif}
-    main{width:min(560px,100%);padding:32px;border:1px solid #292929;border-radius:18px;background:#111}
-    .eyebrow{color:#f4bd20;font-size:12px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}
-    h1{margin:8px 0 12px;font-size:clamp(26px,6vw,38px)}
-    p{margin:0;color:#aaa}
-    nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
-    a{padding:11px 16px;border:1px solid #444;border-radius:9px;color:#fff;font-weight:800;text-decoration:none}
-    a.primary{border-color:#f4bd20;background:#f4bd20;color:#111}
+    body{margin:0;background:var(--bg);color:#fff;font:15px/1.6 Arial,Helvetica,sans-serif}
+    a{color:inherit}
+    header{min-height:68px;padding:12px max(18px,calc((100vw - 1120px)/2));display:flex;align-items:center;justify-content:space-between;gap:18px;background:#0b0b0b;border-bottom:1px solid #202020}
+    .brand{color:var(--gold);font-weight:900;text-decoration:none;letter-spacing:.5px}
+    nav{display:flex;gap:16px;flex-wrap:wrap}nav a{color:#bbb;text-decoration:none;font-size:13px}nav a:hover{color:var(--gold)}
+    main{width:min(1120px,calc(100% - 36px));margin:42px auto 80px}
+    .eyebrow{margin:0 0 8px;color:var(--gold);font-size:11px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase}
+    h1{margin:0 0 8px;font-size:clamp(30px,5vw,44px)}
+    .intro{max-width:780px;margin:0 0 24px;color:var(--muted)}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:22px 0}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    button,select,.play{border:1px solid #333;border-radius:9px;background:#151515;color:#ddd;padding:10px 13px;font:inherit}
+    button{cursor:pointer;font-weight:800}button.active{background:var(--gold);border-color:var(--gold);color:#111}
+    select{min-width:145px}.play{background:var(--gold);border-color:var(--gold);color:#111;font-weight:900;text-decoration:none;white-space:nowrap}
+    .status{color:#888;font-size:12px}
+    .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+    .panel{min-width:0;padding:20px;border:1px solid var(--line);border-radius:15px;background:var(--panel)}
+    h2{margin:0 0 13px;color:var(--gold);font-size:15px}
+    .table-scroll{overflow-x:auto}
+    table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:12px}
+    th,td{padding:9px 8px;text-align:left;border-bottom:1px solid #282828}
+    th{color:#777;font-size:10px;text-transform:uppercase}td{color:#ddd}
+    tr.you td{color:var(--gold);font-weight:800}
+    .empty{color:#888;text-align:center;padding:22px}
+    .footnote{margin-top:18px;color:#777;font-size:12px;line-height:1.55}
+    @media(max-width:760px){header{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr}.toolbar{align-items:flex-start;flex-direction:column}.play{width:100%;text-align:center}}
   </style>
 </head>
 <body>
+  <header>
+    <a class="brand" href="chess.html">GOAL$GAMBIT · CHESS</a>
+    <nav aria-label="Chess navigation"><a href="chess.html">Dashboard</a><a href="rapid.html">Rapid</a><a href="blitz.html">Blitz</a><a href="bullet.html">Bullet</a></nav>
+  </header>
   <main>
-    <div class="eyebrow">Chess tournaments</div>
-    <h1>This lobby is unavailable</h1>
-    <p>Chess tournament registration is not connected to the server yet. You can still find a chess match from your dashboard.</p>
-    <nav aria-label="Next steps">
-      <a class="primary" href="chess.html">Go to chess</a>
-      <a href="dashboard.html">Choose a game</a>
-    </nav>
+    <p class="eyebrow">Live server tables</p>
+    <h1>Chess tournament standings</h1>
+    <p class="intro">Choose a clock and entry stake to view this month’s tournament-mode standings and fixtures. Results count after the chess server completes the match.</p>
+    <div class="toolbar">
+      <div class="controls" role="group" aria-label="Tournament clock">
+        <button type="button" class="active" data-clock="10+5">Rapid · 10+5</button>
+        <button type="button" data-clock="3+2">Blitz · 3+2</button>
+        <button type="button" data-clock="1+1">Bullet · 1+1</button>
+      </div>
+      <label>Entry stake
+        <select id="stakeSelect"><option value="20">KSh 20</option><option value="50">KSh 50</option><option value="100">KSh 100</option></select>
+      </label>
+      <a id="playLink" class="play" href="rapid.html">Play this clock</a>
+    </div>
+    <div class="toolbar"><span class="status" id="tableStatus" role="status">Connecting to live chess data…</span><span class="status">Refreshes every 10 seconds while this page is open</span></div>
+    <div class="grid">
+      <section class="panel" aria-labelledby="standingsTitle">
+        <h2 id="standingsTitle">Rapid standings · KSh 20</h2>
+        <div class="table-scroll"><table><thead><tr><th>#</th><th>Player</th><th>Rating</th><th>P</th><th>W</th><th>D</th><th>L</th><th>Pts</th></tr></thead><tbody id="standingsBody"><tr><td class="empty" colspan="8">Loading standings…</td></tr></tbody></table></div>
+      </section>
+      <section class="panel" aria-labelledby="fixturesTitle">
+        <h2 id="fixturesTitle">Recent and live fixtures</h2>
+        <div class="table-scroll"><table><thead><tr><th>White</th><th>Black</th><th>Result</th><th>Status</th></tr></thead><tbody id="fixturesBody"><tr><td class="empty" colspan="4">Loading fixtures…</td></tr></tbody></table></div>
+      </section>
+    </div>
+    <p class="footnote">These standings group tournament-mode games by clock, stake, and calendar month. Fixtures and verified results come directly from the chess server; the page does not create or fabricate scheduled rounds.</p>
   </main>
-<script src="../js/api.js"></script>
+  <script src="../js/api.js"></script>
+  <script>
+  "use strict";
+  let selectedClock = "10+5";
+  let refreshPending = false;
+  const clockButtons = Array.from(document.querySelectorAll("[data-clock]"));
+  const stakeSelect = document.getElementById("stakeSelect");
+  const clockPages = {"10+5":"rapid.html","3+2":"blitz.html","1+1":"bullet.html"};
+
+  function escape(value) { return GG.escapeHTML(value == null ? "" : value); }
+  function resultLabel(row) {
+    if (row.status !== "completed") return String(row.status || "scheduled").replace(/_/g," ");
+    if (row.result === "draw") return "½ – ½";
+    if (row.result === "white_win") return "1 – 0";
+    if (row.result === "black_win") return "0 – 1";
+    return "Completed";
+  }
+  function updateControls() {
+    const label = clockButtons.find(button => button.dataset.clock === selectedClock);
+    const name = label ? label.textContent.split("·")[0].trim() : "Tournament";
+    document.getElementById("standingsTitle").textContent = name + " standings · KSh " + stakeSelect.value;
+    document.getElementById("playLink").href = clockPages[selectedClock];
+    document.getElementById("playLink").textContent = "Play " + name.toLowerCase();
+  }
+  async function refreshTables() {
+    if (refreshPending || document.hidden) return;
+    refreshPending = true;
+    const response = await GG.api("/api/chess/competitions/tournament?timeControl=" + encodeURIComponent(selectedClock) + "&stake=" + encodeURIComponent(stakeSelect.value), {noRedirect:true});
+    refreshPending = false;
+    if (!response.ok) {
+      document.getElementById("tableStatus").textContent = response.data.message || "Chess tables are temporarily unavailable.";
+      document.getElementById("standingsBody").innerHTML = '<tr><td class="empty" colspan="8">Could not load standings.</td></tr>';
+      document.getElementById("fixturesBody").innerHTML = '<tr><td class="empty" colspan="4">Could not load fixtures.</td></tr>';
+      return;
+    }
+    const username = String(localStorage.getItem("goalGambitUsername") || "").toLowerCase();
+    const standings = Array.isArray(response.data.standings) ? response.data.standings : [];
+    document.getElementById("standingsBody").innerHTML = standings.length
+      ? standings.map((row,index) => '<tr class="' + (username && String(row.username).toLowerCase() === username ? "you" : "") + '"><td>' + (index + 1) + '</td><td>' + escape(row.username) + '</td><td>' + Number(row.rating || 1200) + '</td><td>' + Number(row.played || 0) + '</td><td>' + Number(row.wins || 0) + '</td><td>' + Number(row.draws || 0) + '</td><td>' + Number(row.losses || 0) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("")
+      : '<tr><td class="empty" colspan="8">No completed tournament games in this table yet.</td></tr>';
+    const fixtures = Array.isArray(response.data.fixtures) ? response.data.fixtures : [];
+    document.getElementById("fixturesBody").innerHTML = fixtures.length
+      ? fixtures.slice(0,20).map(row => '<tr><td>' + escape(row.white_player || "Player") + '</td><td>' + escape(row.black_player || "Finding opponent") + '</td><td>' + escape(resultLabel(row)) + '</td><td>' + escape(String(row.status || "").replace(/_/g," ")) + '</td></tr>').join("")
+      : '<tr><td class="empty" colspan="4">No tournament fixtures for this clock and stake this month.</td></tr>';
+    document.getElementById("tableStatus").textContent = "Server updated " + new Date().toLocaleTimeString();
+  }
+  clockButtons.forEach(button => button.addEventListener("click", function() {
+    selectedClock = button.dataset.clock;
+    clockButtons.forEach(item => item.classList.toggle("active", item === button));
+    updateControls();
+    refreshTables();
+  }));
+  stakeSelect.addEventListener("change", function() { updateControls(); refreshTables(); });
+  document.addEventListener("visibilitychange", function() { if (!document.hidden) refreshTables(); });
+  updateControls();
+  refreshTables();
+  setInterval(refreshTables, 10000);
+  </script>
 </body>
 </html>

@@ -34,12 +34,11 @@ module.exports = function (pool, authenticateToken) {
                        hu.username AS home,au.username AS away,m.round_name,m.status,
                        CASE WHEN m.status='completed' THEN m.creator_score END AS home_score,
                        CASE WHEN m.status='completed' THEN m.opponent_score END AS away_score,
-                       m.created_at,m.started_at,m.finished_at,m.code_sent,
-                       m.creator_ready,m.opponent_ready
+                       m.created_at,m.started_at,m.finished_at
                 FROM efootball_matches m
                 JOIN users hu ON hu.id=m.creator_id
                 LEFT JOIN users au ON au.id=m.opponent_id
-                WHERE m.league=$1 AND (m.creator_id=$2 OR m.opponent_id=$2)
+                WHERE m.league=$1
                 ORDER BY COALESCE(m.started_at,m.created_at) DESC,m.id DESC
                 LIMIT 100`,[l.name,req.user.userId]);
             const me=Number(req.user.userId);

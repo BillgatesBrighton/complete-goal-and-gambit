@@ -21,6 +21,7 @@ const authRoutes = require("./routes/auth");
 const walletRoutes = require("./routes/wallet");
 const chessRoutes = require("./routes/chess");
 const leaderboardRoutes = require("./routes/leaderboard");
+const chessCompetitionRoutes = require("./routes/chessCompetitions");
 const efootballRoutes = require("./routes/efootball");
 const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
@@ -741,6 +742,13 @@ app.use(
 app.use(
     "/api/push",
     createPushRoutes(pool, authenticateToken, pushService)
+);
+
+// Competition tables contain public standings and fixture summaries. Mount
+// before the authenticated chess router so these read-only views are public.
+app.use(
+    "/api/chess/competitions",
+    chessCompetitionRoutes(pool)
 );
 
 app.use(

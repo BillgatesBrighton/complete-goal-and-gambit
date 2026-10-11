@@ -546,6 +546,13 @@ body{
     border-color:var(--gold);
 }
 
+.fixture-public-label{
+    color:#777;
+    font-size:9px;
+    font-weight:bold;
+    white-space:nowrap;
+}
+
 /* SIDEBAR */
 
 .side-panel{
@@ -620,8 +627,11 @@ body{
 
 .table{
     width:100%;
+    min-width:440px;
     border-collapse:collapse;
 }
+
+.table-scroll{max-width:100%;overflow-x:auto}
 
 .table th{
     color:#555;
@@ -1237,6 +1247,7 @@ body{
     </div>
 
 
+    <div class="table-scroll">
     <table class="table">
 
         <thead>
@@ -1251,9 +1262,12 @@ body{
                     PLAYER
                 </th>
 
-                <th>
-                    PTS
-                </th>
+                <th>P</th>
+                <th>W</th>
+                <th>D</th>
+                <th>L</th>
+                <th>GD</th>
+                <th>PTS</th>
 
             </tr>
 
@@ -1264,6 +1278,7 @@ body{
         </tbody>
 
     </table>
+    </div>
 
 </div>
 
@@ -3031,11 +3046,11 @@ function matchLink(match) {
 function renderTable(standings) {
   const body = document.getElementById("leagueTable");
   if (!standings.length) {
-    body.innerHTML = '<tr><td colspan="3">No members have joined this league yet.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8">No members have joined this league yet.</td></tr>';
     return;
   }
   body.innerHTML = standings.map((row, index) => '<tr class="' + (currentUser && String(row.username).toLowerCase() === currentUser ? "you" : "") + '">' +
-    '<td>' + (index + 1) + '</td><td>' + esc(row.username) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("");
+    '<td>' + (index + 1) + '</td><td>' + esc(row.username) + '</td><td>' + Number(row.played || 0) + '</td><td>' + Number(row.wins || 0) + '</td><td>' + Number(row.draws || 0) + '</td><td>' + Number(row.losses || 0) + '</td><td>' + Number(row.goal_difference || 0) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("");
 }
 
 function renderFixtures(fixtures) {
@@ -3057,12 +3072,14 @@ function renderFixtures(fixtures) {
   feed.innerHTML = filtered.map(match => {
     const score = match.status === "completed" && match.home_score !== null ? Number(match.home_score) + " - " + Number(match.away_score) : "—";
     const away = match.away || "Searching for opponent";
-    const action = match.status === "cancelled" ? "VIEW" : "OPEN MATCH";
+    const action = match.mine
+      ? '<a href="' + matchLink(match) + '">' + (match.status === "cancelled" ? "VIEW MATCH" : "OPEN MATCH") + '</a>'
+      : '<span class="fixture-public-label">LEAGUE FIXTURE</span>';
     return '<div class="fixture-row"><div class="fixture-round">Match <strong>#' + Number(match.id) + '</strong></div>' +
       '<div class="fixture-teams"><div class="fixture-team-line"><strong>' + esc(match.home || "Player") + '</strong><span class="score">' + score + '</span><strong>' + esc(away) + '</strong></div></div>' +
       '<div class="fixture-date"><strong>' + esc(fixtureDate(match)) + '</strong><span>Updated from live match data</span></div>' +
       '<div class="fixture-status"><span class="badge ' + statusClass(match.status) + '">' + esc(statusLabel(match.status)) + '</span></div>' +
-      '<div class="fixture-action"><a href="' + matchLink(match) + '">' + action + '</a></div></div>';
+      '<div class="fixture-action">' + action + '</div></div>';
   }).join("");
 }
 
@@ -3075,8 +3092,9 @@ function renderOverview(fixtures, standings) {
   document.getElementById("drawsValue").textContent = Number(me && me.draws || 0);
   document.getElementById("pointsValue").textContent = Number(me && me.points || 0);
 
-  const completed = fixtures.filter(match => match.status === "completed").sort((a,b) => new Date(b.finished_at || b.created_at) - new Date(a.finished_at || a.created_at));
-  const active = fixtures.find(match => ["waiting", "ready", "playing", "awaiting_verification", "disputed"].includes(match.status));
+  const myFixtures = fixtures.filter(match => match.mine);
+  const completed = myFixtures.filter(match => match.status === "completed").sort((a,b) => new Date(b.finished_at || b.created_at) - new Date(a.finished_at || a.created_at));
+  const active = myFixtures.find(match => ["waiting", "ready", "playing", "awaiting_verification", "disputed"].includes(match.status));
   const next = active || null;
   document.getElementById("nextMatch").innerHTML = next
     ? '<div class="next-top"><div class="matchday-label">LIVE LEAGUE MATCH</div><div class="live-label">' + esc(statusLabel(next.status)) + '</div></div><div class="next-teams"><div class="next-team home"><small>PLAYER</small><strong>' + esc(next.home || "Player") + '</strong></div><div class="vs">VS</div><div class="next-team"><small>OPPONENT</small><strong>' + esc(next.away || "Finding opponent") + '</strong></div></div><a class="match-hub-btn" href="' + matchLink(next) + '">OPEN MATCH HUB</a>'
@@ -3096,7 +3114,10 @@ function renderOverview(fixtures, standings) {
 
   const activeBox = document.getElementById("activeMatch");
   activeBox.style.display = active ? "block" : "none";
-  if (active) document.getElementById("activeMatchText").textContent = (active.away || "Waiting for opponent") + " · " + statusLabel(active.status);
+  if (active) {
+    const opponent = Number(active.home_id) === Number(localStorage.getItem("goalGambitUserId")) ? active.away : active.home;
+    document.getElementById("activeMatchText").textContent = (opponent || "Waiting for opponent") + " · " + statusLabel(active.status);
+  }
 }
 
 function renderFilters() {

@@ -81,10 +81,34 @@ module.exports = function (pool, authenticateToken) {
                 [id]
             );
 
+            const fixtures = await pool.query(
+                `SELECT m.id, m.creator_id AS home_id, m.opponent_id AS away_id,
+                        hu.username AS home, au.username AS away, m.status,
+                        CASE WHEN m.status = 'completed' THEN m.creator_score END AS home_score,
+                        CASE WHEN m.status = 'completed' THEN m.opponent_score END AS away_score,
+                        m.created_at, m.started_at, m.finished_at
+                   FROM efootball_matches m
+                   JOIN users hu ON hu.id = m.creator_id
+                   LEFT JOIN users au ON au.id = m.opponent_id
+                  WHERE m.tournament_id = $1
+                  ORDER BY COALESCE(m.started_at, m.created_at) DESC, m.id DESC
+                  LIMIT 50`,
+                [id]
+            );
+
             return res.json({
                 success: true,
                 tournament: tournament.rows[0],
-                standings: standings.rows
+                standings: standings.rows,
+                fixtures: fixtures.rows.map(row => ({
+                    ...row,
+                    id: Number(row.id),
+                    home_id: Number(row.home_id),
+                    away_id: row.away_id === null ? null : Number(row.away_id),
+                    home_score: row.home_score === null ? null : Number(row.home_score),
+                    away_score: row.away_score === null ? null : Number(row.away_score),
+                    mine: Number(row.home_id) === Number(req.user.userId) || Number(row.away_id) === Number(req.user.userId)
+                }))
             });
         } catch (error) {
             console.error("Tournament status error:", error.message);

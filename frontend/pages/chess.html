@@ -208,6 +208,30 @@ main {
     font-size: 13px;
 }
 
+.competition-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: 16px;
+}
+
+.competition-panel {
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid #292929;
+    border-radius: 14px;
+    background: rgba(12, 12, 12, 0.94);
+}
+
+.competition-panel h3 { color: #f4bd20; font-size: 13px; margin-bottom: 12px; }
+.competition-table-wrap { overflow-x: auto; }
+.competition-table { width: 100%; min-width: 410px; border-collapse: collapse; font-size: 12px; }
+.competition-table th, .competition-table td { padding: 9px 7px; text-align: left; border-bottom: 1px solid #262626; white-space: nowrap; }
+.competition-table th { color: #777; font-size: 10px; text-transform: uppercase; }
+.competition-table td { color: #ddd; }
+.competition-table tr.you td { color: #f4bd20; font-weight: 800; }
+.competition-note { margin-top: 12px; color: #777; font-size: 11px; line-height: 1.5; }
+.competition-link { color: #f4bd20; font-size: 12px; font-weight: 800; text-decoration: none; }
+
 
 /* =========================================================
    GRID
@@ -452,6 +476,8 @@ main {
         grid-template-columns: 1fr;
     }
 
+    .competition-grid { grid-template-columns: 1fr; }
+
     .stats {
         grid-template-columns: repeat(2, 1fr);
     }
@@ -581,6 +607,42 @@ Enter a chess tournament or play ranked chess.
 Choose your format and compete at your level.
 </p>
 
+</section>
+
+
+<!-- =======================================================
+     LIVE CHESS LEAGUE TABLE AND FIXTURES
+======================================================= -->
+
+<section class="section" aria-labelledby="chessLeagueHeading">
+  <div class="section-head">
+    <div>
+      <div class="small-label">LIVE TABLE</div>
+      <h2 id="chessLeagueHeading">♟ Chess ranked league</h2>
+    </div>
+    <a class="competition-link" href="tournament-lobby.html">Chess tournament tables →</a>
+  </div>
+  <div class="competition-grid">
+    <div class="competition-panel">
+      <h3>Current month standings · 3 points for a win, 1 for a draw</h3>
+      <div class="competition-table-wrap">
+        <table class="competition-table">
+          <thead><tr><th>#</th><th>Player</th><th>Rating</th><th>P</th><th>W</th><th>D</th><th>L</th><th>Pts</th></tr></thead>
+          <tbody id="chessLeagueStandings"><tr><td colspan="8">Loading standings from server…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="competition-panel">
+      <h3>Ranked fixtures · latest and in progress</h3>
+      <div class="competition-table-wrap">
+        <table class="competition-table">
+          <thead><tr><th>White</th><th>Black</th><th>Result</th><th>Status</th></tr></thead>
+          <tbody id="chessLeagueFixtures"><tr><td colspan="4">Loading fixtures from server…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="competition-note" id="chessLeagueUpdated">Tables refresh automatically from completed server games.</p>
+    </div>
+  </div>
 </section>
 
 
@@ -1523,17 +1585,55 @@ async function loadServerRecords() {
     renderStats();
 }
 
+let chessCompetitionRefreshInProgress = false;
+
+function chessCompetitionResult(fixture) {
+    if (fixture.status !== "completed") return String(fixture.status || "Scheduled").replace(/_/g, " ");
+    if (fixture.result === "draw") return "½ – ½";
+    if (fixture.result === "white_win") return "1 – 0";
+    if (fixture.result === "black_win") return "0 – 1";
+    return "Completed";
+}
+
+async function loadChessLeagueTable() {
+    if (chessCompetitionRefreshInProgress || document.hidden) return;
+    chessCompetitionRefreshInProgress = true;
+    const result = await GG.api("/api/chess/competitions/league", { noRedirect: true });
+    chessCompetitionRefreshInProgress = false;
+    if (!result.ok) {
+        document.getElementById("chessLeagueStandings").innerHTML = '<tr><td colspan="8">Standings are temporarily unavailable.</td></tr>';
+        document.getElementById("chessLeagueFixtures").innerHTML = '<tr><td colspan="4">Fixtures are temporarily unavailable.</td></tr>';
+        return;
+    }
+    const standings = Array.isArray(result.data.standings) ? result.data.standings : [];
+    const username = String(localStorage.getItem("goalGambitUsername") || "").toLowerCase();
+    document.getElementById("chessLeagueStandings").innerHTML = standings.length
+        ? standings.map((row, index) => '<tr class="' + (username && String(row.username).toLowerCase() === username ? "you" : "") + '"><td>' + (index + 1) + '</td><td>' + GG.escapeHTML(row.username) + '</td><td>' + Number(row.rating || 1200) + '</td><td>' + Number(row.played || 0) + '</td><td>' + Number(row.wins || 0) + '</td><td>' + Number(row.draws || 0) + '</td><td>' + Number(row.losses || 0) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("")
+        : '<tr><td colspan="8">No ranked results this month yet.</td></tr>';
+    const fixtures = Array.isArray(result.data.fixtures) ? result.data.fixtures : [];
+    document.getElementById("chessLeagueFixtures").innerHTML = fixtures.length
+        ? fixtures.slice(0, 12).map(fixture => '<tr><td>' + GG.escapeHTML(fixture.white_player || "Player") + '</td><td>' + GG.escapeHTML(fixture.black_player || "Finding opponent") + '</td><td>' + GG.escapeHTML(chessCompetitionResult(fixture)) + '</td><td>' + GG.escapeHTML(String(fixture.status || "").replace(/_/g, " ")) + '</td></tr>').join("")
+        : '<tr><td colspan="4">No ranked fixtures this month yet.</td></tr>';
+    document.getElementById("chessLeagueUpdated").textContent = "Updated from the server at " + new Date().toLocaleTimeString() + ". Only completed ranked games count toward points.";
+}
+
 async function refreshDashboard() {
     const user = await GG.initDashboard("chess");
     if (!user) return;
     updateBalance();
     await loadServerRecords();
+    await loadChessLeagueTable();
 }
 
 refreshDashboard();
 
 window.addEventListener("pageshow", function (event) {
     if (event.persisted) refreshDashboard();
+});
+
+setInterval(loadChessLeagueTable, 10000);
+document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) loadChessLeagueTable();
 });
 
 </script>
