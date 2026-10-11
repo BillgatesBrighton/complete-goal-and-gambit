@@ -294,6 +294,13 @@ button:disabled {
     border-bottom: none;
 }
 
+.transaction-note {
+    grid-column: 1 / -1;
+    color: #e5a39d;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
 .transaction-head {
     color: #777;
     font-size: 11px;
@@ -737,7 +744,7 @@ async function loadWallet(animate) {
 }
 
 
-async function loadTransactions() {
+async function loadTransactions(trackedReference) {
 
     var list =
         document.getElementById(
@@ -756,13 +763,17 @@ async function loadTransactions() {
         list.innerHTML =
             '<div class="empty">Could not load transactions.</div>';
 
-        return;
+        return null;
 
     }
 
 
     var transactions =
         result.data.transactions || [];
+
+    var trackedTransaction = trackedReference
+        ? transactions.find(function(t) { return t.reference === trackedReference; }) || null
+        : null;
 
     var hasPendingWithdrawal = transactions.some(function(t) {
         return t.type === "withdrawal" && t.status === "pending";
@@ -785,7 +796,7 @@ async function loadTransactions() {
         list.innerHTML =
             '<div class="empty">No transactions yet.</div>';
 
-        return;
+        return trackedTransaction;
 
     }
 
@@ -832,6 +843,11 @@ async function loadTransactions() {
                         ? " (" + t.status + ")"
                         : "";
 
+                var failureNote =
+                    t.type === "deposit" && t.status === "failed" && t.description
+                        ? '<small class="transaction-note">Safaricom result: ' + GG.escapeHTML(t.description) + '</small>'
+                        : "";
+
 
                 return (
                     '<div class="transaction">' +
@@ -856,11 +872,15 @@ async function loadTransactions() {
                     ) +
                     '</div>' +
 
+                    failureNote +
+
                     '</div>'
                 );
 
             }
         ).join("");
+
+    return trackedTransaction;
 
 }
 
@@ -1021,7 +1041,7 @@ async function deposit() {
 
         showMessage(
             "depositMessage",
-            "STK Push sent. Check your phone and enter your M-Pesa PIN to complete the deposit."
+            "Daraja accepted the STK request. Check your phone; your wallet will update only after Safaricom confirms payment."
         );
 
 
@@ -1036,6 +1056,9 @@ async function deposit() {
         */
 
         var attempts = 0;
+        var checkoutReference = result.data.checkoutRequestId
+            ? "MPESA-" + result.data.checkoutRequestId
+            : "";
 
         var refreshTimer =
             setInterval(
@@ -1046,13 +1069,34 @@ async function deposit() {
 
                     await loadWallet(true);
 
-                    await loadTransactions();
+                    var transaction = await loadTransactions(checkoutReference);
 
+                    if (transaction && transaction.status === "completed") {
+                        clearInterval(refreshTimer);
+                        showMessage("depositMessage", "Safaricom confirmed the payment. Your wallet has been credited.");
+                        return;
+                    }
+
+                    if (transaction && transaction.status === "failed") {
+                        clearInterval(refreshTimer);
+                        showMessage(
+                            "depositMessage",
+                            "Safaricom did not complete this payment: " +
+                                (transaction.description || "No reason was provided.") +
+                                " Your wallet was not credited."
+                        );
+                        return;
+                    }
 
                     if (attempts >= 12) {
 
                         clearInterval(
                             refreshTimer
+                        );
+
+                        showMessage(
+                            "depositMessage",
+                            "The payment is still awaiting Safaricom confirmation. Check your M-Pesa messages and transaction history before retrying."
                         );
 
                     }

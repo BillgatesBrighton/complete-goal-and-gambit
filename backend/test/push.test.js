@@ -71,8 +71,8 @@ test("subscription API stores ownership from the authenticated account", async (
     assert.equal(calls[0].values[1], validSubscription.endpoint);
 });
 
-test("match workflow page scripts parse and chat does not prompt for permission on load", () => {
-    for (const file of ["match-room.html", "match-results.html", "match-hub.html", "chat.html"]) {
+test("match workflow, chat, and wallet page scripts parse", () => {
+    for (const file of ["match-room.html", "match-results.html", "match-hub.html", "chat.html", "wallet.html"]) {
         const fullPath = path.join(__dirname, "..", "..", "frontend", "pages", file);
         const html = fs.readFileSync(fullPath, "utf8");
         const scripts = Array.from(html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi))
