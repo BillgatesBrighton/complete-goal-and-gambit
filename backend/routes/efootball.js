@@ -32,6 +32,15 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         });
     }
 
+    function analyzeScreenshotWithTimeout(buffer) {
+        let timeout;
+        const timeoutPromise = new Promise((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("OCR analysis timed out after 15 seconds.")), 15000);
+        });
+        return Promise.race([analyzeScreenshot(buffer), timeoutPromise])
+            .finally(() => clearTimeout(timeout));
+    }
+
     /* =====================================================
        HELPERS
     ===================================================== */
@@ -220,6 +229,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
                 winner.username AS winner_username,
                 v.status AS verification_status,
+                v.score_check AS score_check,
                 (v.screenshot_path IS NOT NULL) AS screenshot_submitted,
                 v.selected_player_id AS screenshot_sender_id
 
@@ -277,6 +287,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         safe.opponentReady = Boolean(isCreator ? match.opponent_ready : match.creator_ready);
         safe.codeSent = Boolean(match.code_sent && shownCode);
         safe.verificationStatus = match.verification_status || null;
+        safe.scoreCheck = match.score_check || null;
         safe.screenshotSubmitted = Boolean(match.screenshot_submitted);
         safe.youMustUploadScreenshot = match.screenshot_sender_id != null && Number(match.screenshot_sender_id) === Number(userId);
         return safe;
@@ -1426,7 +1437,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             let analysis = { text: "", candidates: [] };
             try {
-                analysis = await analyzeScreenshot(buffer);
+                analysis = await analyzeScreenshotWithTimeout(buffer);
             } catch (ocrError) {
                 console.error("Screenshot OCR unavailable:", ocrError.message);
             }
