@@ -976,7 +976,7 @@ button{
                     type="button"
                     onclick="confirmRoomCode()"
                 >
-                    I RECEIVED THE CODE · I'M READY
+                    I RECEIVED THE CODE
                 </button>
             </div>
 
@@ -993,7 +993,7 @@ button{
 
         <button
             class="secondary-btn"
-            onclick="openEfootball()"
+            hidden
         >
             OPEN eFOOTBALL
         </button>
@@ -2151,7 +2151,7 @@ function showReceivedCode(code){
    OPEN eFOOTBALL
 ============================================================ */
 
-function openEfootball(){
+function openEfootball(){return;
 
     window.open(
         "https://www.konami.com/efootball/",
@@ -3554,7 +3554,7 @@ async function confirmRoomCode() {
         alert("Wait for the eFootball room code before confirming.");
         return;
     }
-    await toggleReady();
+    const button=document.getElementById("confirmRoomCodeButton");if(button&&button.disabled)return;if(button){button.disabled=true;button.textContent="CONFIRMING RECEIPT…";}try{const r=await GG.api("/api/efootball/matches/"+encodeURIComponent(currentMatch.backendId)+"/code-received",{method:"POST",body:{},noRedirect:true});if(!r.ok){if(button){button.disabled=false;button.textContent="I RECEIVED THE CODE";}alert(r.data.message||"Could not confirm receipt of the room code.");return;}currentMatch.codeReceived=true;if(button)button.textContent="✓ CODE RECEIVED";notifyUser("GOAL$GAMBIT","Room-code receipt confirmed. Mark yourself ready separately when you have joined the room.");await syncFromServer();}catch(error){if(button){button.disabled=false;button.textContent="I RECEIVED THE CODE";}alert(error.message||"Could not reach the server. Receipt was not confirmed.");}
 }
 
 // A league fixture opens the hub with ?league=Bronze|Silver|Gold.
