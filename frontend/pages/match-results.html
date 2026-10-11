@@ -114,6 +114,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     var formWrap = document.getElementById("scoreFormWrap");
     var summary = document.getElementById("scoreSummary");
     var statusText = "Match state: " + String(m.status || "unknown").replace(/_/g," ");
+    var scoreCheck = String(m.scoreCheck || "").toLowerCase();
     document.getElementById("detailStatus").textContent = statusText;
 
     if(m.status === "completed"){
@@ -173,20 +174,32 @@ button:disabled{opacity:.55;cursor:not-allowed}
       document.getElementById("screenshotCard").classList.remove("hidden");
       if(m.screenshotSubmitted){
         statusNode.textContent = m.status === "disputed" ? "Screenshot received · admin review" : "Screenshot received · verifying result";
-        document.getElementById("screenshotMessage").textContent = m.status === "disputed"
-          ? "The scores differ. Screenshot evidence is on hold for admin review."
-          : "Screenshot received. The result is being verified.";
+        if(scoreCheck === "disputed"){
+          document.getElementById("screenshotMessage").textContent = "The two submitted score reports differ. The screenshot is on hold for admin review; the result and standings are not finalized.";
+        } else if(scoreCheck === "mismatch"){
+          document.getElementById("screenshotMessage").textContent = "OCR detected a score that does not match the submitted result. Admin review is required; the result and standings remain on hold.";
+        } else if(scoreCheck === "uncertain"){
+          document.getElementById("screenshotMessage").textContent = "OCR could not read a confident score. Admin review is required; the result and standings remain on hold.";
+        } else {
+          document.getElementById("screenshotMessage").textContent = m.status === "disputed"
+            ? "Screenshot received. The result is on hold for admin review."
+            : "Screenshot received. The result is being verified.";
+        }
         document.getElementById("uploadArea").classList.add("hidden");
       } else if(isTrue(m.youMustUploadScreenshot)){
         statusNode.textContent = "Screenshot required";
-        document.getElementById("screenshotMessage").textContent = "You were selected to provide the final score-screen screenshot.";
+        document.getElementById("screenshotMessage").textContent = scoreCheck === "disputed"
+          ? "The two submitted score reports differ. You were selected to upload the final score-screen screenshot for admin review."
+          : "You were selected to provide the final score-screen screenshot.";
         document.getElementById("uploadHelp").textContent = "Upload a clear JPEG, PNG, or WebP screenshot of the final eFootball score screen (8 MB maximum).";
         document.getElementById("uploadArea").classList.remove("hidden");
         document.getElementById("uploadButton").classList.remove("hidden");
         document.getElementById("uploadButton").disabled = !(document.getElementById("screenshotInput").files && document.getElementById("screenshotInput").files[0]);
       } else {
         statusNode.textContent = m.status === "disputed" ? "Admin review · waiting for screenshot" : "Waiting for selected screenshot uploader";
-        document.getElementById("screenshotMessage").textContent = "Your opponent was selected to upload the screenshot. The score is held until it is reviewed.";
+        document.getElementById("screenshotMessage").textContent = scoreCheck === "disputed"
+          ? "The two submitted score reports differ. The selected player was asked to upload a screenshot; the result and standings remain on hold for review."
+          : "Your opponent was selected to upload the screenshot. The score is held until it is reviewed.";
         document.getElementById("uploadArea").classList.add("hidden");
         document.getElementById("uploadButton").classList.add("hidden");
       }
@@ -282,7 +295,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     posting = true;
     this.disabled = true;
     errorNode.textContent = "";
-    document.getElementById("screenshotMessage").textContent = "Uploading screenshot…";
+    document.getElementById("screenshotMessage").textContent = "Uploading screenshot… OCR may take up to 15 seconds. If the score is unreadable or does not match, admin review will be required.";
     var form = new FormData();
     form.append("screenshot", file, file.name);
     var uploadButton = this;
