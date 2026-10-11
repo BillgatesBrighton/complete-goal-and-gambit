@@ -251,8 +251,13 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             LEFT JOIN users winner
                 ON winner.id = m.winner_id
 
-            LEFT JOIN efootball_result_verifications v
-                ON v.match_id = m.id
+            LEFT JOIN LATERAL (
+                SELECT status, score_check, screenshot_path, selected_player_id
+                  FROM efootball_result_verifications
+                 WHERE match_id = m.id
+                 ORDER BY (screenshot_path IS NOT NULL) DESC, id DESC
+                 LIMIT 1
+            ) v ON TRUE
 
             WHERE m.id = $1
               AND (
@@ -297,6 +302,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         safe.scoreCheck = match.score_check || null;
         safe.screenshotSubmitted = Boolean(match.screenshot_submitted);
         safe.youMustUploadScreenshot = match.screenshot_sender_id != null && Number(match.screenshot_sender_id) === Number(userId);
+        safe.canEditScore = ["playing", "awaiting_verification", "disputed"].includes(match.status) && !safe.screenshotSubmitted;
         return safe;
     }
 
@@ -1241,11 +1247,24 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("ROLLBACK");
                 return res.status(403).json({ success: false, message: "You are not part of this match." });
             }
-            if (match.status !== "playing" || !match.opponent_id) {
+            if (!match.opponent_id || !["playing", "awaiting_verification", "disputed"].includes(match.status) || match.settled_at) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "Results can be submitted after both players are ready and the match is playing." });
+                return res.status(409).json({ success: false, message: "Scores can only be submitted for a match that has started and is not settled." });
             }
-            // Allow a player to correct or retry their own score while the match is still playing.
+            // The match row lock serializes both players' submissions. Reuse the
+            // existing verification row instead of relying on ON CONFLICT, since
+            // older production databases may not have the matching unique index.
+            const verificationResult = await client.query(
+                "SELECT id,selected_player_id,screenshot_path FROM efootball_result_verifications WHERE match_id=$1 ORDER BY id LIMIT 1 FOR UPDATE",
+                [matchId]
+            );
+            const existingVerification = verificationResult.rows[0] || null;
+            if (existingVerification && existingVerification.screenshot_path) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "A screenshot has already been submitted. Score changes are locked for admin review." });
+            }
+            // Each participant may correct their own report until evidence has
+            // been uploaded. This also makes a retry safe after a phone timeout.
 
             if (isCreator) {
                 await client.query(
@@ -1262,6 +1281,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const currentResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             const current = currentResult.rows[0];
             if (!current.creator_submitted || !current.opponent_submitted) {
+                if (["awaiting_verification", "disputed"].includes(match.status)) {
+                    await client.query(
+                        "UPDATE efootball_matches SET status='playing',result_status=NULL,submitted_by=NULL WHERE id=$1 AND status IN ('awaiting_verification','disputed')",
+                        [matchId]
+                    );
+                }
                 const safeMatch = await getMatchForUser(client, matchId, userId);
                 await client.query("COMMIT");
                 return res.json({
@@ -1275,15 +1300,22 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const creatorOpponentScore = Number(current.creator_submitted_opponent_score);
             const agreed = creatorScore === Number(current.opponent_submitted_opponent_score) &&
                 creatorOpponentScore === Number(current.opponent_submitted_score);
-            const selectedPlayerId = [Number(current.creator_id), Number(current.opponent_id)]
-                .includes(Number(current.code_sender_id))
-                    ? Number(current.code_sender_id)
-                    : (randomInt(0, 2) === 0 ? Number(current.creator_id) : Number(current.opponent_id));
-
-            await client.query(
-                "INSERT INTO efootball_result_verifications (match_id,selected_player_id,status,score_check) VALUES ($1,$2,'pending_screenshot',$3)  ",
-                [matchId, selectedPlayerId, agreed ? "awaiting_screenshot" : "disputed"]
-            );
+            const participants = [Number(current.creator_id), Number(current.opponent_id)];
+            const selectedPlayerId = existingVerification &&
+                participants.includes(Number(existingVerification.selected_player_id))
+                    ? Number(existingVerification.selected_player_id)
+                    : (randomInt(0, 2) === 0 ? participants[0] : participants[1]);
+            if (existingVerification) {
+                await client.query(
+                    "UPDATE efootball_result_verifications SET selected_player_id=$1,status='pending_screenshot',score_check=$2 WHERE id=$3 AND screenshot_path IS NULL",
+                    [selectedPlayerId, agreed ? "awaiting_screenshot" : "disputed", existingVerification.id]
+                );
+            } else {
+                await client.query(
+                    "INSERT INTO efootball_result_verifications (match_id,selected_player_id,status,score_check) VALUES ($1,$2,'pending_screenshot',$3)",
+                    [matchId, selectedPlayerId, agreed ? "awaiting_screenshot" : "disputed"]
+                );
+            }
 
             if (!agreed) {
                 await client.query(
@@ -1326,8 +1358,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            console.error("eFootball result submission error:", error.message);
-            return res.status(500).json({ success: false, message: "Unable to process the submitted result." });
+            console.error("eFootball result submission error:", error);
+            return res.status(500).json({ success: false, message: "The server could not save this result. Your score was not confirmed; refresh the match and retry." });
         } finally {
             client.release();
         }

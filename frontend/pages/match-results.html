@@ -103,6 +103,10 @@ button:disabled{opacity:.55;cursor:not-allowed}
     return isTrue(submitted) || (score !== null && score !== undefined && score !== "");
   }
   function otherSubmitted(m){ return isTrue(isCreator(m) ? m.opponent_submitted : m.creator_submitted); }
+  function canEditScore(m){
+    if(typeof m.canEditScore !== "undefined") return isTrue(m.canEditScore);
+    return ["playing","awaiting_verification","disputed"].includes(m.status) && !isTrue(m.screenshotSubmitted);
+  }
   function ownScore(m){ return isCreator(m) ? (m.creator_submitted_score ?? m.creator_score) : (m.opponent_submitted_score ?? m.opponent_score); }
   function ownAgainst(m){ return isCreator(m) ? (m.creator_submitted_opponent_score ?? m.opponent_score) : (m.opponent_submitted_opponent_score ?? m.creator_score); }
   function canUpload(m){ return isVerification(m) && isTrue(m.youMustUploadScreenshot); }
@@ -173,8 +177,20 @@ button:disabled{opacity:.55;cursor:not-allowed}
       return;
     }
 
-    formWrap.classList.add("hidden");
-    summary.classList.remove("hidden");
+    var canCorrect = isVerification(m) && canEditScore(m);
+    if(canCorrect){
+      statusNode.textContent = "Both score reports are saved. You can correct your report until the screenshot is uploaded.";
+      formWrap.classList.remove("hidden");
+      summary.classList.remove("hidden");
+      var correctionYourInput = document.getElementById("yourScore");
+      var correctionOpponentInput = document.getElementById("opponentScore");
+      if(document.activeElement !== correctionYourInput && correctionYourInput.value === "" && ownScore(m) != null) correctionYourInput.value = String(ownScore(m));
+      if(document.activeElement !== correctionOpponentInput && correctionOpponentInput.value === "" && ownAgainst(m) != null) correctionOpponentInput.value = String(ownAgainst(m));
+      document.getElementById("submitScoreButton").textContent = ownSubmitted(m) ? "Update my score report" : "Submit my result";
+    } else {
+      formWrap.classList.add("hidden");
+      summary.classList.remove("hidden");
+    }
     var ownReported = isCreator(m) ? m.creator_submitted_score : m.opponent_submitted_score;
     var againstReported = isCreator(m) ? m.creator_submitted_opponent_score : m.opponent_submitted_opponent_score;
     document.getElementById("yourReport").textContent = score(ownReported) + " – " + score(againstReported);
@@ -249,7 +265,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
   document.getElementById("scoreForm").addEventListener("submit", async function(event){
     event.preventDefault();
-    if(!id || !latest || latest.status !== "playing") return;
+    if(!id || !latest || !canEditScore(latest)) return;
     var yourScore = Number(document.getElementById("yourScore").value);
     var opponentScore = Number(document.getElementById("opponentScore").value);
     if(!Number.isInteger(yourScore) || !Number.isInteger(opponentScore) || yourScore < 0 || opponentScore < 0 || yourScore > 99 || opponentScore > 99){
