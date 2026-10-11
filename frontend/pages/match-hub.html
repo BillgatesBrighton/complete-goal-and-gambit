@@ -1206,8 +1206,7 @@ button{
         </div>
 
         <p class="description">
-            The player selected by GOAL$GAMBIT as the room-code sender
-            is also assigned to submit the final match screenshot.
+            The server selects one player to upload the screenshot if result review is needed. This can be either player, independently of who sent the room code.
             The screenshot provides visual evidence of the result.
         </p>
 
@@ -1854,55 +1853,28 @@ function assignMatchRoles(){
 ============================================================ */
 
 function updateRoleMessage(){
-
-    const sender =
-        currentMatch.codeSender;
-
-
-    const isMe =
-        sender === currentUser ||
-        sender === currentMatch.player;
-
-
-    const message =
-        document.getElementById(
-            "pairingMessage"
-        );
-
-
-    if(isMe){
-
-        message.textContent =
-            "You were randomly selected to send the room code and submit the match screenshot.";
-
-    }else{
-
-        message.textContent =
-            `${sender} was randomly selected to send the room code and submit the match screenshot.`;
-
+    if (!currentMatch) return;
+    const sender = currentMatch.codeSender || "your opponent";
+    const isMe = currentMatch.youAreSender === true || sender === currentUser || sender === currentMatch.player;
+    const message = document.getElementById("pairingMessage");
+    if (message) {
+        message.textContent = isMe
+            ? "You were selected to send the room code. Screenshot upload is assigned separately if result review is needed."
+            : sender + " was selected to send the room code. Screenshot upload is assigned separately if result review is needed.";
     }
-
-
-    const screenshotRole =
-        document.getElementById(
-            "screenshotRole"
-        );
-
-
-    if(isMe){
-
-        screenshotRole.textContent =
-            "YOU ARE THE SCREENSHOT SENDER";
-
-    }else{
-
-        screenshotRole.textContent =
-            "YOUR OPPONENT IS THE SCREENSHOT SENDER";
-
+    const screenshotRole = document.getElementById("screenshotRole");
+    if (!screenshotRole) return;
+    const serverMatch = currentMatch.serverMatch || {};
+    if (currentMatch.screenshotUploaded || serverMatch.screenshotSubmitted) {
+        screenshotRole.textContent = "SCREENSHOT SUBMITTED";
+    } else if (currentMatch.youMustUploadScreenshot || serverMatch.youMustUploadScreenshot) {
+        screenshotRole.textContent = "YOU WERE SELECTED TO UPLOAD THE SCREENSHOT";
+    } else if (serverMatch.screenshot_sender_id) {
+        screenshotRole.textContent = "YOUR OPPONENT WAS SELECTED TO UPLOAD THE SCREENSHOT";
+    } else {
+        screenshotRole.textContent = "A PLAYER WILL BE SELECTED IF RESULT REVIEW IS NEEDED";
     }
-
 }
-
 
 /* ============================================================
    IS CURRENT USER SENDER?
@@ -2812,15 +2784,9 @@ function handleScreenshot(event){
         currently uploading it.
     */
 
-    if(
-        currentMatch &&
-        currentMatch.screenshotSender &&
-        !isSender()
-    ){
+    if (currentMatch && (!currentMatch.serverMatch || !currentMatch.serverMatch.youMustUploadScreenshot)) {
 
-        alert(
-            "Only the player selected as the screenshot sender should upload the match screenshot."
-        );
+        alert("Only the player selected by the server may upload the match screenshot.");
 
         event.target.value = "";
 
@@ -3316,8 +3282,8 @@ async function handleScreenshot(event) {
         input.value = "";
         return;
     }
-    if (!currentMatch.screenshotSender || !isSender()) {
-        alert("Only the selected room-code sender may upload this match screenshot.");
+    if (!currentMatch.serverMatch || !currentMatch.serverMatch.youMustUploadScreenshot) {
+        alert("Only the player selected by the server may upload this match screenshot.");
         input.value = "";
         return;
     }
@@ -3384,7 +3350,8 @@ async function syncFromServer() {
     currentMatch.stake = Number(m.stake_amount || 0);
     currentMatch.league = m.league || currentMatch.league || null;
     currentMatch.codeSender = m.youAreSender ? currentMatch.player : currentMatch.opponent;
-    currentMatch.screenshotSender = currentMatch.codeSender;
+    currentMatch.youMustUploadScreenshot = !!m.youMustUploadScreenshot;
+    currentMatch.screenshotSender = currentMatch.youMustUploadScreenshot ? currentMatch.player : currentMatch.opponent;
     currentMatch.roomCode = m.room_code || null;
     currentMatch.codeSent = !!m.codeSent;
     currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
@@ -3516,6 +3483,8 @@ async function sendRoomCode() {
         '<div class="received-code"><small>YOUR ROOM CODE</small><strong>' + escapeHTML(sent) + '</strong></div>' +
         '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code.</p>';
     notifyUser("GOAL$GAMBIT", "Room code sent successfully.");
+    currentMatch.playerReady = !!r.data.match.yourReady;
+    location.replace("match-results.html?matchId=" + encodeURIComponent(currentMatch.backendId));
 }
 
 async function toggleReady() {

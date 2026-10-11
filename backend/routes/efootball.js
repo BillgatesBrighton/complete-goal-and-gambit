@@ -1177,8 +1177,13 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             const receiverId = senderId === Number(match.creator_id) ? Number(match.opponent_id) : Number(match.creator_id);
             await client.query(
-                "UPDATE efootball_matches SET external_room_code=$1, code_sent=TRUE WHERE id=$2",
-                [code, matchId]
+                `UPDATE efootball_matches
+                 SET external_room_code=$1,
+                     code_sent=TRUE,
+                     creator_ready=CASE WHEN creator_id=$2 THEN TRUE ELSE creator_ready END,
+                     opponent_ready=CASE WHEN opponent_id=$2 THEN TRUE ELSE opponent_ready END
+                 WHERE id=$3`,
+                [code, userId, matchId]
             );
             const receiver = await client.query("SELECT username FROM users WHERE id=$1", [receiverId]);
             const sender = await client.query("SELECT username FROM users WHERE id=$1", [userId]);

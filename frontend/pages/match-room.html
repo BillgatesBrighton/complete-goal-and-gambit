@@ -184,7 +184,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
         tag: tag,
         renotify: false,
         requireInteraction: true,
-        actions: [{action:"open-room",title:role === "sender" ? "Enter code" : "View code"}],
+        actions: [{action:"send-code",title:role === "sender" ? "Send code" : "View code"}],
         data: {targetPath:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
       };
       try{
@@ -318,7 +318,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/roomcode", {method:"POST",body:{code:code}});
     if(!result.ok){ showError(result.data.message || "The room code was not sent. Try again."); button.disabled = false; return; }
     input.value = "";
-    await load();
+    goToResults(id);
   });
 
   document.getElementById("receivedButton").addEventListener("click",async function(){if(!id||!lastMatch||lastMatch.youAreSender||lastMatch.codeReceived||!lastMatch.codeSent)return;var button=this;button.disabled=true;showError("");try{var result=await GG.api("/api/efootball/matches/"+encodeURIComponent(id)+"/code-received",{method:"POST",body:{},noRedirect:true});if(!result.ok){showError(result.data.message||"Could not confirm receipt.");button.disabled=false;return;}await load();}catch(_){showError("Could not reach the server. Receipt was not confirmed.");button.disabled=false;}});document.getElementById("readyButton").addEventListener("click", async function(){

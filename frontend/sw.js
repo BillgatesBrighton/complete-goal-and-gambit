@@ -44,8 +44,10 @@ self.addEventListener("push", function(event) {
 self.addEventListener("notificationclick", function(event) {
     event.notification.close();
     const data = event.notification.data || {};
-    const target = new URL(safeTargetPath(data.targetPath), self.registration.scope).href;
+    const targetUrl = new URL(safeTargetPath(data.targetPath), self.registration.scope);
     const action = ["send-code", "view-code", "results"].includes(event.action) ? event.action : "open";
+    if (action === "send-code") targetUrl.searchParams.set("action", "send-code");
+    const target = targetUrl.href;
 
     event.waitUntil((async function() {
         const tasks = [];
