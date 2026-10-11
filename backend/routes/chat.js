@@ -86,7 +86,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                  FROM chat_threads t
                  JOIN users u ON u.id = CASE WHEN t.user_one_id=$1 THEN t.user_two_id ELSE t.user_one_id END
                  LEFT JOIN LATERAL (
-                     SELECT m.message,m.created_at
+                     SELECT m.message,m.created_at,m.read_at
                      FROM chat_messages m
                      WHERE m.thread_id=t.id
                      ORDER BY m.created_at DESC,m.id DESC

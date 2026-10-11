@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "setup-db": "node db/setup.js",
-    "test": "node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js"
+    "test": "node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/chat.test.js"
   },
   "author": "GOAL$GAMBIT",
   "license": "ISC",

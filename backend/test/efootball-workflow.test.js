@@ -80,7 +80,14 @@ async function startWorkflowServer(userId, fixture, t) {
             notifications.push(values);
             return { rows: [], rowCount: 1 };
         }
-        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql.trim())) return { rows: [], rowCount: 0 };
+        if ([
+            "BEGIN",
+            "COMMIT",
+            "ROLLBACK",
+            "SAVEPOINT efootball_push_enqueue",
+            "RELEASE SAVEPOINT efootball_push_enqueue",
+            "ROLLBACK TO SAVEPOINT efootball_push_enqueue"
+        ].includes(sql.trim())) return { rows: [], rowCount: 0 };
         throw new Error("Unexpected workflow test query: " + sql);
     };
     const pool = { query, connect: async () => ({ query, release() {} }) };
