@@ -66,7 +66,7 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
         if (status !== "all" && status !== "active" && status !== "closed" && !CASE_STATUSES.has(status)) return res.status(400).json({ success: false, message: "Invalid complaint filter." });
         try {
             const params = [includeCleared];
-            let where = "($1::boolean OR c.admin_cleared_at IS NULL)";
+            let where = "($1::boolean OR c.admin_cleared_at IS NULL) AND c.source <> 'efootball_result_dispute'";
             if (status === "active") {
                 where += " AND c.status IN ('open','investigating','awaiting_player','awaiting_evidence','escalated')";
             } else if (status === "closed") {
@@ -131,7 +131,9 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             );
             const counts = await pool.query(
                 `SELECT status,COUNT(*)::int AS count FROM complaints
-                  WHERE ($1::boolean OR admin_cleared_at IS NULL) GROUP BY status`, [includeCleared]
+                  WHERE ($1::boolean OR admin_cleared_at IS NULL)
+                    AND source <> 'efootball_result_dispute'
+                  GROUP BY status`, [includeCleared]
             );
             const total = Number(countResult.rows[0].total || 0);
             return res.json({ success: true, complaints: cases.rows, page, limit, total, pages: Math.max(1, Math.ceil(total / limit)), counts: Object.fromEntries(counts.rows.map((row) => [row.status, row.count])) });

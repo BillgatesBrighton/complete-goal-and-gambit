@@ -3,7 +3,7 @@
 if (!GG.requireLogin()) return;
 var $ = function (id) { return document.getElementById(id); };
 var esc = GG.escapeHTML;
-var adminId = null, selectedUser = null, selectedName = "", messageSig = "", urls = [], complaintUrls = [], busy = false, timer = null, users = [], includeCleared = false, includeClearedComplaints = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
+var adminId = null, selectedUser = null, selectedName = "", messageSig = "", urls = [], complaintUrls = [], busy = false, timer = null, users = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
 function concealDashboard(message, clearData) {
@@ -31,7 +31,7 @@ function agree(c) {
     var ok=Number(a)===Number(y)&&Number(b)===Number(x);
     return {text:ok?"Player reports agree":"Score reports disagree",kind:ok?"good":"alert",bad:!ok};
 }
-function openResult(c) { return ["pending_screenshot","submitted","review_required","rejected"].indexOf(String(c.status).toLowerCase())>=0&&c.match_status!=="completed"; }
+function openResult(c) { return ["pending_screenshot","submitted","review_required","rejected"].indexOf(String(c.status).toLowerCase())>=0&&!c.settled_at&&!["completed","cancelled"].includes(c.match_status); }
 
 async function loadShots() {
     urls.forEach(URL.revokeObjectURL); urls=[];
@@ -44,7 +44,7 @@ async function loadShots() {
     }));
 }
 function renderResult(c) {
-    var id=Number(c.id), status=openResult(c), a=agree(c), title="Match #"+c.match_id+" · "+(c.mode||"eFootball");
+    var id=Number(c.id), status=openResult(c), resolved=!!c.settled_at&&["completed","cancelled"].includes(c.match_status), cleared=!!c.admin_cleared_at, a=agree(c), title="Match #"+c.match_id+" · "+(c.mode||"eFootball");
     var creatorName=c.creator_username||"Creator", opponentName=c.opponent_username||"Opponent";
     var players=creatorName+" vs "+opponentName;
     var h='<article class="card'+(a.bad?" mismatch":"")+'" data-case="'+id+'"><div class="card-top"><div><h3>'+esc(title)+'</h3><div class="meta">'+esc(players)+" · submitted by "+esc(c.selected_username||"player")+" · "+esc(date(c.submitted_at||c.created_at))+'</div></div><span class="badge '+a.kind+'">'+esc(a.text)+'</span></div>';
@@ -61,13 +61,14 @@ function renderResult(c) {
         h+='<div class="actions"><button class="btn gold" data-review="resolve" data-id="'+id+'" type="button">Resolve result and settle</button><button class="btn red" data-review="reject" data-id="'+id+'" type="button">Reject evidence · keep funds held</button></div><div class="foot">Resolving updates the match, wallet settlement, standings, and player notices.</div>';
     } else if(status) h+='<div class="warn">Waiting for screenshot evidence. Keep this case open until the image is available.</div>';
     else if(c.review_note) h+='<div class="meta">Admin note: '+esc(c.review_note)+'</div>';
+    if(resolved)h+='<div class="actions"><button class="btn '+(cleared?'':'gold')+'" type="button" data-result-visibility="'+(cleared?'restore':'clear')+'" data-id="'+id+'">'+(cleared?'Restore to list':'Clear from list')+'</button></div>';
     return h+'</article>';
 }
 async function loadResults() {
-    var r=await GG.api("/api/admin/result-verifications");
+    var r=await GG.api("/api/admin/result-verifications"+(includeClearedResults?"?includeCleared=true":""));
     if(!r.ok){$("resultList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load result reviews.")+'</div>';return 0;}
-    var list=r.data.verifications||[], open=list.filter(openResult), view=$("resultFilter").value==="all"?list:open;
-    $("resultList").innerHTML=view.length?view.map(renderResult).join(""):'<div class="empty">'+(open.length?"No reviews in this view.":"No unresolved score disputes.")+'</div>';
+    var list=r.data.verifications||[], open=list.filter(openResult), resolved=list.filter(function(c){return !!c.settled_at&&["completed","cancelled"].includes(c.match_status);}), filter=$("resultFilter").value, view=filter==="all"?list:filter==="resolved"?resolved:open;
+    $("resultList").innerHTML=view.length?view.map(renderResult).join(""):'<div class="empty">'+(filter==="resolved"?"No resolved result disputes.":filter==="all"?"No result disputes found.":"No unresolved score disputes.")+'</div>';
     $("statResults").textContent=open.length; $("navResults").textContent=open.length;
     await loadShots(); return open.length;
 }
@@ -303,6 +304,14 @@ async function resultAction(btn) {
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not save result review.","error");return;}
     say(r.data.message||"Result decision saved.","ok");await refresh(true);
 }
+async function resultVisibilityAction(btn) {
+    var action=btn.dataset.resultVisibility,clear=action==="clear";
+    if(clear&&!confirm("Clear this resolved result dispute from the list? Its match and audit history will remain saved; you can restore it later."))return;
+    btn.disabled=true;
+    var r=await GG.api("/api/admin/result-verifications/"+encodeURIComponent(btn.dataset.id)+"/"+action,{method:"POST"});
+    if(!r.ok){btn.disabled=false;say(r.data.message||"Could not update the result dispute list.","error");return;}
+    say(r.data.message||"Result dispute list updated.","ok");await refresh(true);
+}
 async function statusAction(btn) {
     var id=Number(btn.dataset.id), status=btn.dataset.status, u=users.find(function(x){return Number(x.id)===id;}), row=btn.closest("[data-user]");
     if(!u)return;
@@ -365,12 +374,13 @@ async function clearThreadAction(btn) {
 }
 
 $("resultFilter").addEventListener("change",function(){loadResults();});
+$("toggleClearedResults").addEventListener("click",function(){includeClearedResults=!includeClearedResults;this.setAttribute("aria-pressed",String(includeClearedResults));this.textContent=includeClearedResults?"Hide cleared":"Show cleared";loadResults();});
 $("refresh").addEventListener("click",function(){refresh(true);});
 $("logout").addEventListener("click",function(){GG.logout();});
 $("searchUsers").addEventListener("click",loadUsers);
 $("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadUsers();}});
 $("userSearch").addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(loadUsers,250);});
-$("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b)resultAction(b);});
+$("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b){resultAction(b);return;}b=e.target.closest("[data-result-visibility]");if(b)resultVisibilityAction(b);});
 $("complaints").addEventListener("click",function(e){var open=e.target.closest("[data-open-complaint]");if(open){openComplaint(open.dataset.openComplaint);return;}var b=e.target.closest("[data-complaint-visibility]");if(b)complaintVisibilityAction(b);});
 $("userList").addEventListener("click",function(e){var view=e.target.closest("[data-view-dashboard]");if(view){viewUserDashboard(view);return;}var del=e.target.closest("[data-delete-account]");if(del){deleteAccount(del);return;}var b=e.target.closest("[data-status]");if(b)statusAction(b);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});
@@ -389,6 +399,15 @@ $("toggleClearedComplaints").addEventListener("click",function(){includeClearedC
 $("threads").addEventListener("click",function(e){var action=e.target.closest("[data-thread-clear]");if(action){clearThreadAction(action);return;}var b=e.target.closest("[data-thread]");if(!b)return;selectedUser=Number(b.dataset.thread);selectedName=b.dataset.name||"Player";messageSig="";$("reply").disabled=false;$("sendReply").disabled=false;$("convhead").textContent=selectedName+" · loading";loadThreads().then(function(){return loadMessages(true);});});
 $("toggleCleared").addEventListener("click",function(){includeCleared=!includeCleared;this.setAttribute("aria-pressed",String(includeCleared));this.textContent=includeCleared?"Hide cleared":"Show cleared";loadThreads();});
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convhead").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convhead").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig="";$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
+
+function updateAdminPage() {
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts and account activity."],adminWallet:["Admin withdrawal wallet","Review the administrator wallet and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
+    if(!titles[page])page="overview";
+    ["results","complaints","support","accounts","adminWallet","announcements"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
+    $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];
+    Array.from(document.querySelectorAll("[data-admin-page]")).forEach(function(link){if(link.dataset.adminPage===page)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
+}
+window.addEventListener("hashchange",updateAdminPage);updateAdminPage();
 
 async function verifyAdminAccess() {
     var r=await GG.api("/api/me");

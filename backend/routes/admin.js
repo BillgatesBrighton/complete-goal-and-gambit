@@ -71,12 +71,14 @@ module.exports = function(pool, authenticateToken) {
     const verificationDirectory = path.join(__dirname, "..", "uploads", "match-verification");
 
     router.get("/result-verifications", authenticateToken, adminOnly, async (req, res) => {
+        const includeCleared = String(req.query.includeCleared || "").toLowerCase() === "true";
         try {
             const result = await pool.query(
                 `SELECT v.id,v.match_id,v.selected_player_id,v.status,v.submitted_at,v.created_at,
+                        v.admin_cleared_at,v.admin_cleared_by,
                         v.screenshot_ocr_text,v.detected_score_candidates,v.score_check,v.review_note,v.reviewed_at,
                         (v.screenshot_path IS NOT NULL) AS screenshot_available,
-                        m.status AS match_status,m.mode,m.league,m.tournament_id,
+                        m.status AS match_status,m.settled_at,m.mode,m.league,m.tournament_id,
                         m.creator_id,m.opponent_id,m.creator_submitted_score,m.creator_submitted_opponent_score,
                         m.opponent_submitted_score,m.opponent_submitted_opponent_score,
                         creator.username AS creator_username,opponent.username AS opponent_username,
@@ -97,9 +99,10 @@ module.exports = function(pool, authenticateToken) {
                      JOIN users u ON u.id=r.user_id
                      WHERE r.match_id=m.id
                  ) report_history ON TRUE
+                 WHERE ($1::boolean OR v.admin_cleared_at IS NULL)
                  ORDER BY CASE WHEN v.status IN ('pending_screenshot','submitted','review_required') THEN 0 ELSE 1 END,
                           v.created_at DESC
-                 LIMIT 200`
+                 LIMIT 200`, [includeCleared]
             );
             return res.json({ success: true, verifications: result.rows });
         } catch (error) {
@@ -107,6 +110,52 @@ module.exports = function(pool, authenticateToken) {
             return res.status(500).json({ success: false, message: "Could not load result reviews." });
         }
     });
+
+    async function setResultVisibility(req, res, clear) {
+        const verificationId = Number(req.params.id);
+        if (!Number.isSafeInteger(verificationId) || verificationId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid result dispute." });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const locked = await client.query(
+                `SELECT v.id,v.admin_cleared_at,m.status AS match_status,m.settled_at
+                   FROM efootball_result_verifications v
+                   JOIN efootball_matches m ON m.id=v.match_id
+                  WHERE v.id=$1 FOR UPDATE OF v,m`,
+                [verificationId]
+            );
+            if (!locked.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({ success: false, message: "Result dispute not found." });
+            }
+            const record = locked.rows[0];
+            if (clear && (!record.settled_at || !["completed", "cancelled"].includes(record.match_status))) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Resolve or cancel the match before clearing its result dispute." });
+            }
+            await client.query(
+                "UPDATE efootball_result_verifications SET admin_cleared_at=$1,admin_cleared_by=$2 WHERE id=$3",
+                [clear ? new Date() : null, req.user.userId, verificationId]
+            );
+            await client.query(
+                "INSERT INTO efootball_result_admin_events(verification_id,admin_id,event_type) VALUES($1,$2,$3)",
+                [verificationId, req.user.userId, clear ? "cleared" : "restored"]
+            );
+            await client.query("COMMIT");
+            return res.json({ success: true, cleared: clear, message: clear ? "Resolved result dispute cleared from the list." : "Result dispute restored to the list." });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Admin result dispute visibility update failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not update the result dispute list." });
+        } finally {
+            client.release();
+        }
+    }
+
+    router.post("/result-verifications/:id/clear", authenticateToken, adminOnly, (req, res) => setResultVisibility(req, res, true));
+    router.post("/result-verifications/:id/restore", authenticateToken, adminOnly, (req, res) => setResultVisibility(req, res, false));
 
     router.get("/result-verifications/:id/screenshot", authenticateToken, adminOnly, async (req, res) => {
         try {

@@ -408,6 +408,18 @@ ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS score_check 
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS review_note TEXT;
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS admin_cleared_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS efootball_result_admin_events (
+    id BIGSERIAL PRIMARY KEY,
+    verification_id BIGINT NOT NULL REFERENCES efootball_result_verifications(id) ON DELETE CASCADE,
+    admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    event_type VARCHAR(30) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_result_admin_events_recent
+    ON efootball_result_admin_events(verification_id, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS efootball_result_reports (
     id BIGSERIAL PRIMARY KEY,
