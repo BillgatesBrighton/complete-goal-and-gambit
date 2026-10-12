@@ -40,7 +40,7 @@ module.exports = function (pool, authenticateToken) {
                 LEFT JOIN users au ON au.id=m.opponent_id
                 WHERE m.league=$1
                 ORDER BY COALESCE(m.started_at,m.created_at) DESC,m.id DESC
-                LIMIT 100`,[l.name,req.user.userId]);
+                LIMIT 100`,[l.name]);
             const me=Number(req.user.userId);
             res.json({success:true,league:l,fixtures:r.rows.map(x=>({...x,id:Number(x.id),home_id:Number(x.home_id),away_id:x.away_id===null?null:Number(x.away_id),home_score:x.home_score===null?null:Number(x.home_score),away_score:x.away_score===null?null:Number(x.away_score),mine:me===Number(x.home_id)||me===Number(x.away_id)}))});
         } catch(e){res.status(500).json({success:false,message:"Failed to load live fixtures."});}
