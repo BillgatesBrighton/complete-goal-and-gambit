@@ -3134,7 +3134,7 @@ async function loadLiveLeague() {
   if (refreshing || document.hidden) return;
   refreshing = true;
   const results = await Promise.all([
-    GG.api("/api/leagues/" + encodeURIComponent(selectedLeague) + "/fixtures", {noRedirect:true}),
+    GG.api("/api/leagues/" + encodeURIComponent(selectedLeague) + "/fixtures"),
     GG.api("/api/leagues/" + encodeURIComponent(selectedLeague), {noRedirect:true})
   ]);
   refreshing = false;
@@ -3160,11 +3160,11 @@ async function loadLiveLeague() {
   renderFixtures(fixtures);
 }
 
-document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
+document.getElementById("leagueTitle").textContent = selectedLeague.toUpperCase() + " LEAGUE"; document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
 document.querySelectorAll(".section-heading span").forEach(span => { if (span.textContent.includes("38 MATCHDAYS")) span.textContent = "Updates automatically"; });
-loadLiveLeague();
+if (GG.requireLogin()) { loadLiveLeague();
 setInterval(loadLiveLeague, 5000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLiveLeague(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLiveLeague(); }); }
 </script>
 </body>
 
