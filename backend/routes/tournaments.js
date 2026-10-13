@@ -72,26 +72,26 @@ module.exports = function (pool, authenticateToken) {
             }
 
             const standings = await pool.query(
-                `SELECT tm.user_id, u.username, tm.joined_at,
+                `SELECT tm.user_id, u.username, tm.group_code, tm.joined_at,
                         tm.played, tm.wins, tm.draws, tm.losses, tm.points,
                         tm.goal_difference, tm.goals_for, tm.goals_against
                  FROM efootball_tournament_members tm
                  JOIN users u ON u.id = tm.user_id
                  WHERE tm.tournament_id = $1
-                 ORDER BY tm.points DESC, tm.goal_difference DESC,
+                 ORDER BY tm.group_code, tm.points DESC, tm.goal_difference DESC,
                           tm.goals_for DESC, tm.wins DESC, tm.joined_at, tm.id`,
                 [id]
             );
 
             const fixtures = await pool.query(
                 `SELECT m.id, m.creator_id AS home_id, m.opponent_id AS away_id,
-                        hu.username AS home, au.username AS away, m.status,
+                        hu.username AS home, au.username AS away, m.status, CASE WHEN m.opponent_id IS NULL OR away_member.group_code = home_member.group_code THEN home_member.group_code ELSE NULL END AS group_code, CASE WHEN m.opponent_id IS NOT NULL AND away_member.group_code IS DISTINCT FROM home_member.group_code THEN 'Other matches' ELSE COALESCE(m.round_name, 'Group ' || home_member.group_code) END AS round_name,
                         CASE WHEN m.status = 'completed' THEN m.creator_score END AS home_score,
                         CASE WHEN m.status = 'completed' THEN m.opponent_score END AS away_score,
                         m.created_at, m.started_at, m.finished_at
                    FROM efootball_matches m
                    JOIN users hu ON hu.id = m.creator_id
-                   LEFT JOIN users au ON au.id = m.opponent_id
+                   LEFT JOIN users au ON au.id = m.opponent_id LEFT JOIN efootball_tournament_members home_member ON home_member.tournament_id = m.tournament_id AND home_member.user_id = m.creator_id LEFT JOIN efootball_tournament_members away_member ON away_member.tournament_id = m.tournament_id AND away_member.user_id = m.opponent_id
                   WHERE m.tournament_id = $1
                   ORDER BY COALESCE(m.started_at, m.created_at) DESC, m.id DESC
                   LIMIT 50`,
@@ -188,9 +188,7 @@ module.exports = function (pool, authenticateToken) {
             if (!Number.isInteger(capacity) || capacity < 1) {
                 throw httpError(500, "This tournament has an invalid capacity.");
             }
-            if (count.rows[0].players >= capacity) {
-                throw httpError(409, "This tournament is full.");
-            }
+            if (count.rows[0].players >= capacity) { throw httpError(409, "This tournament is full."); } const groupCount = Math.min(4, Math.max(1, Math.ceil(capacity / 4))); const groupSize = Math.ceil(capacity / groupCount); const groupCounts = await client.query("SELECT group_code, COUNT(*)::int AS players FROM efootball_tournament_members WHERE tournament_id = $1 GROUP BY group_code", [id]); const countsByGroup = new Map(groupCounts.rows.map(row => [row.group_code, Number(row.players)])); let groupCode = null; for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) { const candidateCode = String.fromCharCode(65 + groupIndex); if ((countsByGroup.get(candidateCode) || 0) < groupSize) { groupCode = candidateCode; break; } } if (!groupCode) throw httpError(409, "Tournament groups are full. Please refresh and try again.");
 
             const fee = Number(tournament.entry_fee || 0);
             if (!Number.isFinite(fee) || fee < 0) {
@@ -229,9 +227,9 @@ module.exports = function (pool, authenticateToken) {
 
             await client.query(
                 `INSERT INTO efootball_tournament_members
-                    (tournament_id, user_id, fee_paid)
-                 VALUES ($1, $2, $3)`,
-                [id, req.user.userId, fee]
+                    (tournament_id, user_id, fee_paid, group_code)
+                 VALUES ($1, $2, $3, $4)`,
+                [id, req.user.userId, fee, groupCode]
             );
 
             await client.query("COMMIT");
@@ -239,7 +237,7 @@ module.exports = function (pool, authenticateToken) {
             return res.status(201).json({
                 success: true,
                 message: "Joined tournament.",
-                entryFee: fee
+                entryFee: fee, group: groupCode
             });
         } catch (error) {
             if (client && inTransaction) {
