@@ -615,6 +615,26 @@ button{
     border-radius:5px;
 }
 
+.room-code-bubble{
+    position:fixed;
+    top:calc(82px + env(safe-area-inset-top, 0px));
+    left:50%;
+    transform:translateX(-50%);
+    width:min(540px, calc(100vw - 24px));
+    padding:19px;
+    background:#101010;
+    border:1px solid #d4af37;
+    border-radius:16px;
+    box-shadow:0 16px 48px rgba(0,0,0,.78), 0 0 0 1px rgba(212,175,55,.12);
+    z-index:1200;
+}
+.room-code-bubble-header{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.room-code-bubble-icon{flex:0 0 34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#241e0e;color:#f0cf55;font-size:18px;font-weight:900}
+.room-code-bubble h2{color:#f0cf55;font-size:18px;margin:0 0 4px}
+.room-code-bubble p{color:#c6c6c6;font-size:13px;line-height:1.5}
+.room-code-bubble .room-code-form{margin:14px 0 8px}
+.room-code-bubble-note{color:#888 !important;font-size:11px !important;text-align:center}
+
 @media(max-width:760px){
 
     nav{
@@ -696,6 +716,22 @@ button{
     </a>
 
 </nav>
+
+<section class="room-code-bubble hidden" id="roomCodeBubble" role="dialog" aria-labelledby="roomCodeBubbleTitle" aria-describedby="roomCodeBubbleDescription">
+    <div class="room-code-bubble-header">
+        <div class="room-code-bubble-icon" aria-hidden="true">!</div>
+        <div>
+            <h2 id="roomCodeBubbleTitle">Your room code is needed</h2>
+            <p id="roomCodeBubbleDescription">You were selected to create the eFootball room. Enter its code here so your opponent can join.</p>
+        </div>
+    </div>
+    <form class="room-code-form" id="roomCodeForm" onsubmit="event.preventDefault(); sendRoomCode();">
+        <label for="roomCodeInput">Room code</label>
+        <input type="text" id="roomCodeInput" maxlength="50" placeholder="Enter eFootball room code" autocomplete="off" aria-label="eFootball room code">
+        <button class="primary-btn" id="sendRoomCodeButton" type="submit">SEND CODE</button>
+    </form>
+    <p class="room-code-bubble-note">This bubble stays here until your room code is sent.</p>
+</section>
 
 <div class="container">
 
@@ -865,14 +901,8 @@ button{
             </div>
 
             <p class="description" style="margin-top:12px;">
-                Create the room in eFootball. On Android, use the GOAL$GAMBIT notification reply to send the code without opening the website. Browser notifications open this match page.
+                Create the room in eFootball. The room-code form stays in the bubble at the top of this screen until you send it.
             </p>
-
-            <form class="room-code-form" id="roomCodeForm" onsubmit="event.preventDefault(); sendRoomCode();">
-                <label for="roomCodeInput">Room code</label>
-                <input type="text" id="roomCodeInput" maxlength="50" placeholder="Enter eFootball room code" autocomplete="off" aria-label="eFootball room code">
-                <button class="primary-btn" id="sendRoomCodeButton" type="submit">SEND CODE</button>
-            </form>
 
         </div>
 
@@ -1479,6 +1509,8 @@ function loadMatch(){
 
     if(!currentMatch){
 
+        updateRoomCodeForm();
+
         document.getElementById(
             "matchStatus"
         ).textContent =
@@ -1549,9 +1581,12 @@ function loadMatch(){
 function updateInterface(){
 
     if(!currentMatch){
+        updateRoomCodeForm();
         updateCancelSearchButton();
         return;
     }
+
+    updateRoomCodeForm();
 
 
     const opponentFound =
@@ -1853,11 +1888,11 @@ function isSender(){
 ============================================================ */
 
 function updateRoomCodeForm(){
-    const form = document.getElementById("roomCodeForm");
-    if(!form) return;
+    const bubble = document.getElementById("roomCodeBubble");
+    if(!bubble) return;
     const canSend = currentMatch && currentMatch.backendId && isSender() &&
         !currentMatch.codeSent && !currentMatch.roomCode;
-    form.classList.toggle("hidden", !canSend);
+    bubble.classList.toggle("hidden", !canSend);
 }
 
 
