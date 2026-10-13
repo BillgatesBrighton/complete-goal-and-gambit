@@ -438,6 +438,7 @@ function safeStkProviderHint(data) {
 async function sendStkPush({
     accessToken,
     shortcode,
+    partyB,
     passkey,
     transactionType,
     amount,
@@ -491,7 +492,7 @@ async function sendStkPush({
             phone,
 
         PartyB:
-            shortcode,
+            partyB || shortcode,
 
         PhoneNumber:
             phone,
@@ -694,16 +695,20 @@ module.exports = function (
         if (!req.user || req.user.role !== "admin") {
             return res.status(403).json({ success:false, message:"Administrator access is required." });
         }
+        const transactionType = envValue("MPESA_TRANSACTION_TYPE") || "CustomerPayBillOnline";
         const required = ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY", "MPESA_CALLBACK_URL"];
         const missing = required.filter(name => !envValue(name));
+        if (transactionType === "CustomerBuyGoodsOnline" && !envValue("MPESA_TILL_NUMBER")) {
+            missing.push("MPESA_TILL_NUMBER");
+        }
         if (missing.length) {
             return res.status(503).json({ success:false, oauthConnected:false, configurationReady:false, readyForStk:false, stkProductVerified:false, missing, message:"Daraja configuration is incomplete." });
         }
         const callbackIssue = callbackUrlIssue(envValue("MPESA_CALLBACK_URL"));
         const sandboxShortcodeMatches = isProduction() || envValue("MPESA_SHORTCODE") === "174379";
-        const transactionType = envValue("MPESA_TRANSACTION_TYPE") || "CustomerPayBillOnline";
         const transactionTypeSupported = ["CustomerPayBillOnline", "CustomerBuyGoodsOnline"].includes(transactionType);
-        const baseConfigReady = !callbackIssue && sandboxShortcodeMatches && transactionTypeSupported;
+        const storeShortcodeMatches = !envValue("MPESA_STORE_NUMBER") || envValue("MPESA_STORE_NUMBER") === envValue("MPESA_SHORTCODE");
+        const baseConfigReady = !callbackIssue && sandboxShortcodeMatches && transactionTypeSupported && storeShortcodeMatches;
         try {
             await getAccessToken();
             return res.json({
@@ -718,6 +723,8 @@ module.exports = function (
                 callbackReady:!callbackIssue,
                 sandboxShortcodeMatches,
                 transactionTypeSupported,
+                storeShortcodeMatches,
+                buyGoodsTillConfigured:transactionType !== "CustomerBuyGoodsOnline" || Boolean(envValue("MPESA_TILL_NUMBER")),
                 callbackMessage:callbackIssue,
                 message:!baseConfigReady
                     ? (callbackIssue || "OAuth works, but the STK shortcode or transaction type does not match the selected environment.")
@@ -736,6 +743,8 @@ module.exports = function (
                 callbackReady:!callbackIssue,
                 sandboxShortcodeMatches,
                 transactionTypeSupported,
+                storeShortcodeMatches,
+                buyGoodsTillConfigured:transactionType !== "CustomerBuyGoodsOnline" || Boolean(envValue("MPESA_TILL_NUMBER")),
                 callbackMessage:callbackIssue,
                 message:"Could not authenticate with Daraja. Check the consumer credentials and environment settings."
             });
@@ -834,6 +843,12 @@ module.exports = function (
                     ) ||
                     "CustomerPayBillOnline";
 
+                const storeNumber =
+                    envValue("MPESA_STORE_NUMBER");
+
+                const tillNumber =
+                    envValue("MPESA_TILL_NUMBER");
+
                 if (!["CustomerPayBillOnline", "CustomerBuyGoodsOnline"].includes(transactionType)) {
                     return res.status(503).json({
                         success: false,
@@ -846,6 +861,20 @@ module.exports = function (
                     throw new Error(
                         "MPESA_SHORTCODE is missing from .env"
                     );
+                }
+
+                if (transactionType === "CustomerBuyGoodsOnline" && !tillNumber) {
+                    return res.status(503).json({
+                        success: false,
+                        message: "MPESA_TILL_NUMBER is required for CustomerBuyGoodsOnline; set it to the Buy Goods Till number.",
+                    });
+                }
+
+                if (transactionType === "CustomerBuyGoodsOnline" && storeNumber && storeNumber !== shortcode) {
+                    return res.status(503).json({
+                        success: false,
+                        message: "MPESA_STORE_NUMBER must match MPESA_SHORTCODE because the STK passkey is generated for that shortcode.",
+                    });
                 }
 
                 if (!isProduction() && shortcode !== "174379") {
@@ -912,6 +941,9 @@ module.exports = function (
                             shortcode:
                                 shortcode,
 
+                            partyB:
+                                transactionType === "CustomerBuyGoodsOnline" ? tillNumber : shortcode,
+
                             passkey:
                                 passkey,
 
@@ -962,6 +994,9 @@ module.exports = function (
 
                                     shortcode:
                                         shortcode,
+
+                                    partyB:
+                                        transactionType === "CustomerBuyGoodsOnline" ? tillNumber : shortcode,
 
                                     passkey:
                                         passkey,

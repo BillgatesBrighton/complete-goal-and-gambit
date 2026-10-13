@@ -112,6 +112,13 @@ M-Pesa Online shortcode is `174379`; use its matching sandbox test passkey.
 An OAuth token alone does not prove STK product access. Never commit the Desktop
 `.env` or copy its values into a public repository.
 
+For a production Buy Goods Till, set `MPESA_TRANSACTION_TYPE=CustomerBuyGoodsOnline`,
+`MPESA_SHORTCODE` and `MPESA_STORE_NUMBER` to the approved Store/Head Office number
+used with the passkey, and `MPESA_TILL_NUMBER` to the customer-facing Till number.
+The STK request uses the store shortcode for `BusinessShortCode` and its password,
+and the Till number for `PartyB`. PayBill requests continue to use the shortcode
+for both fields.
+
 ## Daraja B2C wallet withdrawals (sandbox)
 
 The wallet withdrawal endpoint sends B2C requests only when

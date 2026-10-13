@@ -156,6 +156,11 @@ body{
     align-items:center;
     margin-bottom:25px;
 }
+.entry-actions{display:none;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin:-10px 0 24px;padding:0 18px}
+.entry-actions button{border-radius:9px;padding:11px 14px;font-weight:800;cursor:pointer}
+.entry-actions .cancel-entry{border:1px solid #4f825f;background:#101d15;color:#8de0ad}
+.entry-actions .forfeit-entry{border:1px solid #8b4540;background:#21110f;color:#ffb0a9}
+.entry-actions button:disabled{opacity:.6;cursor:wait}
 
 .status-main{
     display:flex;
@@ -1020,6 +1025,9 @@ body{
     </div>
 
 </div>
+
+
+<div id="entryActions" class="entry-actions" aria-live="polite"></div>
 
 
 <!-- OVERVIEW -->
@@ -3014,8 +3022,25 @@ let selectedLeague = leagueNames.includes(query.get("league")) ? query.get("leag
 let selectedFilter = "all";
 let refreshing = false;
 let currentFixtures = [];
+let currentRound = null;
+let currentUserIsMember = false;
+let roundDeadlineAt = null;
 const currentUser = (localStorage.getItem("goalGambitUsername") || "").toLowerCase();
 const esc = GG.escapeHTML;
+
+function updateSelectedLeagueHeader() {
+  document.getElementById("leagueTitle").textContent = selectedLeague.toUpperCase() + " LEAGUE";
+  document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
+  document.getElementById("leagueDescription").textContent =
+    "Follow your complete 38-match " + selectedLeague + " League season, monitor upcoming fixtures, results and your position throughout the competition.";
+  leagueNames.forEach(function(name) {
+    document.getElementById(name.toLowerCase() + "Btn").classList.toggle("active", name === selectedLeague);
+  });
+}
+
+// Set the selected division before any API request. If the live server is
+// temporarily unavailable, the heading and active division still stay correct.
+updateSelectedLeagueHeader();
 
 function switchLeague(name) {
   if (!leagueNames.includes(name)) return;
@@ -3023,7 +3048,7 @@ function switchLeague(name) {
 }
 
 function statusLabel(status) {
-  const labels = {waiting:"WAITING FOR PLAYER",ready:"BOTH PLAYERS GETTING READY",playing:"LIVE",awaiting_verification:"SCREENSHOT REVIEW",disputed:"ADMIN REVIEW",completed:"VERIFIED",cancelled:"CANCELLED"};
+  const labels = {scheduled:"FIXTURE READY",waiting:"WAITING FOR PLAYER",ready:"BOTH PLAYERS GETTING READY",playing:"LIVE",awaiting_verification:"SCREENSHOT REVIEW",disputed:"ADMIN REVIEW",completed:"VERIFIED",walkover:"WALKOVER",bye:"BYE",draw:"DRAW",cancelled:"CANCELLED"};
   return labels[status] || String(status || "PENDING").replaceAll("_", " ").toUpperCase();
 }
 
@@ -3040,7 +3065,10 @@ function fixtureDate(match) {
 }
 
 function matchLink(match) {
-  return "match-hub.html?fixture=" + encodeURIComponent(match.id) + "&league=" + encodeURIComponent(selectedLeague);
+  if (match.match_id && match.matched_opponent_id) {
+    return "match-hub.html?fixture=" + encodeURIComponent(match.match_id) + "&league=" + encodeURIComponent(selectedLeague);
+  }
+  return "match-hub.html?league=" + encodeURIComponent(selectedLeague) + "&leagueFixture=" + encodeURIComponent(match.fixture_id);
 }
 
 function renderTable(standings) {
@@ -3059,10 +3087,15 @@ function renderFixtures(fixtures) {
     if (selectedFilter === "all") return true;
     if (selectedFilter === "completed") return item.status === "completed";
     if (selectedFilter === "review") return ["disputed", "awaiting_verification"].includes(item.status);
-    return ["waiting", "ready", "playing"].includes(item.status);
+    return ["scheduled", "waiting", "ready", "playing"].includes(item.status);
   });
   if (!fixtures.length) {
-    feed.innerHTML = '<div class="fixture-row"><div class="fixture-teams">No league matches yet. Start a match to join the live queue.</div><div class="fixture-action"><a href="match-hub.html?league=' + encodeURIComponent(selectedLeague) + '">START MATCH</a></div></div>';
+    const message = !currentUserIsMember
+      ? "Join this league to see your assigned fixtures."
+      : currentRound
+        ? "Fixtures are being prepared for Round " + Number(currentRound.number) + "."
+        : "Fixtures will appear when at least two players have joined this league.";
+    feed.innerHTML = '<div class="fixture-row"><div class="fixture-teams">' + esc(message) + '</div></div>';
     return;
   }
   if (!filtered.length) {
@@ -3072,10 +3105,15 @@ function renderFixtures(fixtures) {
   feed.innerHTML = filtered.map(match => {
     const score = match.status === "completed" && match.home_score !== null ? Number(match.home_score) + " - " + Number(match.away_score) : "—";
     const away = match.away || "Searching for opponent";
-    const action = match.mine
-      ? '<a href="' + matchLink(match) + '">' + (match.status === "cancelled" ? "VIEW MATCH" : "OPEN MATCH") + '</a>'
+    const isCurrentRound = currentRound && Number(match.round_number) === Number(currentRound.number);
+    const canStart = currentUserIsMember && match.mine && isCurrentRound && ["scheduled", "waiting"].includes(match.status) && match.away_id !== null && !match.matched_opponent_id;
+    const canOpen = currentUserIsMember && match.mine && Boolean(match.match_id && match.matched_opponent_id) && !["cancelled", "bye"].includes(match.status);
+    const action = canStart
+      ? '<a href="' + matchLink(match) + '">START MATCH</a>'
+      : canOpen
+        ? '<a href="' + matchLink(match) + '">OPEN MATCH</a>'
       : '<span class="fixture-public-label">LEAGUE FIXTURE</span>';
-    return '<div class="fixture-row"><div class="fixture-round">Match <strong>#' + Number(match.id) + '</strong></div>' +
+    return '<div class="fixture-row"><div class="fixture-round">' + (match.round_number ? 'Round ' + Number(match.round_number) : 'Match') + ' <strong>#' + Number(match.fixture_id || match.id) + '</strong></div>' +
       '<div class="fixture-teams"><div class="fixture-team-line"><strong>' + esc(match.home || "Player") + '</strong><span class="score">' + score + '</span><strong>' + esc(away) + '</strong></div></div>' +
       '<div class="fixture-date"><strong>' + esc(fixtureDate(match)) + '</strong><span>Updated from live match data</span></div>' +
       '<div class="fixture-status"><span class="badge ' + statusClass(match.status) + '">' + esc(statusLabel(match.status)) + '</span></div>' +
@@ -3094,11 +3132,31 @@ function renderOverview(fixtures, standings) {
 
   const myFixtures = fixtures.filter(match => match.mine);
   const completed = myFixtures.filter(match => match.status === "completed").sort((a,b) => new Date(b.finished_at || b.created_at) - new Date(a.finished_at || a.created_at));
-  const active = myFixtures.find(match => ["waiting", "ready", "playing", "awaiting_verification", "disputed"].includes(match.status));
-  const next = active || null;
-  document.getElementById("nextMatch").innerHTML = next
-    ? '<div class="next-top"><div class="matchday-label">LIVE LEAGUE MATCH</div><div class="live-label">' + esc(statusLabel(next.status)) + '</div></div><div class="next-teams"><div class="next-team home"><small>PLAYER</small><strong>' + esc(next.home || "Player") + '</strong></div><div class="vs">VS</div><div class="next-team"><small>OPPONENT</small><strong>' + esc(next.away || "Finding opponent") + '</strong></div></div><a class="match-hub-btn" href="' + matchLink(next) + '">OPEN MATCH HUB</a>'
-    : '<div style="text-align:center;padding:20px;color:#aaa"><strong style="display:block;color:#ddd;margin-bottom:8px">NO ACTIVE MATCH</strong>Start a league match to enter the live queue.<a class="match-hub-btn" href="match-hub.html?league=' + encodeURIComponent(selectedLeague) + '">START LEAGUE MATCH</a></div>';
+  const thisRoundFixtures = currentRound
+    ? myFixtures.filter(match => Number(match.round_number) === Number(currentRound.number))
+    : [];
+  const active = thisRoundFixtures.find(match => ["waiting", "ready", "playing", "awaiting_verification", "disputed"].includes(match.status));
+  const next = active || thisRoundFixtures.find(match => match.status === "scheduled" || match.status === "bye") || null;
+  let nextMarkup;
+  if (next && next.status === "bye") {
+    nextMarkup = '<div style="text-align:center;padding:20px;color:#aaa"><strong style="display:block;color:#ddd;margin-bottom:8px">BYE · ROUND ' + Number(next.round_number) + '</strong>You have no opponent this round. Your next fixture will appear when the round ends.</div>';
+  } else if (next) {
+    const actionLabel = next.match_id && next.matched_opponent_id ? "OPEN MATCH HUB" : "START MATCH";
+    nextMarkup = '<div class="next-top"><div class="matchday-label">' + (next.match_id ? 'LIVE LEAGUE MATCH' : 'YOUR ROUND FIXTURE') + '</div><div class="live-label">' + esc(statusLabel(next.status)) + '</div></div><div class="next-teams"><div class="next-team home"><small>PLAYER</small><strong>' + esc(next.home || "Player") + '</strong></div><div class="vs">VS</div><div class="next-team"><small>OPPONENT</small><strong>' + esc(next.away || "Opponent") + '</strong></div></div>' + (currentUserIsMember ? '<a class="match-hub-btn" href="' + matchLink(next) + '">' + actionLabel + '</a>' : '');
+  } else {
+    const title = !currentUserIsMember
+      ? "JOIN THE LEAGUE FIRST"
+      : !currentRound
+        ? "WAITING FOR FIXTURES"
+        : "NO FIXTURE THIS ROUND";
+    const message = !currentUserIsMember
+      ? "Join this league to receive a place in its fixtures."
+      : !currentRound
+        ? "Fixtures appear when at least two players have joined this league."
+        : "Your next fixture will appear when the current round ends.";
+    nextMarkup = '<div style="text-align:center;padding:20px;color:#aaa"><strong style="display:block;color:#ddd;margin-bottom:8px">' + title + '</strong>' + message + '</div>';
+  }
+  document.getElementById("nextMatch").innerHTML = nextMarkup;
 
   document.getElementById("recentResults").innerHTML = completed.length
     ? completed.slice(0,5).map(match => '<div class="result-card"><div class="round">#' + Number(match.id) + '</div><div class="opponent">vs ' + esc(Number(match.home_id) === Number(localStorage.getItem("goalGambitUserId")) ? (match.away || "Opponent") : match.home || "Opponent") + '</div><div class="result-score">' + Number(match.home_score) + ' - ' + Number(match.away_score) + '</div></div>').join("")
@@ -3113,11 +3171,63 @@ function renderOverview(fixtures, standings) {
   document.getElementById("formItems").innerHTML = form || '<span style="color:#666;font-size:10px">No verified results yet</span>';
 
   const activeBox = document.getElementById("activeMatch");
-  activeBox.style.display = active ? "block" : "none";
-  if (active) {
-    const opponent = Number(active.home_id) === Number(localStorage.getItem("goalGambitUserId")) ? active.away : active.home;
-    document.getElementById("activeMatchText").textContent = (opponent || "Waiting for opponent") + " · " + statusLabel(active.status);
+  activeBox.style.display = active || (next && next.status === "scheduled") ? "block" : "none";
+  if (active || (next && next.status === "scheduled")) {
+    const current = active || next;
+    const opponent = Number(current.home_id) === Number(localStorage.getItem("goalGambitUserId")) ? current.away : current.home;
+    document.getElementById("activeMatchText").textContent = (opponent || "Waiting for opponent") + " · " + statusLabel(current.status);
   }
+}
+
+async function exitLeague(action, button) {
+  const message = action === "cancel"
+    ? "Cancel your league entry before your first opponent fixture is released? Your locked entry stake will be refunded."
+    : "Forfeit this league? Your first opponent receives a 3–0 walkover. Your locked stake will not be refunded and will be split equally between both admin wallets.";
+  if (!confirm(message)) return;
+  button.disabled = true;
+  button.textContent = action === "cancel" ? "Cancelling…" : "Forfeiting…";
+  const result = await GG.api("/api/leagues/" + encodeURIComponent(selectedLeague) + "/" + action, {
+    method: "POST", body: {}, noRedirect: true
+  });
+  if (!result.ok) {
+    document.getElementById("statusDescription").textContent = result.data.message || "Could not update your league entry.";
+    await loadLiveLeague();
+    return;
+  }
+  if (action === "cancel" && typeof GG.refreshBalance === "function") await GG.refreshBalance();
+  await loadLiveLeague();
+  document.getElementById("statusTitle").textContent = action === "cancel" ? "ENTRY CANCELLED" : "LEAGUE FORFEITED";
+  document.getElementById("statusDescription").textContent = result.data.message || "League entry updated.";
+}
+
+function renderEntryActions(data) {
+  const container = document.getElementById("entryActions");
+  if (!container) return;
+  if (!currentUserIsMember || (!data.canCancel && !data.canForfeit)) {
+    container.innerHTML = "";
+    container.style.display = "none";
+    return;
+  }
+  container.innerHTML = data.canCancel
+    ? '<button class="cancel-entry" type="button" data-league-action="cancel">Cancel league entry · refund stake</button>'
+    : '<button class="forfeit-entry" type="button" data-league-action="forfeit">Forfeit league · send stake to admins</button>';
+  container.style.display = "flex";
+  container.querySelectorAll("[data-league-action]").forEach(function(button) {
+    button.addEventListener("click", function() { exitLeague(button.dataset.leagueAction, button); });
+  });
+}
+
+function updateRoundCountdown() {
+  const label = document.getElementById("countdownLabel");
+  const value = document.getElementById("countdown");
+  if (!roundDeadlineAt) {
+    label.textContent = "FIXTURE STATUS";
+    value.textContent = currentRound ? "Preparing" : "Waiting";
+    return;
+  }
+  const remaining = Math.max(0, Math.floor((new Date(roundDeadlineAt).getTime() - Date.now()) / 1000));
+  label.textContent = "ROUND ENDS IN";
+  value.textContent = String(Math.floor(remaining / 60)).padStart(2, "0") + ":" + String(remaining % 60).padStart(2, "0");
 }
 
 function renderFilters() {
@@ -3134,6 +3244,8 @@ async function loadLiveLeague() {
   if (refreshing || document.hidden) return;
   refreshing = true;
   const results = await Promise.all([
+    // The fixtures endpoint is private. Let api.js clear expired sessions and
+    // return the player to login instead of leaving the page in a false error state.
     GG.api("/api/leagues/" + encodeURIComponent(selectedLeague) + "/fixtures"),
     GG.api("/api/leagues/" + encodeURIComponent(selectedLeague), {noRedirect:true})
   ]);
@@ -3145,26 +3257,35 @@ async function loadLiveLeague() {
   }
   const fixtures = results[0].data.fixtures || [];
   const standings = results[1].data.standings || [];
+  currentRound = results[0].data.round || null;
+  currentUserIsMember = Boolean(results[0].data.isMember);
+  renderEntryActions(results[0].data);
+  roundDeadlineAt = currentRound && currentRound.deadline_at || null;
   currentFixtures = fixtures;
-  document.getElementById("leagueTitle").textContent = selectedLeague.toUpperCase() + " LEAGUE";
-  document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
+  updateSelectedLeagueHeader();
   document.getElementById("leagueDescription").textContent = "Live standings and match activity for league members. Results affect the table only after screenshot verification.";
-  leagueNames.forEach(name => document.getElementById(name.toLowerCase() + "Btn").classList.toggle("active", name === selectedLeague));
-  document.getElementById("statusTitle").textContent = "LIVE · " + standings.length + " MEMBERS";
-  document.getElementById("statusDescription").textContent = "Standings refresh from verified results every few seconds.";
-  document.getElementById("countdownLabel").textContent = "LAST UPDATED";
-  document.getElementById("countdown").textContent = new Date().toLocaleTimeString();
+  document.getElementById("statusTitle").textContent = currentRound
+    ? "LIVE · ROUND " + Number(currentRound.number) + " · " + standings.length + " MEMBERS"
+    : standings.length < 2 ? "WAITING FOR PLAYERS" : "FIXTURES PREPARING";
+  document.getElementById("statusDescription").textContent = standings.length < 2
+    ? "Fixtures will be released when a second player joins this league."
+    : currentUserIsMember
+      ? "Your round fixture appears below when released. Results update the table after verification."
+      : "Join this league to receive your fixture and access its Match Hub.";
+  updateRoundCountdown();
   renderTable(standings);
   renderOverview(fixtures, standings);
   renderFilters();
   renderFixtures(fixtures);
 }
 
-document.getElementById("leagueTitle").textContent = selectedLeague.toUpperCase() + " LEAGUE"; document.getElementById("divisionValue").textContent = selectedLeague.toUpperCase();
 document.querySelectorAll(".section-heading span").forEach(span => { if (span.textContent.includes("38 MATCHDAYS")) span.textContent = "Updates automatically"; });
-if (GG.requireLogin()) { loadLiveLeague();
-setInterval(loadLiveLeague, 5000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLiveLeague(); }); }
+if (GG.requireLogin()) {
+  loadLiveLeague();
+  setInterval(loadLiveLeague, 5000);
+  setInterval(updateRoundCountdown, 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLiveLeague(); });
+}
 </script>
 </body>
 

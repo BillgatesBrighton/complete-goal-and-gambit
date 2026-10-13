@@ -529,10 +529,11 @@ const result =
     );
 
 if (result.rows.length === 0) {
-
-    throw new Error(
-        "Insufficient available wallet balance."
+    const error = new Error(
+        "Insufficient available wallet balance. You need KSh " + Number(amount).toFixed(2) + " available to join this match."
     );
+    error.status = 402;
+    throw error;
 }
 
 await client.query(
@@ -1602,7 +1603,7 @@ module.exports = function (pool, authenticateToken, io) {
             res.status(201).json({success:true, matched:false, match:publicMatchState(match,userId)});
         } catch(e){
             try{await client.query("ROLLBACK")}catch(_){}
-            res.status(400).json({success:false,message:e.message});
+            res.status(e.status || 400).json({success:false,message:e.message});
         } finally{client.release();}
     });
 
@@ -1661,9 +1662,62 @@ module.exports = function (pool, authenticateToken, io) {
     });
 
     // POST /api/chess/:id/join -> join a waiting match and lock the second stake
-    router.post("/:id/join", authenticateToken, async function(req,res){
-        const matchId=Number(req.params.id), userId=Number(req.user.userId), client=await pool.connect();
-        try{await client.query("BEGIN");const r=await client.query(`SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE`,[matchId]);if(!r.rows.length)throw new Error("Chess match not found.");const m=r.rows[0];if(m.status!=="waiting"||m.player_black_id)throw new Error("Chess match is no longer available.");if(Number(m.player_white_id)===userId)throw new Error("You cannot join your own match.");const stake=Number(m.stake_amount||0);if(stake>0)await lockStake(client,userId,stake,`CHESS-LOCK-${Date.now()}-${userId}`);const q=await client.query(`UPDATE chess_matches SET player_black_id=$1,status='active',started_at=NOW(),last_move_at=NOW() WHERE id=$2 RETURNING id`,[userId,matchId]);await client.query("COMMIT");const match=await getMatch(pool,matchId);if(io)io.to("chess_match_"+matchId).emit("chess:match_ready",{success:true,match:publicMatchState(match,userId)});res.json({success:true,match:publicMatchState(match,userId)});}catch(e){try{await client.query("ROLLBACK")}catch(_){}res.status(400).json({success:false,message:e.message});}finally{client.release();}
+    router.post("/:id/join", authenticateToken, async function(req, res) {
+        const matchId = Number(req.params.id);
+        const userId = Number(req.user.userId);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const account = await client.query(
+                "SELECT game, account_status FROM users WHERE id=$1 FOR UPDATE",
+                [userId]
+            );
+            if (!account.rows.length || account.rows[0].account_status !== "active") {
+                throw Object.assign(new Error("Your account cannot join a chess match."), { status: 403 });
+            }
+            if (!["chess", "both"].includes(account.rows[0].game)) {
+                throw Object.assign(new Error("Your account is not registered for Chess."), { status: 403 });
+            }
+
+            const result = await client.query(
+                "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE",
+                [matchId]
+            );
+            if (!result.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
+            const match = result.rows[0];
+            if (match.status !== "waiting" || match.player_black_id) {
+                throw Object.assign(new Error("Chess match is no longer available."), { status: 409 });
+            }
+            if (Number(match.player_white_id) === userId) {
+                throw Object.assign(new Error("You cannot join your own match."), { status: 400 });
+            }
+
+            const stake = Number(match.stake_amount || 0);
+            if (!Number.isFinite(stake) || stake < 0) {
+                throw Object.assign(new Error("This match has an invalid stake and cannot be joined."), { status: 409 });
+            }
+            if (stake > 0) {
+                await lockStake(client, userId, stake, `CHESS-LOCK-${Date.now()}-${userId}`);
+            }
+            await client.query(
+                `UPDATE chess_matches
+                    SET player_black_id=$1,status='active',started_at=NOW(),last_move_at=NOW()
+                  WHERE id=$2`,
+                [userId, matchId]
+            );
+            await client.query("COMMIT");
+            const updated = await getMatch(pool, matchId);
+            if (io) io.to("chess_match_" + matchId).emit("chess:match_ready", {
+                success: true,
+                match: publicMatchState(updated, userId)
+            });
+            return res.json({ success: true, match: publicMatchState(updated, userId) });
+        } catch (error) {
+            try { await client.query("ROLLBACK"); } catch (_) {}
+            return res.status(error.status || 400).json({ success: false, message: error.message });
+        } finally {
+            client.release();
+        }
     });
 
     // Return legal destinations from the same server-side chess position used
@@ -1823,5 +1877,4 @@ module.exports = function (pool, authenticateToken, io) {
     return router;
 
 };
-
 

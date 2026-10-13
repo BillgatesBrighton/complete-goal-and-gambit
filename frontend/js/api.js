@@ -20,6 +20,12 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
+    // Resolve the frontend root from this shared script so the worker stays
+    // inside /frontend on GitHub Pages and works from the backend's static root.
+    var apiScriptUrl = document.currentScript && document.currentScript.src
+        ? new URL(document.currentScript.src, location.href)
+        : new URL("js/api.js", location.href);
+    var frontendRootUrl = new URL("../", apiScriptUrl);
     var presenceSocket = null;
     var presenceScriptPending = false;
     var onlineUserIds = new Set();
@@ -59,6 +65,9 @@
             presenceSocket = socket;
             socket.on("presence:update", function(data) {
                 publishPresence(data && data.onlineUserIds);
+            });
+            socket.on("efootball:match-update", function(data) {
+                window.dispatchEvent(new CustomEvent("gg:match-update", { detail: data || {} }));
             });
             socket.on("disconnect", function(reason) {
                 publishPresence([]);
@@ -124,8 +133,10 @@
     }
 
     function logout() {
-        clearSession();
-        location.href = "login.html";
+        disablePushNotifications({ silent: true }).catch(function() {}).finally(function() {
+            clearSession();
+            location.href = "login.html";
+        });
     }
 
     // Sends the request with the login token. Always resolves to
@@ -174,6 +185,189 @@
         return true;
     }
 
+
+    // ------------------------------------------------------------------
+    // Web Push setup shared by the account, match and notification pages.
+    // Permission is requested only from the explicit Enable button.
+    // ------------------------------------------------------------------
+    function pushBrowserSupported() {
+        return !!(window.isSecureContext && "Notification" in window && "serviceWorker" in navigator && "PushManager" in window);
+    }
+
+    function pushServiceWorkerUrl() {
+        return new URL("sw.js", frontendRootUrl);
+    }
+
+    async function registerPushServiceWorker() {
+        if (!pushBrowserSupported()) throw new Error("This browser does not support secure Web Push notifications.");
+        var workerUrl = pushServiceWorkerUrl();
+        var scopeUrl = frontendRootUrl;
+        var registration = await navigator.serviceWorker.register(workerUrl.href, { scope: scopeUrl.pathname });
+        await navigator.serviceWorker.ready;
+        return registration;
+    }
+
+    function decodeApplicationServerKey(value) {
+        var base64 = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+        while (base64.length % 4) base64 += "=";
+        var raw = atob(base64);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return bytes;
+    }
+
+    async function getPushPublicConfig() {
+        var result = await api("/api/push/vapid-public-key", { noRedirect: true });
+        if (!result.ok || !result.data.configured || !result.data.publicKey) {
+            throw new Error(result.data && result.data.message || "Match notifications are not configured on the server yet.");
+        }
+        return result.data;
+    }
+
+    async function syncPushSubscription() {
+        if (!pushBrowserSupported() || Notification.permission !== "granted" || !getToken()) {
+            return { enabled: false, registered: false, message: "Notifications are not enabled in this browser." };
+        }
+        var config = await getPushPublicConfig();
+        var registration = await registerPushServiceWorker();
+        var subscription = await registration.pushManager.getSubscription();
+        if (!subscription) {
+            subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: decodeApplicationServerKey(config.publicKey)
+            });
+        }
+        var saved = await api("/api/push/subscriptions", {
+            method: "POST",
+            body: { subscription: subscription.toJSON() },
+            noRedirect: true
+        });
+        if (!saved.ok || !saved.data.registered) {
+            throw new Error(saved.data.message || "The browser subscription was not saved to your account.");
+        }
+        var status = await api("/api/push/status", { noRedirect: true });
+        if (!status.ok || !status.data.configured || Number(status.data.activeSubscriptions) < 1) {
+            throw new Error(status.data.message || "The backend could not verify an active subscription for your account.");
+        }
+        return { enabled: true, registered: true, activeSubscriptions: Number(status.data.activeSubscriptions), message: "This device is registered for match notifications." };
+    }
+
+    async function enablePushNotifications() {
+        if (!pushBrowserSupported()) throw new Error("Web Push needs a supported browser and a secure HTTPS page. On iPhone or iPad, add the site to the Home Screen first.");
+        if (!getToken()) throw new Error("Sign in before enabling match notifications.");
+        await getPushPublicConfig();
+        var permission = Notification.permission;
+        if (permission === "default") permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+            if (permission === "denied") localStorage.setItem("goalGambitPushPermissionDenied", "1");
+            throw new Error(permission === "denied" ? "Notifications are blocked for this site. Allow them in your browser settings, then return here." : "Notification permission was not granted.");
+        }
+        var result = await syncPushSubscription();
+        localStorage.removeItem("goalGambitPushPromptDismissed");
+        localStorage.removeItem("goalGambitPushPermissionDenied");
+        return result;
+    }
+
+    async function disablePushNotifications(options) {
+        options = options || {};
+        if (!getToken()) return { disabled: false };
+        try {
+            var registration = null;
+            if ("serviceWorker" in navigator) {
+                var workerUrl = pushServiceWorkerUrl();
+                registration = await navigator.serviceWorker.getRegistration(workerUrl.href);
+                if (!registration) registration = await registerPushServiceWorker();
+            }
+            var subscription = registration ? await registration.pushManager.getSubscription() : null;
+            if (!subscription && !options.allDevices) return { disabled: false, message: "There is no push subscription on this device." };
+            var response = await api("/api/push/subscriptions", {
+                method: "DELETE",
+                body: subscription ? { endpoint: subscription.endpoint } : {},
+                noRedirect: true
+            });
+            if (!response.ok) throw new Error(response.data.message || "The backend could not disable this device subscription.");
+            if (subscription) await subscription.unsubscribe();
+            return { disabled: true };
+        } catch (error) {
+            if (!options.silent) throw error;
+            return { disabled: false, message: error.message };
+        }
+    }
+
+    async function getPushStatus() {
+        var browserSupported = pushBrowserSupported();
+        var permission = !browserSupported ? "unsupported" : Notification.permission;
+        var localSubscription = false;
+        if (browserSupported && permission === "granted") {
+            try {
+                var registration = await registerPushServiceWorker();
+                var subscription = await registration.pushManager.getSubscription();
+                if (subscription) {
+                    var synchronized = await syncPushSubscription();
+                    localSubscription = !!synchronized.registered;
+                }
+            } catch (_) {}
+        }
+        var server = getToken() ? await api("/api/push/status", { noRedirect: true }) : { ok: false, data: {} };
+        return {
+            browserSupported: browserSupported,
+            permission: permission,
+            configured: !!(server.ok && server.data.configured),
+            activeSubscriptions: server.ok ? Number(server.data.activeSubscriptions || 0) : 0,
+            thisDeviceRegistered: localSubscription,
+            serverReachable: !!server.ok
+        };
+    }
+
+    function initPushExperience() {
+        if (window.__GG_PUSH_EXPERIENCE_STARTED || !document.body || !getToken()) return;
+        window.__GG_PUSH_EXPERIENCE_STARTED = true;
+        if (!pushBrowserSupported()) return;
+        navigator.serviceWorker.addEventListener("message", function(event) {
+            if (event.data && event.data.type === "GG_PUSH_SUBSCRIPTION_CHANGED") {
+                syncPushSubscription().catch(function() {});
+            }
+        });
+        if (Notification.permission === "granted") {
+            syncPushSubscription().catch(function() {});
+            return;
+        }
+        if (Notification.permission === "denied" || localStorage.getItem("goalGambitPushPromptDismissed")) return;
+        getPushPublicConfig().then(function() {
+            if (!getToken() || !document.body || document.getElementById("gg-push-onboarding")) return;
+            var panel = document.createElement("section");
+            panel.id = "gg-push-onboarding";
+            panel.setAttribute("role", "dialog");
+            panel.setAttribute("aria-labelledby", "gg-push-title");
+            panel.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483001;width:min(420px,calc(100vw - 32px));padding:20px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.55);font:15px/1.5 Arial,sans-serif";
+            panel.innerHTML = "<h2 id='gg-push-title' style='margin:0 0 8px;color:#e4bd43;font-size:20px'>Never Miss a Match</h2><p style='margin:0 0 14px'>Enable GOAL$GAMBIT notifications to know when your match is ready, when your opponent sends a room code, and when your match needs your attention—even when you’re using eFootball.</p><p id='gg-push-onboarding-status' role='status' style='min-height:1.4em;margin:0 0 8px;color:#f3d881'></p><div style='display:flex;flex-wrap:wrap;gap:8px'><button id='gg-push-enable' type='button' style='padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700'>Enable Notifications</button><button id='gg-push-later' type='button' style='padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee'>Not Now</button><a href='notification-settings.html' style='align-self:center;color:#e4bd43'>Settings</a></div>";
+            document.body.appendChild(panel);
+            panel.querySelector("#gg-push-later").addEventListener("click", function() {
+                localStorage.setItem("goalGambitPushPromptDismissed", "1");
+                panel.remove();
+            });
+            panel.querySelector("#gg-push-enable").addEventListener("click", async function() {
+                var button = this;
+                var status = panel.querySelector("#gg-push-onboarding-status");
+                button.disabled = true;
+                status.textContent = "Requesting permission and registering this device…";
+                try {
+                    await enablePushNotifications();
+                    status.textContent = "Notifications are enabled on this device.";
+                    window.setTimeout(function() { panel.remove(); }, 1200);
+                } catch (error) {
+                    status.textContent = error.message || "Could not enable notifications.";
+                    button.disabled = false;
+                }
+            });
+        }).catch(function() {});
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initPushExperience, { once: true });
+    } else {
+        window.setTimeout(initPushExperience, 0);
+    }
 
     // ------------------------------------------------------------------
     // Wallet / profile helpers shared by every dashboard and match page
@@ -280,10 +474,43 @@
         return user;
     }
 
+    function announcementDismissalState() {
+        var userId = localStorage.getItem("goalGambitUserId") || "current";
+        var key = "goalGambitDismissedAnnouncements:" + userId;
+        var value = {};
+        try { value = JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (e) {}
+        return {
+            key: key,
+            ids: Array.from(new Set((Array.isArray(value.ids) ? value.ids : []).map(String))),
+            pending: Array.from(new Set((Array.isArray(value.pending) ? value.pending : []).map(String)))
+        };
+    }
+
+    function saveAnnouncementDismissalState(state) {
+        try {
+            localStorage.setItem(state.key, JSON.stringify({ ids: state.ids, pending: state.pending }));
+        } catch (e) {}
+    }
+
+    function removePendingAnnouncementDismissal(state, id) {
+        state.pending = state.pending.filter(function(value) { return value !== String(id); });
+        saveAnnouncementDismissalState(state);
+    }
+
     async function showDashboardAnnouncements() {
+        var dismissalState = announcementDismissalState();
+        if (dismissalState.pending.length) {
+            await Promise.all(dismissalState.pending.map(async function(id) {
+                var synced = await api("/api/announcements/" + encodeURIComponent(id) + "/dismiss", { method: "POST" });
+                if (synced.ok || synced.status === 404) removePendingAnnouncementDismissal(dismissalState, id);
+            }));
+        }
+
         var response = await api("/api/announcements/current");
         var list = response.ok && response.data && Array.isArray(response.data.announcements)
             ? response.data.announcements : [];
+        var dismissedIds = new Set(dismissalState.ids);
+        list = list.filter(function(announcement) { return !dismissedIds.has(String(announcement.id)); });
         if (!list.length || !document.body) return;
 
         var region = document.createElement("section");
@@ -311,8 +538,16 @@
             dismiss.setAttribute("aria-label", "Dismiss this announcement");
             dismiss.style.cssText = "flex:none;border:1px solid #555;background:#232629;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font:600 12px system-ui,Segoe UI,sans-serif";
             dismiss.addEventListener("click", function () {
+                var id = String(announcement.id);
+                if (dismissalState.ids.indexOf(id) === -1) dismissalState.ids.push(id);
+                if (dismissalState.pending.indexOf(id) === -1) dismissalState.pending.push(id);
+                saveAnnouncementDismissalState(dismissalState);
                 card.remove();
                 if (!region.children.length) region.remove();
+                api("/api/announcements/" + encodeURIComponent(id) + "/dismiss", { method: "POST" })
+                    .then(function(result) {
+                        if (result.ok || result.status === 404) removePendingAnnouncementDismissal(dismissalState, id);
+                    });
             });
             card.append(copy, dismiss);
             region.appendChild(card);
@@ -338,86 +573,6 @@
         });
     }
 
-    function decodeVapidPublicKey(value) {
-        var normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
-        while (normalized.length % 4) normalized += "=";
-        var raw = window.atob(normalized);
-        var bytes = new Uint8Array(raw.length);
-        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        return bytes;
-    }
-
-    // Register this signed-in device for background Web Push. The server returns
-    // only its public VAPID key; the private key remains in backend configuration.
-    async function enablePushNotifications() {
-        if (!getToken()) return { ok: false, message: "Sign in before enabling background alerts." };
-        if (!("Notification" in window) || Notification.permission !== "granted") {
-            return { ok: false, message: "Allow notifications for this site first." };
-        }
-        if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-            return { ok: false, message: "This browser does not support background Web Push." };
-        }
-
-        try {
-            var workerUrl = new URL("../sw.js", location.href);
-            var scopeUrl = new URL("../", location.href);
-            var registration = await navigator.serviceWorker.register(workerUrl.href, { scope: scopeUrl.pathname });
-            await navigator.serviceWorker.ready;
-
-            var keyResponse = await api("/api/push/vapid-public-key", { noRedirect: true });
-            if (!keyResponse.ok || !keyResponse.data || !keyResponse.data.configured || !keyResponse.data.publicKey) {
-                return {
-                    ok: false,
-                    message: keyResponse.data && keyResponse.data.message
-                        ? keyResponse.data.message
-                        : "The backend has not configured Web Push yet."
-                };
-            }
-
-            var applicationServerKey = decodeVapidPublicKey(keyResponse.data.publicKey);
-            var subscription = await registration.pushManager.getSubscription();
-            if (subscription && subscription.options && subscription.options.applicationServerKey) {
-                var existingKey = new Uint8Array(subscription.options.applicationServerKey);
-                var changed = existingKey.length !== applicationServerKey.length;
-                for (var i = 0; !changed && i < existingKey.length; i++) {
-                    if (existingKey[i] !== applicationServerKey[i]) changed = true;
-                }
-                if (changed) {
-                    await subscription.unsubscribe();
-                    subscription = null;
-                }
-            }
-            if (!subscription) {
-                subscription = await registration.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: applicationServerKey
-                });
-            }
-
-            var saved = await api("/api/push/subscriptions", {
-                method: "POST",
-                body: { subscription: subscription.toJSON() },
-                noRedirect: true
-            });
-            if (!saved.ok) {
-                return {
-                    ok: false,
-                    message: saved.data && saved.data.message
-                        ? saved.data.message
-                        : "The server could not save this device's notification subscription."
-                };
-            }
-            return { ok: true, message: "Background alerts are connected to this account." };
-        } catch (error) {
-            return {
-                ok: false,
-                message: error && error.message
-                    ? error.message
-                    : "Could not connect background alerts on this device."
-            };
-        }
-    }
-
     window.GG = {
         API_BASE: API_BASE,
         api: api,
@@ -435,6 +590,10 @@
         fillBalance: fillBalance,
         formatMoney: formatMoney,
         startPresence: startPresence,
+        enablePushNotifications: enablePushNotifications,
+        disablePushNotifications: disablePushNotifications,
+        getPushStatus: getPushStatus,
+        syncPushSubscription: syncPushSubscription,
         isUserOnline: function(id) { return onlineUserIds.has(String(Number(id))); },
         getOnlineUserIds: function() { return Array.from(onlineUserIds); },
         escapeHTML: function (value) {
@@ -550,4 +709,3 @@
     initServerStatus();
 
 })();
-

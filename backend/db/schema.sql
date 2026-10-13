@@ -221,6 +221,10 @@ CREATE TABLE IF NOT EXISTS efootball_matches (
 -- supported match state on databases created with the older VARCHAR(20).
 ALTER TABLE efootball_matches ALTER COLUMN status TYPE VARCHAR(30);
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS search_last_seen_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS creator_last_seen_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_last_seen_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS paired_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS attendance_deadline_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_status ON efootball_matches(status);
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_creator ON efootball_matches(creator_id);
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_opponent ON efootball_matches(opponent_id);
@@ -251,6 +255,35 @@ CREATE TABLE IF NOT EXISTS efootball_league_members (
     UNIQUE(league_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS efootball_league_rounds (
+    id              BIGSERIAL PRIMARY KEY,
+    league_id       INTEGER NOT NULL REFERENCES efootball_leagues(id) ON DELETE CASCADE,
+    round_number    INTEGER NOT NULL CHECK (round_number > 0),
+    starts_at       TIMESTAMPTZ,
+    deadline_at     TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (league_id, round_number)
+);
+CREATE TABLE IF NOT EXISTS efootball_league_fixtures (
+    id              BIGSERIAL PRIMARY KEY,
+    league_id       INTEGER NOT NULL REFERENCES efootball_leagues(id) ON DELETE CASCADE,
+    round_number    INTEGER NOT NULL CHECK (round_number > 0),
+    home_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    away_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    match_id        BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+    home_score      INTEGER,
+    away_score      INTEGER,
+    winner_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    resolved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (league_id, round_number, home_id, away_id)
+);
+CREATE INDEX IF NOT EXISTS efootball_league_fixtures_round_idx
+    ON efootball_league_fixtures(league_id, round_number, status);
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS league_fixture_id BIGINT REFERENCES efootball_league_fixtures(id) ON DELETE SET NULL;
+
 CREATE TABLE IF NOT EXISTS efootball_tournaments (
     id                  BIGSERIAL PRIMARY KEY,
     name                VARCHAR(100) NOT NULL UNIQUE,
@@ -266,9 +299,45 @@ CREATE TABLE IF NOT EXISTS efootball_tournament_members (
     id                  BIGSERIAL PRIMARY KEY,
     tournament_id       BIGINT NOT NULL REFERENCES efootball_tournaments(id) ON DELETE CASCADE,
     user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), group_code VARCHAR(2),
+    joined_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    group_code           VARCHAR(2),
     UNIQUE(tournament_id, user_id)
 );
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS first_match_at TIMESTAMPTZ;
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS forfeited_at TIMESTAMPTZ;
+
+-- Tournament rounds have a shared 20-minute result window. Fixtures are
+-- generated once per round and retain their opponent assignment even when
+-- neither player starts matchmaking.
+CREATE TABLE IF NOT EXISTS efootball_tournament_rounds (
+    id              BIGSERIAL PRIMARY KEY,
+    tournament_id   BIGINT NOT NULL REFERENCES efootball_tournaments(id) ON DELETE CASCADE,
+    round_number    INTEGER NOT NULL CHECK (round_number > 0),
+    starts_at       TIMESTAMPTZ,
+    deadline_at     TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tournament_id, round_number)
+);
+CREATE TABLE IF NOT EXISTS efootball_tournament_fixtures (
+    id              BIGSERIAL PRIMARY KEY,
+    tournament_id   BIGINT NOT NULL REFERENCES efootball_tournaments(id) ON DELETE CASCADE,
+    round_number    INTEGER NOT NULL CHECK (round_number > 0),
+    group_code      VARCHAR(2) NOT NULL,
+    home_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    away_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    match_id        BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+    home_score      INTEGER,
+    away_score      INTEGER,
+    winner_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    resolved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tournament_id, round_number, group_code, home_id, away_id)
+);
+CREATE INDEX IF NOT EXISTS efootball_tournament_fixtures_round_idx
+    ON efootball_tournament_fixtures(tournament_id, round_number, group_code, status);
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_fixture_id BIGINT REFERENCES efootball_tournament_fixtures(id) ON DELETE SET NULL;
 
 
 -- ======================================================
@@ -389,8 +458,10 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_id BIGINT REFERENCES efootball_tournaments(id) ON DELETE SET NULL;
-ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0; ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS group_code VARCHAR(2); WITH ranked_members AS (SELECT tm.id, ROW_NUMBER() OVER (PARTITION BY tm.tournament_id ORDER BY tm.joined_at, tm.id) AS member_rank, GREATEST(1, CEIL(t.max_players::numeric / LEAST(4, GREATEST(1, CEIL(t.max_players::numeric / 4))))) AS group_size FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.group_code IS NULL) UPDATE efootball_tournament_members tm SET group_code=CHR(65+FLOOR((ranked.member_rank-1)/ranked.group_size)::integer) FROM ranked_members ranked WHERE tm.id=ranked.id; ALTER TABLE efootball_tournament_members ALTER COLUMN group_code SET NOT NULL; CREATE INDEX IF NOT EXISTS efootball_tournament_members_group_idx ON efootball_tournament_members(tournament_id,group_code,user_id); UPDATE efootball_matches m SET round_name='Group '||home.group_code FROM efootball_tournament_members home WHERE m.tournament_id=home.tournament_id AND m.creator_id=home.user_id AND m.round_name IS NULL AND (m.opponent_id IS NULL OR EXISTS (SELECT 1 FROM efootball_tournament_members away WHERE away.tournament_id=home.tournament_id AND away.user_id=m.opponent_id AND away.group_code=home.group_code));
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS group_code VARCHAR(2);
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS forfeited_at TIMESTAMPTZ;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_for INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_against INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS played INTEGER NOT NULL DEFAULT 0;
@@ -401,6 +472,40 @@ ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS points INTEGER
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goal_difference INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goals_for INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goals_against INTEGER NOT NULL DEFAULT 0;
+
+-- Assign existing entries to stable groups of up to four, preserving entry order.
+WITH ranked_members AS (
+    SELECT tm.id,
+           ROW_NUMBER() OVER (PARTITION BY tm.tournament_id ORDER BY tm.joined_at, tm.id) AS member_rank,
+           GREATEST(1, CEIL(t.max_players::numeric /
+               LEAST(4, GREATEST(1, CEIL(t.max_players::numeric / 4))))) AS group_size
+      FROM efootball_tournament_members tm
+      JOIN efootball_tournaments t ON t.id = tm.tournament_id
+     WHERE tm.group_code IS NULL
+)
+UPDATE efootball_tournament_members tm
+   SET group_code = CHR(65 + FLOOR((ranked.member_rank - 1) / ranked.group_size)::integer)
+  FROM ranked_members ranked
+ WHERE tm.id = ranked.id;
+
+ALTER TABLE efootball_tournament_members ALTER COLUMN group_code SET NOT NULL;
+CREATE INDEX IF NOT EXISTS efootball_tournament_members_group_idx
+    ON efootball_tournament_members(tournament_id, group_code, user_id);
+
+-- Keep existing active, same-group matches in the correct group-stage feed.
+UPDATE efootball_matches m
+   SET round_name = 'Group ' || home.group_code
+  FROM efootball_tournament_members home
+ WHERE m.tournament_id = home.tournament_id
+   AND m.creator_id = home.user_id
+   AND m.round_name IS NULL
+   AND (m.opponent_id IS NULL OR EXISTS (
+       SELECT 1
+         FROM efootball_tournament_members away
+        WHERE away.tournament_id = m.tournament_id
+          AND away.user_id = m.opponent_id
+          AND away.group_code = home.group_code
+   ));
 
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS screenshot_ocr_text TEXT;
 ALTER TABLE efootball_result_verifications ADD COLUMN IF NOT EXISTS detected_score_candidates JSONB NOT NULL DEFAULT '[]'::jsonb;
@@ -647,6 +752,13 @@ CREATE TABLE IF NOT EXISTS admin_announcement_reads (
     PRIMARY KEY (announcement_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS admin_announcement_dismissals (
+    announcement_id BIGINT NOT NULL REFERENCES admin_announcements(id) ON DELETE CASCADE,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    dismissed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (announcement_id, user_id)
+);
+
 -- ============================================================
 -- GENERAL CHAT (ONE PUBLIC ROOM)
 -- ============================================================
@@ -665,6 +777,9 @@ CREATE INDEX IF NOT EXISTS idx_admin_announcements_created
 
 CREATE INDEX IF NOT EXISTS idx_admin_announcement_reads_user
     ON admin_announcement_reads(user_id, announcement_id);
+
+CREATE INDEX IF NOT EXISTS idx_admin_announcement_dismissals_user
+    ON admin_announcement_dismissals(user_id, announcement_id);
 
 -- Ensure the existing direct/support chat tables have useful indexes.
 CREATE INDEX IF NOT EXISTS idx_chat_threads_users

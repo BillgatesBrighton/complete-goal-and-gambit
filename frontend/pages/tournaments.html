@@ -41,15 +41,10 @@ h2{font-size:22px;margin:12px 0 6px}
 .card-help{color:#aaa;font-size:13px;line-height:1.5;margin:0 0 14px}
 .join{width:100%;cursor:pointer}
 .join:hover:not(:disabled),.wallet-link:hover{filter:brightness(1.08)}
-.join:disabled{background:#292929;color:#aaa;cursor:default}.groups-link{display:flex;justify-content:center;align-items:center;width:100%;margin:0 0 10px;padding:11px;border:1px solid #5c4914;border-radius:10px;color:var(--gold);font-weight:800;text-decoration:none}.groups-link:hover{background:#211a08}
-.table-wrap{margin:14px 0 16px;border-top:1px solid #252525;padding-top:12px;overflow:auto}
-.table-wrap h3{font-size:12px;color:var(--gold);margin:0 0 8px}
-.standings{width:100%;border-collapse:collapse;font-size:12px}
-.standings th,.standings td{padding:7px 5px;text-align:left;border-bottom:1px solid #242424;color:#bbb}
-.standings th{color:#777;font-size:10px;text-transform:uppercase}
-.standings td:last-child,.standings th:last-child{text-align:right;color:#fff}
-.standings .you td{color:var(--gold)}
-.standings .fixture-link{color:var(--gold);font-weight:800;text-decoration:none}
+.join:disabled{background:#292929;color:#aaa;cursor:default}
+.forfeit-entry{margin-top:9px;border:1px solid #8b4540;background:#21110f;color:#ffb0a9}
+.groups-link{display:flex;justify-content:center;align-items:center;width:100%;margin:0 0 10px;padding:11px;border:1px solid #5c4914;border-radius:10px;color:var(--gold);font-weight:800;text-decoration:none}
+.groups-link:hover{background:#211a08}
 .loading,.empty{padding:28px;border:1px dashed #383838;border-radius:14px;color:#aaa;text-align:center;line-height:1.6}
 .empty a{color:var(--gold)}
 @media(max-width:720px){.navbar{align-items:flex-start;flex-direction:column}.nav-links{gap:12px}.intro{align-items:flex-start;flex-direction:column}.wallet-link{width:100%}.notice{align-items:flex-start;flex-direction:column}}
@@ -119,6 +114,8 @@ function tournamentCard(tournament) {
   const capacity = Math.max(1, Number(tournament.max_players) || 16);
   const remaining = Math.max(0, capacity - players);
   const joined = tournament.joined === true;
+  const canCancel = tournament.can_cancel === true;
+  const canForfeit = tournament.can_forfeit === true;
   const isOpen = String(tournament.status || "").toLowerCase() === "open";
   const canJoin = isOpen && remaining > 0 && !joined;
   const fee = Number(tournament.entry_fee) || 0;
@@ -139,7 +136,9 @@ function tournamentCard(tournament) {
     '<div class="fact"><span>Places left</span><strong>' + remaining + ' of ' + capacity + '</strong></div></div>' +
     '<div class="progress" aria-label="' + players + ' of ' + capacity + ' places filled"><span data-tournament-progress style="width:' + progress + '%"></span></div>' +
     '<div class="capacity"><span data-tournament-count>' + players + ' entered</span><span>' + capacity + ' places</span></div>' +
-    '<p class="card-help">' + (joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +    '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">View groups &amp; fixtures</a>' +    (joined ? '' : '<button class="join" type="button" data-join-id="' + id + '"' + (canJoin ? '' : ' disabled') + '>' + escape(buttonText) + '</button>') +
+    '<p class="card-help">' + (joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
+    '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">' + (joined ? 'Open your group &amp; fixtures' : 'View groups &amp; fixtures') + '</a>' +
+    (joined ? (canCancel ? '<button class="join cancel-entry" type="button" data-cancel-id="' + id + '">Cancel entry and refund stake</button>' : canForfeit ? '<button class="join forfeit-entry" type="button" data-forfeit-id="' + id + '">Forfeit tournament · send stake to admins</button>' : '') : '<button class="join" type="button" data-join-id="' + id + '"' + (canJoin ? '' : ' disabled') + '>' + escape(buttonText) + '</button>') +
     '</article>';
 }
 
@@ -169,11 +168,47 @@ async function loadTournaments(preserveNotice) {
       joinTournament(button.dataset.joinId, button);
     });
   });
-  cards.querySelectorAll("[data-play-id]").forEach(function(button) {
-    button.addEventListener("click", function() {
-      startTournamentMatch(button.dataset.playId, button);
-    });
-  });}async function joinTournament(id, button) {
+  cards.querySelectorAll("[data-cancel-id]").forEach(function(button) {
+    button.addEventListener("click", function() { cancelTournament(button.dataset.cancelId, button); });
+  });
+  cards.querySelectorAll("[data-forfeit-id]").forEach(function(button) {
+    button.addEventListener("click", function() { forfeitTournament(button.dataset.forfeitId, button); });
+  });
+}
+
+async function cancelTournament(id, button) {
+  if (!confirm("Cancel your tournament entry before your first match? The entry fee will be returned to your available wallet balance.")) return;
+  button.disabled = true;
+  button.textContent = "Cancelling entry…";
+  const result = await GG.api("/api/tournaments/" + encodeURIComponent(id) + "/cancel", {
+    method: "POST", body: {}, noRedirect: true
+  });
+  if (!result.ok) {
+    showNotice(result.data.message || "Could not cancel your tournament entry.", "error", false);
+    await loadTournaments(true);
+    return;
+  }
+  await loadTournaments(true);
+  showNotice(result.data.message || "Tournament entry cancelled and stake refunded.", "success", false);
+}
+
+async function forfeitTournament(id, button) {
+  if (!confirm("Forfeit this tournament now? Your opponent will receive a walkover. Your locked stake will not be refunded; it will be split equally between both admin wallets.")) return;
+  button.disabled = true;
+  button.textContent = "Forfeiting…";
+  const result = await GG.api("/api/tournaments/" + encodeURIComponent(id) + "/forfeit", {
+    method: "POST", body: {}, noRedirect: true
+  });
+  if (!result.ok) {
+    showNotice(result.data.message || "Could not forfeit your tournament entry.", "error", false);
+    await loadTournaments(true);
+    return;
+  }
+  await loadTournaments(true);
+  showNotice(result.data.message || "Tournament forfeited.", "success", false);
+}
+
+async function joinTournament(id, button) {
   button.disabled = true;
   button.textContent = "Joining...";
   hideNotice();
@@ -195,23 +230,6 @@ async function loadTournaments(preserveNotice) {
   showNotice(result.data.message || "Your tournament entry is confirmed.", "success", false);
 }
 
-async function startTournamentMatch(id, button) {
-  button.disabled = true;
-  button.textContent = "Finding opponent…";
-  hideNotice();
-  const result = await GG.api("/api/efootball/matches", {
-    method: "POST",
-    body: { mode: "tournament", tournament_id: Number(id), stake: 0 }
-  });
-  if (!result.ok || !result.data.match) {
-    showNotice(result.data.message || "Could not start tournament matchmaking.", "error", false);
-    await loadTournaments(true);
-    return;
-  }
-  location.href = "match-hub.html?fixture=" + encodeURIComponent(result.data.match.id) +
-    "&tournament=" + encodeURIComponent(id);
-}
-
 async function initializeTournamentPage() {
   const profile = await GG.api("/api/me");
   if (!profile.ok || !profile.data.user) {
@@ -227,6 +245,14 @@ async function initializeTournamentPage() {
   }
   document.getElementById("dashboardLink").href = GG.gameHome(game);
   await loadTournaments(false);
+  const refunded = new URLSearchParams(location.search).get("refund");
+  if (refunded !== null) {
+    const amount = Number(refunded);
+    showNotice(amount > 0
+      ? "Tournament entry cancelled. KSh " + amount.toFixed(2) + " was returned to your available wallet balance."
+      : "Tournament entry cancelled.", "success", false);
+    history.replaceState(null, "", location.pathname);
+  }
 }
 
 </script>

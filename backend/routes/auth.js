@@ -700,20 +700,30 @@ module.exports = function(pool, authenticateToken, io) {
                 : "";
             const usernameProvided = Object.prototype.hasOwnProperty.call(body, "username");
             const username = usernameProvided ? normalizeUsername(body.username) : "";
+            const phoneProvided = Object.prototype.hasOwnProperty.call(body, "phone");
+            const phone = phoneProvided ? normalizePhoneForSms(body.phone) : null;
+            const gameProvided = Object.prototype.hasOwnProperty.call(body, "game");
+            const game = gameProvided ? String(body.game || "").trim().toLowerCase() : "";
             const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
             const changesPassword = newPassword.length > 0;
 
             if (!currentPassword) {
                 return res.status(400).json({ success: false, message: "Enter your current password to confirm this change." });
             }
-            if (!usernameProvided && !changesPassword) {
-                return res.status(400).json({ success: false, message: "Enter a new username or a new password." });
+            if (!usernameProvided && !phoneProvided && !gameProvided && !changesPassword) {
+                return res.status(400).json({ success: false, message: "Enter a new username, phone number, game, or password." });
             }
             if (usernameProvided && (!username || username.length < 3 || username.length > 30 || !/^[a-z0-9_]+$/.test(username))) {
                 return res.status(400).json({ success: false, message: "Username must be 3–30 characters using letters, numbers, or underscores." });
             }
             if (changesPassword && (newPassword.length < 8 || newPassword.length > 128)) {
                 return res.status(400).json({ success: false, message: "New password must be 8–128 characters." });
+            }
+            if (phoneProvided && !phone) {
+                return res.status(400).json({ success: false, message: "Enter a valid phone number, including its country code if it is not Kenyan." });
+            }
+            if (gameProvided && !["chess", "konami", "both"].includes(game)) {
+                return res.status(400).json({ success: false, message: "Choose Chess, Konami eFootball, or Both games." });
             }
 
             try {
@@ -732,8 +742,10 @@ module.exports = function(pool, authenticateToken, io) {
                 }
 
                 const nextUsername = usernameProvided ? username : user.username;
-                if (nextUsername === user.username && !changesPassword) {
-                    return res.status(400).json({ success: false, message: "Choose a different username or enter a new password." });
+                const nextPhone = phoneProvided ? phone : user.phone;
+                const nextGame = gameProvided ? game : user.game;
+                if (nextUsername === user.username && nextPhone === user.phone && nextGame === user.game && !changesPassword) {
+                    return res.status(400).json({ success: false, message: "Enter a value that is different from your current account details." });
                 }
                 if (changesPassword && await bcrypt.compare(newPassword, user.password_hash)) {
                     return res.status(400).json({ success: false, message: "Choose a password you have not used for this account." });
@@ -744,10 +756,10 @@ module.exports = function(pool, authenticateToken, io) {
                     : user.password_hash;
                 const updated = await pool.query(
                     `UPDATE users
-                     SET username=$1,password_hash=$2,auth_version=auth_version+1
-                     WHERE id=$3 AND account_status='active'
+                     SET username=$1,phone=$2,game=$3,password_hash=$4,auth_version=auth_version+1
+                     WHERE id=$5 AND account_status='active'
                      RETURNING id,username,phone,rating,game,role,auth_version`,
-                    [nextUsername, passwordHash, user.id]
+                    [nextUsername, nextPhone, nextGame, passwordHash, user.id]
                 );
                 if (!updated.rows.length) {
                     return res.status(404).json({ success: false, message: "Active account not found." });
@@ -764,7 +776,13 @@ module.exports = function(pool, authenticateToken, io) {
                 });
             } catch (error) {
                 if (error && error.code === "23505") {
-                    return res.status(409).json({ success: false, message: "That username is already in use." });
+                    const constraint = String(error.constraint || "").toLowerCase();
+                    return res.status(409).json({
+                        success: false,
+                        message: constraint.includes("phone")
+                            ? "That phone number is already linked to another account."
+                            : "That username is already in use."
+                    });
                 }
                 console.error("Account update error:", error && error.message);
                 return res.status(500).json({ success: false, message: "Could not update account. Please try again." });

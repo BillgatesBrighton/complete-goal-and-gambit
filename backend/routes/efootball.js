@@ -6,12 +6,17 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const {
+    ensureTournamentRound, ensureLeagueRound,
+} = require("../services/efootballtournament");
 const { analyzeScreenshot, matchesExpected } = require("../services/imageverification");
 
 module.exports = function (pool, authenticateToken, io, pushService) {
 
     const router = express.Router();
     const SEARCH_PRESENCE_TTL_SECONDS = 120;
+    const ACTIVE_PRESENCE_SECONDS = 60;
+    const COMPETITION_ATTENDANCE_MINUTES = 5;
     const screenshotUpload = multer({
         storage: multer.memoryStorage(),
         limits: { fileSize: 8 * 1024 * 1024, files: 1 },
@@ -105,9 +110,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         message,
         matchId = null
     ) {
-        if (!userId) return;
 
-        const inserted = await client.query(
+        if (!userId) {
+            return;
+        }
+
+        await client.query(
             `
             INSERT INTO system_notifications
             (
@@ -118,37 +126,15 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 match_id
             )
             VALUES ($1, $2, $3, $4, $5)
-            RETURNING id
             `,
-            [userId, type, title, message, matchId]
+            [
+                userId,
+                type,
+                title,
+                message,
+                matchId
+            ]
         );
-
-        // Push delivery is non-critical; a push queue schema mismatch must not roll back the in-app alert or match update.
-        if (pushService && typeof pushService.enqueueNotification === "function" &&
-            pushService.status().configured && inserted.rows[0]) {
-            await client.query("SAVEPOINT efootball_push_enqueue");
-            try {
-                const notificationType = String(type || "");
-                const page = /result|screenshot|disput|verif|review/i.test(notificationType)
-                    ? "match-results"
-                    : (/search_expired/i.test(notificationType) || !matchId ? "match-hub" : "match-room");
-                const pushType = notificationType === "room_code_sender"
-                    ? "room-code-needed"
-                    : (notificationType === "room_code" ? "room-code-sent" : "efootball-system");
-                await pushService.enqueueNotification(client, Number(userId), {
-                    eventKey: pushType + ":" + String(inserted.rows[0].id),
-                    title: title,
-                    body: message,
-                    matchId: matchId,
-                    page: page
-                });
-                await client.query("RELEASE SAVEPOINT efootball_push_enqueue");
-            } catch (error) {
-                await client.query("ROLLBACK TO SAVEPOINT efootball_push_enqueue").catch(() => {});
-                await client.query("RELEASE SAVEPOINT efootball_push_enqueue").catch(() => {});
-                console.error("eFootball push enqueue failed:", error.message);
-            }
-        }
     }
 
     async function ensureResultVerification(client, match) {
@@ -240,6 +226,140 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         }
     }
 
+    async function queuePush(client, userId, event) {
+        if (pushService && typeof pushService.enqueueNotification === "function") {
+            await client.query("SAVEPOINT efootball_push_enqueue");
+            try {
+                const queued = await pushService.enqueueNotification(client, userId, event);
+                await client.query("RELEASE SAVEPOINT efootball_push_enqueue");
+                return queued;
+            } catch (error) {
+                await client.query("ROLLBACK TO SAVEPOINT efootball_push_enqueue").catch(() => {});
+                await client.query("RELEASE SAVEPOINT efootball_push_enqueue").catch(() => {});
+                // Push delivery is useful but must not roll back the match or
+                // either player's score report.
+                console.error("eFootball push enqueue failed:", error.message);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    function emitMatchUpdate(userId, matchId, reason) {
+        if (!io || !userId) return;
+        io.to("user_" + Number(userId)).emit("efootball:match-update", {
+            matchId: Number(matchId),
+            reason: String(reason || "match-updated")
+        });
+    }
+
+    function wakePushQueue() {
+        if (pushService && typeof pushService.sendPendingJobs === "function") {
+            pushService.sendPendingJobs().catch(() => {});
+        }
+    }
+
+    async function settleTournamentWalkover(matchId) {
+        const client = await pool.connect();
+        let resolved = null;
+        try {
+            await client.query("BEGIN");
+            const peek = await client.query(
+                "SELECT id,tournament_fixture_id,league_fixture_id FROM efootball_matches WHERE id=$1 AND ((mode='tournament' AND tournament_id IS NOT NULL) OR (mode LIKE 'league-%' AND league_fixture_id IS NOT NULL))",
+                [matchId]
+            );
+            if (!peek.rows.length) {
+                await client.query("COMMIT");
+                return null;
+            }
+            if (peek.rows[0].tournament_fixture_id) {
+                await client.query("SELECT id FROM efootball_tournament_fixtures WHERE id=$1 FOR UPDATE", [peek.rows[0].tournament_fixture_id]);
+            } else if (peek.rows[0].league_fixture_id) {
+                await client.query("SELECT id FROM efootball_league_fixtures WHERE id=$1 FOR UPDATE", [peek.rows[0].league_fixture_id]);
+            }
+            const found = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            const match = found.rows[0];
+            if (!match.opponent_id || !match.attendance_deadline_at || match.settled_at ||
+                !["waiting", "ready", "playing", "awaiting_verification"].includes(match.status)) {
+                await client.query("COMMIT");
+                return null;
+            }
+
+            const deadline = await client.query(
+                `SELECT attendance_deadline_at <= NOW() AS due,
+                        creator_last_seen_at > NOW()-($2::int*INTERVAL '1 second') AS creator_present,
+                        opponent_last_seen_at > NOW()-($2::int*INTERVAL '1 second') AS opponent_present
+                   FROM efootball_matches WHERE id=$1`,
+                [matchId, ACTIVE_PRESENCE_SECONDS]
+            );
+            const presence = deadline.rows[0];
+            if (!presence.due || Boolean(presence.creator_present) === Boolean(presence.opponent_present)) {
+                await client.query("COMMIT");
+                return null;
+            }
+
+            const winnerId = presence.creator_present ? Number(match.creator_id) : Number(match.opponent_id);
+            const creatorScore = winnerId === Number(match.creator_id) ? 3 : 0;
+            const opponentScore = winnerId === Number(match.opponent_id) ? 3 : 0;
+            await settleEfootballMatch(client, match, { creatorScore, opponentScore }, winnerId);
+            await client.query(
+                `UPDATE efootball_matches SET result_status='walkover' WHERE id=$1`,
+                [matchId]
+            );
+
+            const fixtureResult = match.tournament_fixture_id
+                ? await client.query("SELECT * FROM efootball_tournament_fixtures WHERE id=$1 FOR UPDATE", [match.tournament_fixture_id])
+                : match.league_fixture_id
+                    ? await client.query("SELECT * FROM efootball_league_fixtures WHERE id=$1 FOR UPDATE", [match.league_fixture_id])
+                    : { rows: [] };
+            if (fixtureResult.rows[0]) {
+                const fixture = fixtureResult.rows[0];
+                const homeScore = Number(fixture.home_id) === Number(match.creator_id) ? creatorScore : opponentScore;
+                const awayScore = Number(fixture.away_id) === Number(match.creator_id) ? creatorScore : opponentScore;
+                const fixtureTable = match.tournament_fixture_id ? "efootball_tournament_fixtures" : "efootball_league_fixtures";
+                await client.query(
+                    `UPDATE ${fixtureTable} SET status='walkover',home_score=$1,away_score=$2,winner_id=$3,resolved_at=NOW() WHERE id=$4`,
+                    [homeScore, awayScore, winnerId, fixture.id]
+                );
+            }
+            if (match.tournament_id) {
+                await client.query(
+                    `UPDATE efootball_tournament_members SET first_match_at=COALESCE(first_match_at,NOW())
+                      WHERE tournament_id=$1 AND user_id=ANY($2::int[])`,
+                    [match.tournament_id, [Number(match.creator_id), Number(match.opponent_id)]]
+                );
+            }
+
+            for (const participantId of [Number(match.creator_id), Number(match.opponent_id)]) {
+                const competitionName = match.tournament_id ? "tournament" : (match.league || "league") + " league";
+                const participantMessage = participantId === winnerId
+                    ? "You received the " + competitionName + " walkover after the 5-minute Match Hub check-in ended."
+                    : "Your opponent received the " + competitionName + " walkover after the 5-minute Match Hub check-in ended.";
+                await createSystemNotification(client, participantId, "competition_walkover", "Match walkover", participantMessage, matchId);
+                await queuePush(client, participantId, {
+                    eventKey: "efootball-competition-match:" + matchId + ":walkover:" + participantId,
+                    matchId,
+                    title: "Match walkover",
+                    body: participantMessage,
+                    page: "match-results"
+                });
+            }
+            await client.query("COMMIT");
+            resolved = { creatorId: Number(match.creator_id), opponentId: Number(match.opponent_id) };
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Tournament walkover settlement failed:", error.message);
+        } finally {
+            client.release();
+        }
+        if (resolved) {
+            emitMatchUpdate(resolved.creatorId, matchId, "tournament-walkover");
+            emitMatchUpdate(resolved.opponentId, matchId, "tournament-walkover");
+            wakePushQueue();
+        }
+        return resolved;
+    }
+
     async function getMatchForUser(client, matchId, userId) {
 
         const result = await client.query(
@@ -255,6 +375,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 v.score_check AS score_check,
                 (v.screenshot_path IS NOT NULL) AS screenshot_submitted,
                 v.selected_player_id AS screenshot_sender_id,
+                (m.creator_last_seen_at > NOW() - ($3::int * INTERVAL '1 second')) AS creator_present_now,
+                (m.opponent_last_seen_at > NOW() - ($3::int * INTERVAL '1 second')) AS opponent_present_now,
                 EXISTS (SELECT 1 FROM complaints c WHERE c.match_id=m.id AND c.source='efootball_result_dispute') AS admin_complaint_submitted,
                 (SELECT c.complaint_ref FROM complaints c WHERE c.match_id=m.id AND c.source='efootball_result_dispute' ORDER BY c.id DESC LIMIT 1) AS admin_complaint_ref
 
@@ -287,7 +409,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             `,
             [
                 matchId,
-                userId
+                userId,
+                ACTIVE_PRESENCE_SECONDS
             ]
         );
 
@@ -297,25 +420,44 @@ module.exports = function (pool, authenticateToken, io, pushService) {
     function presentMatch(match, userId) {
         if (!match) return null;
         const isCreator = Number(match.creator_id) === Number(userId);
+        const creatorId = Number(match.creator_id);
+        const opponentId = match.opponent_id == null ? null : Number(match.opponent_id);
         const senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
         const shownCode = match.external_room_code || null;
         const safe = { ...match };
         // room_code is an internal unique placeholder required by the legacy
         // table. Never expose it as if it were the real Konami room code.
-        safe.room_code = shownCode && senderId !== Number(userId) ? shownCode : null;
+        const senderIsParticipant = senderId !== null && (senderId === creatorId || senderId === opponentId);
+        const isSender = senderIsParticipant && senderId === Number(userId);
+        const receiverId = senderIsParticipant && opponentId !== null
+            ? (senderId === creatorId ? opponentId : creatorId)
+            : null;
+        safe.room_code = shownCode && !isSender && !match.code_correction_requested_at ? shownCode : null;
         safe.opponentFound = Boolean(match.opponent_id);
         safe.youAreCreator = isCreator;
-        safe.youAreSender = senderId !== null && senderId === Number(userId);
+        safe.youAreSender = isSender;
+        safe.youAreReceiver = senderIsParticipant && receiverId === Number(userId);
+        safe.codeReceived = Boolean(senderIsParticipant && match.code_received_at && Number(match.code_received_by) === receiverId);
+        safe.codeReceivedAt = match.code_received_at || null;
+        safe.codeCorrectionRequested = Boolean(match.code_correction_requested_at);
+        safe.codeCorrectionRequestedAt = match.code_correction_requested_at || null;
+        safe.roomCodeRevision = Number(match.room_code_revision || 0);
         safe.codeSenderName = senderId === Number(match.creator_id)
             ? (match.creator_username || null)
             : senderId === Number(match.opponent_id)
+                ? (match.opponent_username || null)
+                : null;
+        safe.codeReceiverId = receiverId;
+        safe.codeReceiverName = receiverId === creatorId
+            ? (match.creator_username || null)
+            : receiverId === opponentId
                 ? (match.opponent_username || null)
                 : null;
         safe.yourName = isCreator ? match.creator_username : match.opponent_username;
         safe.opponentName = isCreator ? match.opponent_username : match.creator_username;
         safe.yourReady = Boolean(isCreator ? match.creator_ready : match.opponent_ready);
         safe.opponentReady = Boolean(isCreator ? match.opponent_ready : match.creator_ready);
-        safe.codeSent = Boolean(match.code_sent && shownCode); safe.codeReceived = Boolean((senderId === Number(match.creator_id) || senderId === Number(match.opponent_id)) && match.code_received_at && Number(match.code_received_by) === (senderId === Number(match.creator_id) ? Number(match.opponent_id) : Number(match.creator_id)));
+        safe.codeSent = Boolean(match.code_sent && match.external_room_code);
         safe.verificationStatus = match.verification_status || null;
         safe.scoreCheck = match.score_check || null;
         safe.screenshotSubmitted = Boolean(match.screenshot_submitted);
@@ -323,6 +465,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         safe.resultRound = Number(match.result_round || 1);
         safe.adminComplaintSubmitted = Boolean(match.admin_complaint_submitted);
         safe.adminComplaintRef = match.admin_complaint_ref || null;
+        safe.attendanceDeadlineAt = match.attendance_deadline_at || null;
+        safe.attendanceCountdownSeconds = match.attendance_deadline_at
+            ? Math.max(0, Math.ceil((new Date(match.attendance_deadline_at).getTime() - Date.now()) / 1000))
+            : null;
+        safe.youArePresent = Boolean(isCreator ? match.creator_present_now : match.opponent_present_now);
+        safe.opponentIsPresent = Boolean(isCreator ? match.opponent_present_now : match.creator_present_now);
         const ownSubmitted = isCreator ? Boolean(match.creator_submitted) : Boolean(match.opponent_submitted);
         safe.canEditScore = match.status === "playing" && !ownSubmitted;
         return safe;
@@ -548,6 +696,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         let league = cleanLeague(req.body && req.body.league);
         let roundName = cleanRound(req.body && req.body.round_name);
         const tournamentId = req.body && req.body.tournament_id ? Number(req.body.tournament_id) : null;
+        let tournamentFixtureId = null;
+        let leagueId = null;
+        let leagueFixtureId = null;
+        const requestedLeagueFixtureId = req.body && req.body.league_fixture_id != null
+            ? Number(req.body.league_fixture_id)
+            : null;
         const requestedStake = Number(req.body && (req.body.stake_amount !== undefined ? req.body.stake_amount : req.body.stake));
         let stake = 0;
 
@@ -565,6 +719,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         }
         if (isLeague && (!league || league.toLowerCase() !== mode.slice(7))) {
             return res.status(400).json({ success: false, message: "Choose the league you joined." });
+        }
+        if (isLeague && requestedLeagueFixtureId !== null &&
+            (!Number.isSafeInteger(requestedLeagueFixtureId) || requestedLeagueFixtureId <= 0)) {
+            return res.status(400).json({ success: false, message: "Choose a valid released league fixture." });
         }
         if (isTournament && (!Number.isSafeInteger(tournamentId) || tournamentId <= 0)) {
             return res.status(400).json({ success: false, message: "A valid tournament is required." });
@@ -592,17 +750,63 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             if (isLeague) {
                 league = mode.slice(7).charAt(0).toUpperCase() + mode.slice(8);
                 const member = await client.query(
-                    "SELECT 1 FROM efootball_league_members lm JOIN efootball_leagues l ON l.id=lm.league_id WHERE lm.user_id=$1 AND LOWER(l.name)=LOWER($2)",
+                    "SELECT l.id,l.name FROM efootball_league_members lm JOIN efootball_leagues l ON l.id=lm.league_id WHERE lm.user_id=$1 AND LOWER(l.name)=LOWER($2)",
                     [userId, league]
                 );
                 if (!member.rows.length) throw Object.assign(new Error("Join this league before starting a league match."), { status: 403 });
+                leagueId = Number(member.rows[0].id);
+                const round = await ensureLeagueRound(client, leagueId, true);
+                if (!round || round.completed_at) throw Object.assign(new Error("This league round has ended. Refresh the fixtures for the next round."), { status: 409 });
+                const fixture = await client.query(
+                    `SELECT f.id,f.home_id,f.away_id,f.match_id,m.status AS match_status
+                       FROM efootball_league_fixtures f
+                       LEFT JOIN efootball_matches m ON m.id=f.match_id
+                      WHERE f.league_id=$1 AND f.round_number=$2
+                        AND (f.home_id=$3 OR f.away_id=$3)
+                        AND ($4::bigint IS NULL OR f.id=$4)
+                        AND f.status IN ('scheduled','playing')
+                      ORDER BY f.id LIMIT 1 FOR UPDATE OF f`,
+                    [leagueId, round.round_number, userId, requestedLeagueFixtureId]
+                );
+                if (!fixture.rows.length) throw Object.assign(new Error("You have no playable fixture in this league round. Refresh the live fixtures or wait for the next round."), { status: 409 });
+                const selectedFixture = fixture.rows[0];
+                if (selectedFixture.away_id == null) throw Object.assign(new Error("You have a bye this league round. Your next fixture will appear when the round ends."), { status: 409 });
+                if (selectedFixture.match_id && selectedFixture.match_status === "cancelled") {
+                    await client.query("UPDATE efootball_league_fixtures SET match_id=NULL,status='scheduled' WHERE id=$1", [selectedFixture.id]);
+                }
+                leagueFixtureId = Number(selectedFixture.id);
+                roundName = "League Round " + Number(round.round_number);
             }
             if (isTournament) {
                 const member = await client.query(
                     "SELECT tm.group_code FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.user_id=$1 AND tm.tournament_id=$2 AND t.status='open'",
                     [userId, tournamentId]
                 );
-                if (!member.rows.length) throw Object.assign(new Error("Join an open tournament before starting a tournament match."), { status: 403 }); if (!member.rows[0].group_code) throw Object.assign(new Error("Your tournament group is not assigned yet. Please refresh and try again."), { status: 409 }); roundName = "Group " + member.rows[0].group_code;
+                if (!member.rows.length) throw Object.assign(new Error("Join an open tournament before starting a tournament match."), { status: 403 });
+                if (!member.rows[0].group_code) throw Object.assign(new Error("Your tournament group is not assigned yet. Please refresh and try again."), { status: 409 });
+                const round = await ensureTournamentRound(client, tournamentId, true);
+                if (!round || round.completed_at) throw Object.assign(new Error("This tournament round has ended. Refresh the fixtures for the next round."), { status: 409 });
+                let fixture = await client.query(
+                    `SELECT f.id, f.home_id, f.away_id, f.match_id, m.status AS match_status
+                       FROM efootball_tournament_fixtures f
+                       LEFT JOIN efootball_matches m ON m.id=f.match_id
+                      WHERE f.tournament_id=$1 AND f.round_number=$2
+                        AND (f.home_id=$3 OR f.away_id=$3)
+                        AND f.status IN ('scheduled','playing')
+                      ORDER BY f.id LIMIT 1 FOR UPDATE OF f`,
+                    [tournamentId, round.round_number, userId]
+                );
+                if (!fixture.rows.length) throw Object.assign(new Error("You have no playable fixture in this round. Check the group table for your bye or wait for the next round."), { status: 409 });
+                const selectedFixture = fixture.rows[0];
+                if (selectedFixture.away_id == null) throw Object.assign(new Error("You have a bye this round. Your next fixture will appear when the round ends."), { status: 409 });
+                if (selectedFixture.match_id && selectedFixture.match_status === "cancelled") {
+                    await client.query(
+                        "UPDATE efootball_tournament_fixtures SET match_id=NULL,status='scheduled' WHERE id=$1",
+                        [selectedFixture.id]
+                    );
+                }
+                tournamentFixtureId = Number(selectedFixture.id);
+                roundName = "Group " + member.rows[0].group_code + " · Round " + Number(round.round_number);
             }
 
             // Serialize searches for the same ranked stake, league division,
@@ -611,7 +815,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             // orphan queue entries.
             const queueKey = [
                 "goal-gambit-efootball", mode, league || "", roundName || "",
-                tournamentId || "", stake
+                tournamentId || "", tournamentFixtureId || "", stake
             ].join(":");
             await client.query(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -619,11 +823,18 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             );
 
             const existing = await client.query(
-                "SELECT id FROM efootball_matches WHERE (creator_id=$1 OR opponent_id=$1) AND status IN ('waiting','ready','playing','awaiting_verification','disputed') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+                "SELECT id,mode,league,tournament_id,tournament_fixture_id,league_fixture_id FROM efootball_matches WHERE (creator_id=$1 OR opponent_id=$1) AND status IN ('waiting','ready','playing','awaiting_verification','disputed') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
                 [userId]
             );
             if (existing.rows.length) {
-                const match = await getMatchForUser(client, existing.rows[0].id, userId);
+                const current = existing.rows[0];
+                if (current.mode !== mode || (isLeague && String(current.league || "").toLowerCase() !== String(league || "").toLowerCase()) ||
+                    (isTournament && Number(current.tournament_id) !== Number(tournamentId)) ||
+                    (isLeague && Number(current.league_fixture_id) !== Number(leagueFixtureId)) ||
+                    (isTournament && Number(current.tournament_fixture_id) !== Number(tournamentFixtureId))) {
+                    throw Object.assign(new Error("You already have an active match in another queue. Finish or cancel it before entering this mode."), { status: 409 });
+                }
+                const match = await getMatchForUser(client, current.id, userId);
                 await client.query("COMMIT");
                 return res.json({ success: true, matched: Boolean(match.opponentFound), match: match });
             }
@@ -639,6 +850,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     AND waiting.tournament_id IS NOT DISTINCT FROM $5
                     AND waiting.stake_amount=$6
                     AND waiting.search_last_seen_at >= NOW() - ($7::int * INTERVAL '1 second')
+                    AND waiting.tournament_fixture_id IS NOT DISTINCT FROM $8
+                    AND waiting.league_fixture_id IS NOT DISTINCT FROM $9
                     AND waiting_player.account_status='active'
                     AND waiting_player.game IN ('konami','both')
                     AND NOT EXISTS (
@@ -648,7 +861,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                            AND (other.creator_id=waiting.creator_id OR other.opponent_id=waiting.creator_id)
                     )
                   ORDER BY waiting.created_at, waiting.id LIMIT 1 FOR UPDATE OF waiting SKIP LOCKED`,
-                [userId, mode, league, roundName, tournamentId, stake, SEARCH_PRESENCE_TTL_SECONDS]
+                [userId, mode, league, roundName, tournamentId, stake, SEARCH_PRESENCE_TTL_SECONDS, tournamentFixtureId, leagueFixtureId]
             );
 
             if (candidate.rows.length) {
@@ -657,13 +870,27 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
                         [stake, userId]
                     );
-                    if (!locked.rows.length) throw Object.assign(new Error("Insufficient available balance."), { status: 402 });
+                    if (!locked.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + stake.toFixed(2) + " to join this match."), { status: 402 });
                 }
                 const senderId = randomInt(0, 2) === 0 ? Number(candidate.rows[0].creator_id) : userId;
                 await client.query(
-                    "UPDATE efootball_matches SET opponent_id=$1, code_sender_id=$2, creator_ready=FALSE, opponent_ready=FALSE WHERE id=$3",
-                    [userId, senderId, candidate.rows[0].id]
+                    `UPDATE efootball_matches
+                        SET opponent_id=$1, code_sender_id=$2, creator_ready=FALSE, opponent_ready=FALSE,
+                            paired_at=CASE WHEN mode='tournament' OR mode LIKE 'league-%' THEN NOW() ELSE paired_at END,
+                            attendance_deadline_at=CASE WHEN mode='tournament' OR mode LIKE 'league-%' THEN NOW()+($4::int*INTERVAL '1 minute') ELSE NULL END,
+                            creator_last_seen_at=NOW(), opponent_last_seen_at=NOW()
+                      WHERE id=$3`,
+                    [userId, senderId, candidate.rows[0].id, COMPETITION_ATTENDANCE_MINUTES]
                 );
+                if (isTournament) {
+                    await client.query(
+                        "UPDATE efootball_tournament_fixtures SET match_id=$1,status='playing' WHERE id=$2",
+                        [candidate.rows[0].id, tournamentFixtureId]
+                    );
+                }
+                if (isLeague) {
+                    await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [candidate.rows[0].id, leagueFixtureId]);
+                }
                 if (stake > 0) {
                     await client.query(
                         "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
@@ -677,8 +904,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 const receiverId = senderId === userId ? Number(candidate.rows[0].creator_id) : userId;
                 await createSystemNotification(client, senderId, "room_code_sender", "You are sending the room code", senderMessage, candidate.rows[0].id);
                 await createSystemNotification(client, receiverId, "room_code_waiting", "Opponent is preparing the room code", "Your opponent will receive a reminder when the room code is sent.", candidate.rows[0].id);
+                await queuePush(client, senderId, { eventKey: "efootball-match:" + candidate.rows[0].id + ":room-code-needed", matchId: candidate.rows[0].id, title: "Your Match Is Ready", body: "Your eFootball match is ready. Open GOAL$GAMBIT to send your room code to your opponent.", page: "match-room" });
                 const match = await getMatchForUser(client, candidate.rows[0].id, userId);
                 await client.query("COMMIT");
+                emitMatchUpdate(Number(candidate.rows[0].creator_id), candidate.rows[0].id, "opponent-found");
+                emitMatchUpdate(userId, candidate.rows[0].id, "opponent-found");
+                wakePushQueue();
                 return res.status(201).json({ success: true, matched: true, message: "Opponent found.", match: match });
             }
 
@@ -687,14 +918,26 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
                     [stake, userId]
                 );
-                if (!locked.rows.length) throw Object.assign(new Error("Insufficient available balance."), { status: 402 });
+                if (!locked.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + stake.toFixed(2) + " to join this match."), { status: 402 });
             }
 
             const created = await client.query(
-                "INSERT INTO efootball_matches (creator_id,mode,league,round_name,tournament_id,stake_amount,room_code,status,creator_ready,opponent_ready,code_sent,creator_submitted,opponent_submitted,search_last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'waiting',FALSE,FALSE,FALSE,FALSE,FALSE,NOW()) RETURNING id",
-                [userId, mode, league, roundName, tournamentId, stake, roomCode()]
+                `INSERT INTO efootball_matches
+                    (creator_id,mode,league,round_name,tournament_id,tournament_fixture_id,league_fixture_id,stake_amount,room_code,status,
+                     creator_ready,opponent_ready,code_sent,creator_submitted,opponent_submitted,search_last_seen_at,creator_last_seen_at)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'waiting',FALSE,FALSE,FALSE,FALSE,FALSE,NOW(),NOW()) RETURNING id`,
+                [userId, mode, league, roundName, tournamentId, tournamentFixtureId, leagueFixtureId, stake, roomCode()]
             );
             const matchId = created.rows[0].id;
+            if (isTournament) {
+                await client.query(
+                    "UPDATE efootball_tournament_fixtures SET match_id=$1,status='playing' WHERE id=$2",
+                    [matchId, tournamentFixtureId]
+                );
+            }
+            if (isLeague) {
+                await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [matchId, leagueFixtureId]);
+            }
             if (stake > 0) {
                 await client.query(
                     "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
@@ -766,23 +1009,43 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     );
                 }
             }
-            await client.query(
-                "UPDATE efootball_matches SET status='cancelled', result_status='cancelled', finished_at=NOW(), settled_at=NOW() WHERE id=$1 AND status IN ('waiting','ready') AND started_at IS NULL",
+            const cancelledMatch = await client.query(
+                `UPDATE efootball_matches
+                    SET status='cancelled', result_status='cancelled', finished_at=NOW(), settled_at=NOW(),
+                        search_last_seen_at=NULL, creator_ready=FALSE, opponent_ready=FALSE,
+                        external_room_code=NULL, code_sent=FALSE, code_sender_id=NULL,
+                        code_received_at=NULL, code_received_by=NULL,
+                        code_correction_requested_at=NULL, code_correction_requested_by=NULL
+                  WHERE id=$1 AND status IN ('waiting','ready') AND started_at IS NULL
+                  RETURNING id`,
                 [matchId]
             );
+            if (!cancelledMatch.rows.length) {
+                throw Object.assign(new Error("This match changed and can no longer be cancelled."), { status: 409 });
+            }
             for (const participantId of participantIds) {
+                const message = stake > 0
+                    ? "This match was cancelled before play began. All locked stakes were refunded."
+                    : "This match was cancelled before play began.";
                 await createSystemNotification(
                     client,
                     participantId,
                     "match_cancelled",
                     "Match cancelled",
-                    stake > 0
-                        ? "This match was cancelled before play began. All locked stakes were refunded."
-                        : "This match was cancelled before play began.",
+                    message,
                     matchId
                 );
+                await queuePush(client, participantId, {
+                    eventKey: "efootball-match:" + matchId + ":cancelled",
+                    matchId: matchId,
+                    title: "Match cancelled",
+                    body: message,
+                    page: "match-room"
+                });
             }
             await client.query("COMMIT");
+            for (const participantId of participantIds) emitMatchUpdate(participantId, matchId, "match-cancelled");
+            wakePushQueue();
             return res.json({
                 success: true,
                 isPaired,
@@ -806,26 +1069,43 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         if (!Number.isSafeInteger(matchId) || matchId <= 0) {
             return res.status(400).json({ success: false, message: "Invalid match ID." });
         }
+        const client = await pool.connect();
         try {
-            const renewed = await pool.query(
-                `UPDATE efootball_matches
-                    SET search_last_seen_at=NOW()
-                  WHERE id=$1 AND creator_id=$2 AND status='waiting' AND opponent_id IS NULL
-                    AND search_last_seen_at >= NOW() - ($3::int * INTERVAL '1 second')
-                  RETURNING id`,
-                [matchId, userId, SEARCH_PRESENCE_TTL_SECONDS]
-            );
-            if (!renewed.rows.length) {
-                await expireStaleSearches(userId).catch(() => {});
-                return res.status(409).json({
-                    success: false,
-                    expired: true,
-                    message: "This search is no longer active. Any unmatched stake is being refunded; start a new search when ready."
-                });
+            await client.query("BEGIN");
+            const found = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            if (!found.rows.length) throw Object.assign(new Error("Match not found."), { status: 404 });
+            const match = found.rows[0];
+            const isCreator = Number(match.creator_id) === userId;
+            const isOpponent = Number(match.opponent_id) === userId;
+            if (!isCreator && !isOpponent) throw Object.assign(new Error("You are not part of this match."), { status: 403 });
+
+            if (!match.opponent_id && match.status === "waiting" && isCreator) {
+                if (!match.search_last_seen_at || new Date(match.search_last_seen_at).getTime() < Date.now() - SEARCH_PRESENCE_TTL_SECONDS * 1000) {
+                    await client.query("COMMIT");
+                    await expireStaleSearches(userId).catch(() => {});
+                    return res.status(409).json({
+                        success: false, expired: true,
+                        message: "This search is no longer active. Any unmatched stake is being refunded; start a new search when ready."
+                    });
+                }
+                await client.query(
+                    "UPDATE efootball_matches SET search_last_seen_at=NOW(),creator_last_seen_at=NOW() WHERE id=$1",
+                    [matchId]
+                );
+            } else if (match.opponent_id && ["waiting", "ready", "playing", "awaiting_verification"].includes(match.status)) {
+                const column = isCreator ? "creator_last_seen_at" : "opponent_last_seen_at";
+                await client.query("UPDATE efootball_matches SET " + column + "=NOW() WHERE id=$1", [matchId]);
             }
-            return res.json({ success: true, expiresInSeconds: SEARCH_PRESENCE_TTL_SECONDS });
+            await client.query("COMMIT");
+            if (match.mode === "tournament" || /^league-(bronze|silver|gold)$/.test(match.mode)) await settleTournamentWalkover(matchId);
+            const updated = await getMatchForUser(pool, matchId, userId);
+            return res.json({ success: true, expiresInSeconds: SEARCH_PRESENCE_TTL_SECONDS, match: updated });
         } catch (error) {
-            return res.status(500).json({ success: false, message: "Unable to renew this match search." });
+            await client.query("ROLLBACK").catch(() => {});
+            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            return res.status(500).json({ success: false, message: "Unable to renew this match check-in." });
+        } finally {
+            client.release();
         }
     });
 
@@ -839,6 +1119,32 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         async (req, res) => {
 
             try {
+
+                const matchId = Number(req.params.id);
+                const timerContext = await pool.query(
+                    `SELECT tournament_id,league_fixture_id FROM efootball_matches
+                      WHERE id=$1 AND (creator_id=$2 OR opponent_id=$2)`,
+                    [matchId, req.user.userId]
+                );
+                if (timerContext.rows[0] && (timerContext.rows[0].tournament_id || timerContext.rows[0].league_fixture_id)) {
+                    await settleTournamentWalkover(matchId);
+                    const timerClient = await pool.connect();
+                    try {
+                        await timerClient.query("BEGIN");
+                        if (timerContext.rows[0].tournament_id) {
+                            await ensureTournamentRound(timerClient, Number(timerContext.rows[0].tournament_id), false);
+                        } else {
+                            const league = await timerClient.query("SELECT league_id FROM efootball_league_fixtures WHERE id=$1", [timerContext.rows[0].league_fixture_id]);
+                            if (league.rows[0]) await ensureLeagueRound(timerClient, Number(league.rows[0].league_id), false);
+                        }
+                        await timerClient.query("COMMIT");
+                    } catch (timerError) {
+                        await timerClient.query("ROLLBACK").catch(() => {});
+                        throw timerError;
+                    } finally {
+                        timerClient.release();
+                    }
+                }
 
                 const match =
                     await getMatchForUser(
@@ -901,6 +1207,28 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             if (Number(match.creator_id) === userId) throw Object.assign(new Error("You cannot join your own match."), { status: 400 });
             if (match.status !== "waiting" || match.opponent_id) throw Object.assign(new Error("This match is no longer available."), { status: 409 });
 
+                if (match.mode === "tournament") {
+                const eligible = await client.query(
+                    `SELECT id FROM efootball_tournament_fixtures
+                      WHERE id=$1 AND tournament_id=$2 AND status IN ('scheduled','playing')
+                        AND (home_id=$3 OR away_id=$3) AND (home_id=$4 OR away_id=$4)
+                      FOR UPDATE`,
+                    [match.tournament_fixture_id, match.tournament_id, Number(match.creator_id), userId]
+                );
+                if (!eligible.rows.length) throw Object.assign(new Error("You are not the assigned opponent for this tournament fixture."), { status: 403 });
+                } else if (/^league-(bronze|silver|gold)$/.test(match.mode)) {
+                const eligible = await client.query(
+                    `SELECT f.id FROM efootball_league_fixtures f
+                      JOIN efootball_leagues l ON l.id=f.league_id
+                      WHERE f.id=$1 AND LOWER(l.name)=LOWER($2)
+                        AND f.status IN ('scheduled','playing')
+                        AND (f.home_id=$3 OR f.away_id=$3) AND (f.home_id=$4 OR f.away_id=$4)
+                      FOR UPDATE OF f`,
+                    [match.league_fixture_id, match.league, Number(match.creator_id), userId]
+                );
+                if (!eligible.rows.length) throw Object.assign(new Error("You are not the assigned opponent for this league fixture."), { status: 403 });
+            }
+
             const alreadyPlaying = await client.query(
                 "SELECT 1 FROM efootball_matches WHERE (creator_id=$1 OR opponent_id=$1) AND status IN ('waiting','ready','playing','awaiting_verification','disputed') LIMIT 1",
                 [userId]
@@ -912,13 +1240,23 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
                     [match.stake_amount, userId]
                 );
-                if (!wallet.rows.length) throw Object.assign(new Error("Insufficient available balance."), { status: 402 });
+                    if (!wallet.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + Number(match.stake_amount).toFixed(2) + " to join this match."), { status: 402 });
             }
             const senderId = randomInt(0, 2) === 0 ? Number(match.creator_id) : userId;
             await client.query(
-                "UPDATE efootball_matches SET opponent_id=$1, code_sender_id=$2, creator_ready=FALSE, opponent_ready=FALSE WHERE id=$3",
-                [userId, senderId, matchId]
+                `UPDATE efootball_matches
+                    SET opponent_id=$1, code_sender_id=$2, creator_ready=FALSE, opponent_ready=FALSE,
+                        paired_at=CASE WHEN mode='tournament' OR mode LIKE 'league-%' THEN NOW() ELSE paired_at END,
+                        attendance_deadline_at=CASE WHEN mode='tournament' OR mode LIKE 'league-%' THEN NOW()+($4::int*INTERVAL '1 minute') ELSE NULL END,
+                        creator_last_seen_at=NOW(),opponent_last_seen_at=NOW()
+                  WHERE id=$3`,
+                [userId, senderId, matchId, COMPETITION_ATTENDANCE_MINUTES]
             );
+            if (match.mode === "tournament" && match.tournament_fixture_id) {
+                await client.query("UPDATE efootball_tournament_fixtures SET match_id=$1,status='playing' WHERE id=$2", [matchId, match.tournament_fixture_id]);
+            } else if (/^league-(bronze|silver|gold)$/.test(match.mode) && match.league_fixture_id) {
+                await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [matchId, match.league_fixture_id]);
+            }
             if (Number(match.stake_amount) > 0) {
                 await client.query(
                     "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
@@ -931,8 +1269,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const receiverId = senderId === userId ? Number(match.creator_id) : userId;
             await createSystemNotification(client, senderId, "room_code_sender", "You are sending the room code", senderMessage, matchId);
             await createSystemNotification(client, receiverId, "room_code_waiting", "Opponent is preparing the room code", "Your opponent will be reminded when the code is sent.", matchId);
+            await queuePush(client, senderId, { eventKey: "efootball-match:" + matchId + ":room-code-needed", matchId: matchId, title: "Your Match Is Ready", body: "Your eFootball match is ready. Open GOAL$GAMBIT to send your room code to your opponent.", page: "match-room" });
             const updated = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
+            emitMatchUpdate(Number(match.creator_id), matchId, "opponent-found");
+            emitMatchUpdate(userId, matchId, "opponent-found");
+            wakePushQueue();
             return res.status(201).json({ success: true, message: "Match joined.", match: updated });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
@@ -981,6 +1323,14 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         message: "Match not found."
                     });
                 }
+                if (/^league-(bronze|silver|gold)$/.test(match.mode)) {
+                    const member = await client.query(
+                        `SELECT 1 FROM efootball_league_members lm JOIN efootball_leagues l ON l.id=lm.league_id
+                          WHERE lm.user_id=$1 AND LOWER(l.name)=LOWER($2)`,
+                        [userId, match.league]
+                    );
+                    if (!member.rows.length) throw Object.assign(new Error("Join this league before joining its match."), { status: 403 });
+                }
 
                 const match =
                     matchResult.rows[0];
@@ -1022,9 +1372,13 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     return res.status(409).json({ success: false, message: "This match is no longer waiting for players to get ready." });
                 }
 
-                if (!match.code_sent || !match.external_room_code || !match.code_received_at || Number(match.code_received_by) === Number(match.code_sender_id)) {
+                if (!match.code_sent || !match.external_room_code || match.code_correction_requested_at) {
                     await client.query("ROLLBACK");
-                    return res.status(409).json({ success: false, message: "The receiver must confirm receipt of the room code before either player can mark ready." });
+                    return res.status(409).json({ success: false, message: "Wait for the selected player to send or replace the room code before marking ready." });
+                }
+                if (!match.code_received_at || Number(match.code_received_by) === Number(match.code_sender_id)) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({ success: false, message: "The receiver must confirm the room code before either player can mark ready." });
                 }
 
                 if (isCreator) {
@@ -1091,6 +1445,15 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         [match.id]
                     );
 
+                    if (match.tournament_id) {
+                        await client.query(
+                            `UPDATE efootball_tournament_members
+                                SET first_match_at=COALESCE(first_match_at,NOW())
+                              WHERE tournament_id=$1 AND user_id=ANY($2::int[])`,
+                            [match.tournament_id, [Number(match.creator_id), Number(match.opponent_id)]]
+                        );
+                    }
+
                     await ensureResultVerification(client, updated);
 
                     await createSystemNotification(
@@ -1122,8 +1485,14 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         [match.id]
                     );
 
+                if (updated.creator_ready && updated.opponent_ready && updated.status === "waiting") {
+                    const startedMessage = "Both players are ready. Your eFootball match can now be played.";
+                    await queuePush(client, Number(match.creator_id), { eventKey: "efootball-match:" + match.id + ":started", matchId: match.id, title: "Match Started", body: startedMessage, page: "match-results" });
+                    await queuePush(client, Number(match.opponent_id), { eventKey: "efootball-match:" + match.id + ":started", matchId: match.id, title: "Match Started", body: startedMessage, page: "match-results" });
+                }
                 await client.query("COMMIT");
-
+                emitMatchUpdate(Number(match.creator_id), match.id, "ready-updated");
+                emitMatchUpdate(Number(match.opponent_id), match.id, "ready-updated");
                 return res.json({
                     success: true,
                     message: "Ready status updated.",
@@ -1165,7 +1534,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const matchId = Number(req.params.id);
         const code = String(req.body && req.body.code || "").trim();
         if (!Number.isSafeInteger(matchId) || matchId <= 0) return res.status(400).json({ success: false, message: "Invalid match ID." });
-        if (!/^[A-Za-z0-9 _-]{3,50}$/.test(code)) return res.status(400).json({ success: false, message: "Enter a valid eFootball room code (3-50 letters or numbers)." });
+        if (!/^[A-Za-z0-9 _-]{1,50}$/.test(code)) return res.status(400).json({ success: false, message: "Enter a room code using letters, numbers, spaces, hyphens or underscores (up to 50 characters)." });
 
         const client = await pool.connect();
         try {
@@ -1186,41 +1555,59 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
 
             let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
-            if (!senderId) {
-                senderId = randomInt(0, 2) === 0 ? Number(match.creator_id) : Number(match.opponent_id);
+            const matchParticipants = [Number(match.creator_id), Number(match.opponent_id)];
+            if (!matchParticipants.includes(senderId)) {
+                // A sender who submits a code on a legacy match establishes the role.
+                senderId = userId;
                 await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
             }
             if (senderId !== userId) {
                 await client.query("COMMIT");
                 return res.status(403).json({ success: false, message: "Your opponent was randomly selected to send the room code." });
             }
-            if (match.code_sent) {
+            const replacingCode = Boolean(
+                match.code_sent &&
+                match.code_correction_requested_at &&
+                Number(match.code_correction_requested_by) !== senderId
+            );
+            if (match.code_sent && !replacingCode) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "The room code has already been sent." });
+                return res.status(409).json({ success: false, message: "The room code has already been sent. The receiver must explicitly request a replacement before you can send another." });
             }
 
             const receiverId = senderId === Number(match.creator_id) ? Number(match.opponent_id) : Number(match.creator_id);
-            await client.query(
+            const savedCode = await client.query(
                 `UPDATE efootball_matches
-                 SET external_room_code=$1,
-                     code_sent=TRUE,
-                     creator_ready=CASE WHEN creator_id=$2 THEN TRUE ELSE creator_ready END,
-                     opponent_ready=CASE WHEN opponent_id=$2 THEN TRUE ELSE opponent_ready END
-                 WHERE id=$3`,
+                    SET external_room_code=$1,
+                        code_sent=TRUE,
+                        room_code_revision=room_code_revision+1,
+                        code_received_at=NULL,
+                        code_received_by=NULL,
+                        code_correction_requested_at=NULL,
+                        code_correction_requested_by=NULL,
+                        creator_ready=CASE WHEN creator_id=$2 THEN TRUE ELSE FALSE END,
+                        opponent_ready=CASE WHEN opponent_id=$2 THEN TRUE ELSE FALSE END,
+                        status='waiting'
+                  WHERE id=$3
+                  RETURNING room_code_revision`,
                 [code, userId, matchId]
             );
+            const revision = Number(savedCode.rows[0] && savedCode.rows[0].room_code_revision || Number(match.room_code_revision || 0) + 1);
             const receiver = await client.query("SELECT username FROM users WHERE id=$1", [receiverId]);
             const sender = await client.query("SELECT username FROM users WHERE id=$1", [userId]);
             await createSystemNotification(
-                client, receiverId, "room_code", "eFootball Room Code",
-                "Your opponent sent the eFootball room code: " + code, matchId
+                client, receiverId, replacingCode ? "room_code_replaced" : "room_code", replacingCode ? "Replacement eFootball Room Code" : "eFootball Room Code",
+                (replacingCode ? "Your opponent replaced the eFootball room code: " : "Your opponent sent the eFootball room code: ") + code, matchId
             );
             await createSystemNotification(
                 client, senderId, "room_code_sent", "Room code delivered",
                 "Your room code was sent privately to " + (receiver.rows[0] && receiver.rows[0].username || "your opponent") + ".", matchId
             );
+            await queuePush(client, receiverId, { eventKey: "efootball-match:" + matchId + ":room-code-sent:" + revision, matchId: matchId, title: replacingCode ? "Your Opponent Replaced the Room Code" : "Your Opponent Sent the Room Code", body: "Your eFootball room code is ready. Open your match to view it and confirm receipt.", page: "match-room" });
             const updated = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
+            emitMatchUpdate(receiverId, matchId, "room-code-sent");
+            wakePushQueue();
             return res.json({ success: true, message: "Room code sent privately to your opponent.", room_code: code, match: updated });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
@@ -1247,12 +1634,136 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         sendRoomCode
     );
 
+    router.post("/matches/:id/code-correction", authenticateToken, async (req, res) => {
+        const userId = Number(req.user.userId);
+        const matchId = Number(req.params.id);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) return res.status(400).json({ success: false, message: "Invalid match ID." });
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            if (!result.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Match not found." }); }
+            const match = result.rows[0];
+            if (Number(match.creator_id) !== userId && Number(match.opponent_id) !== userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "You are not part of this match." });
+            }
+            if (!match.opponent_id || !match.code_sent || !match.external_room_code || !["waiting", "ready"].includes(match.status) || match.started_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "A room code can only be replaced before the match starts." });
+            }
+            const participantIds = [Number(match.creator_id), Number(match.opponent_id)];
+            let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
+            if (senderId === null || !participantIds.includes(senderId)) {
+                // On an older match without a saved role, the requester is the receiver.
+                senderId = participantIds.find(id => id !== userId);
+                await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
+            }
+            if (!participantIds.includes(senderId)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This match has no valid room-code sender." });
+            }
+            if (senderId === userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "Only the receiver can request a room-code replacement." });
+            }
+            if (match.code_correction_requested_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "A replacement has already been requested. Wait for the sender to submit it." });
+            }
+            await client.query(
+                "UPDATE efootball_matches SET code_correction_requested_at=NOW(),code_correction_requested_by=$1,code_received_at=NULL,code_received_by=NULL,creator_ready=FALSE,opponent_ready=FALSE,status='waiting' WHERE id=$2",
+                [userId, matchId]
+            );
+            await createSystemNotification(client, senderId, "room_code_correction_requested", "Replacement Room Code Requested", "Your opponent requested a replacement room code. Open the match room and send the corrected code.", matchId);
+            await queuePush(client, senderId, {
+                eventKey: "efootball-match:" + matchId + ":code-correction-requested:" + Number(match.room_code_revision || 0),
+                matchId: matchId,
+                title: "Replacement Room Code Requested",
+                body: "Your opponent requested a replacement room code. Open the match to send it.",
+                page: "match-room"
+            });
+            const updated = await getMatchForUser(client, matchId, userId);
+            await client.query("COMMIT");
+            emitMatchUpdate(senderId, matchId, "code-correction-requested");
+            emitMatchUpdate(userId, matchId, "code-correction-requested");
+            wakePushQueue();
+            return res.json({ success: true, message: "Replacement requested. Your opponent has been notified.", match: updated });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Room-code correction request failed.");
+            return res.status(500).json({ success: false, message: "Unable to request a room-code replacement." });
+        } finally { client.release(); }
+    });
+
+
+    /* =====================================================
+       RECEIVER CONFIRMS ROOM CODE
+       ===================================================== */
+    router.post("/matches/:id/code-received", authenticateToken, async (req, res) => {
+        const userId = Number(req.user.userId);
+        const matchId = Number(req.params.id);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) return res.status(400).json({ success: false, message: "Invalid match ID." });
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            if (!result.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Match not found." }); }
+            const match = result.rows[0];
+            if (Number(match.creator_id) !== userId && Number(match.opponent_id) !== userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "You are not part of this match." });
+            }
+            if (!match.opponent_id || !match.code_sent || !match.external_room_code || match.code_correction_requested_at || !["waiting", "ready"].includes(match.status) || match.started_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This match no longer has a room code waiting for receipt." });
+            }
+            const participantIds = [Number(match.creator_id), Number(match.opponent_id)];
+            let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
+            if (senderId === null || !participantIds.includes(senderId)) {
+                // Repair older matches with a delivered code but no saved sender.
+                // The player confirming receipt is the receiver; the other sent it.
+                senderId = participantIds.find(id => id !== userId);
+                await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
+            }
+            if (!participantIds.includes(senderId)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This room code has no valid sender. Ask the sender to resend it from the Match Room." });
+            }
+            if (senderId === userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "Only the receiver can confirm this room code." });
+            }
+            if (match.code_received_at) {
+                if (Number(match.code_received_by) === userId) {
+                    const updated = await getMatchForUser(client, matchId, userId);
+                    await client.query("COMMIT");
+                    return res.json({ success: true, message: "Room-code receipt was already confirmed.", match: updated });
+                }
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Room-code receipt was already confirmed." });
+            }
+            await client.query("UPDATE efootball_matches SET code_received_at=NOW(), code_received_by=$1 WHERE id=$2", [userId, matchId]);
+            await createSystemNotification(client, senderId, "room_code_received", "Room Code Received", "Your opponent confirmed receipt of the room code.", matchId);
+            await queuePush(client, senderId, { eventKey: "efootball-match:" + matchId + ":room-code-received:" + Number(match.room_code_revision || 0), matchId: matchId, title: "Room Code Received", body: "Your opponent confirmed receipt of the room code.", page: "match-room" });
+            const updated = await getMatchForUser(client, matchId, userId);
+            await client.query("COMMIT");
+            emitMatchUpdate(senderId, matchId, "room-code-received");
+            emitMatchUpdate(userId, matchId, "room-code-received");
+            wakePushQueue();
+            return res.json({ success: true, message: "Room code received successfully.", match: updated });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Room-code receipt confirmation failed.");
+            return res.status(500).json({ success: false, message: "Unable to confirm room-code receipt." });
+        } finally { client.release(); }
+    });
 
     /* =====================================================
        RESULT SUBMISSION
        ===================================================== */
 
-    router.post("/matches/:id/code-received",authenticateToken,async(req,res)=>{const u=Number(req.user.userId),id=Number(req.params.id);if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({success:false,message:"Invalid match ID."});const c=await pool.connect();try{await c.query("BEGIN");const q=await c.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE",[id]);if(!q.rows.length){await c.query("ROLLBACK");return res.status(404).json({success:false,message:"Match not found."});}const m=q.rows[0],a=Number(m.creator_id),b=Number(m.opponent_id);if(u!==a&&u!==b){await c.query("ROLLBACK");return res.status(403).json({success:false,message:"Not a match participant."});}if(!b||!m.code_sent||!m.external_room_code||m.code_correction_requested_at||!["waiting","ready"].includes(m.status)||m.started_at){await c.query("ROLLBACK");return res.status(409).json({success:false,message:"Room code is not waiting for receipt."});}let s=Number(m.code_sender_id);if(s!==a&&s!==b){s=u===a?b:a;await c.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2",[s,id]);}if(s===u){await c.query("ROLLBACK");return res.status(403).json({success:false,message:"Only the receiver can confirm the code."});}if(m.code_received_at&&Number(m.code_received_by)!==u){await c.query("ROLLBACK");return res.status(409).json({success:false,message:"Receipt already confirmed."});}if(!m.code_received_at)await c.query("UPDATE efootball_matches SET code_received_at=NOW(),code_received_by=$1 WHERE id=$2",[u,id]);const match=await getMatchForUser(c,id,u);await c.query("COMMIT");return res.json({success:true,message:"Room code received successfully.",match});}catch(e){await c.query("ROLLBACK").catch(()=>{});console.error("Room-code receipt confirmation failed.");return res.status(500).json({success:false,message:"Unable to confirm receipt."});}finally{c.release();}});router.post("/matches/:id/result", authenticateToken, async (req, res) => {
+    router.post("/matches/:id/result", authenticateToken, async (req, res) => {
         const userId = Number(req.user.userId);
         const score = Number(req.body && (req.body.score !== undefined ? req.body.score : req.body.yourScore));
         const opponentScore = Number(req.body && (req.body.opponent_score !== undefined ? req.body.opponent_score : req.body.opponentScore));
@@ -1298,9 +1809,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 throw new Error("Could not select a valid screenshot uploader for this match.");
             }
 
-            // Only mismatched first-round reports reach round 2. If the selected
-            // uploader is submitting round 2, save the screenshot first so any
-            // resulting admin dispute always has its evidence attached.
+            // Round 2 is available only after first-round reports disagree. Require the selected player's evidence before their second report.
             if (roundNo === 2 && userId === Number(selected.selected_player_id) && !selected.screenshot_path) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({
@@ -1359,6 +1868,37 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     creatorScore,
                     opponentScore: creatorOpponentScore
                 }, userId);
+                if (current.tournament_id && current.tournament_fixture_id) {
+                    const fixture = await client.query(
+                        "SELECT * FROM efootball_tournament_fixtures WHERE id=$1 FOR UPDATE",
+                        [current.tournament_fixture_id]
+                    );
+                    if (fixture.rows[0]) {
+                        const homeScore = Number(fixture.rows[0].home_id) === Number(current.creator_id)
+                            ? creatorScore : creatorOpponentScore;
+                        const awayScore = Number(fixture.rows[0].away_id) === Number(current.creator_id)
+                            ? creatorScore : creatorOpponentScore;
+                        await client.query(
+                            `UPDATE efootball_tournament_fixtures
+                                SET status='completed',home_score=$1,away_score=$2,winner_id=$3,resolved_at=NOW()
+                              WHERE id=$4`,
+                            [homeScore, awayScore, settlement.winnerId, fixture.rows[0].id]
+                        );
+                    }
+                }
+                if (current.league_fixture_id) {
+                    const fixture = await client.query("SELECT * FROM efootball_league_fixtures WHERE id=$1 FOR UPDATE", [current.league_fixture_id]);
+                    if (fixture.rows[0]) {
+                        const homeScore = Number(fixture.rows[0].home_id) === Number(current.creator_id) ? creatorScore : creatorOpponentScore;
+                        const awayScore = Number(fixture.rows[0].away_id) === Number(current.creator_id) ? creatorScore : creatorOpponentScore;
+                        await client.query(
+                            `UPDATE efootball_league_fixtures
+                                SET status='completed',home_score=$1,away_score=$2,winner_id=$3,resolved_at=NOW()
+                              WHERE id=$4`,
+                            [homeScore, awayScore, settlement.winnerId, fixture.rows[0].id]
+                        );
+                    }
+                }
                 await client.query(
                     "UPDATE efootball_result_verifications SET status='verified',score_check='matched' WHERE match_id=$1",
                     [matchId]
@@ -1866,6 +2406,61 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         expireStaleSearches().catch(() => {});
     }, 15000);
     if (typeof searchExpiryTimer.unref === "function") searchExpiryTimer.unref();
+
+    async function processCompetitionTimers() {
+        const dueRounds = await pool.query(
+            `SELECT DISTINCT tournament_id FROM efootball_tournament_rounds
+              WHERE completed_at IS NULL AND deadline_at <= NOW()
+              ORDER BY tournament_id LIMIT 50`
+        );
+        for (const row of dueRounds.rows) {
+            const client = await pool.connect();
+            try {
+                await client.query("BEGIN");
+                await ensureTournamentRound(client, Number(row.tournament_id), false);
+                await client.query("COMMIT");
+            } catch (error) {
+                await client.query("ROLLBACK").catch(() => {});
+                console.error("Tournament round timer failed:", error.message);
+            } finally {
+                client.release();
+            }
+        }
+
+        const dueLeagueRounds = await pool.query(
+            `SELECT DISTINCT league_id FROM efootball_league_rounds
+              WHERE completed_at IS NULL AND deadline_at <= NOW()
+              ORDER BY league_id LIMIT 50`
+        );
+        for (const row of dueLeagueRounds.rows) {
+            const client = await pool.connect();
+            try {
+                await client.query("BEGIN");
+                await ensureLeagueRound(client, Number(row.league_id), false);
+                await client.query("COMMIT");
+            } catch (error) {
+                await client.query("ROLLBACK").catch(() => {});
+                console.error("League round timer failed:", error.message);
+            } finally {
+                client.release();
+            }
+        }
+
+        const dueWalkovers = await pool.query(
+            `SELECT id FROM efootball_matches
+              WHERE (mode='tournament' OR mode LIKE 'league-%') AND opponent_id IS NOT NULL
+                AND status IN ('waiting','ready','playing','awaiting_verification')
+                AND settled_at IS NULL AND attendance_deadline_at <= NOW()
+              ORDER BY attendance_deadline_at,id LIMIT 100`
+        );
+        for (const row of dueWalkovers.rows) {
+            await settleTournamentWalkover(Number(row.id));
+        }
+    }
+    const tournamentTimer = setInterval(() => {
+        processCompetitionTimers().catch(error => console.error("Competition timer worker failed:", error.message));
+    }, 5000);
+    if (typeof tournamentTimer.unref === "function") tournamentTimer.unref();
 
     return router;
 };

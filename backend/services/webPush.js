@@ -68,10 +68,6 @@ async function enqueueNotification(client, userId, notification) {
     );
     let eventId = inserted.rows[0] && Number(inserted.rows[0].id);
     if (!eventId) {
-        const existing = await client.query("SELECT id FROM push_notification_events WHERE user_id=$1 AND event_key=$2", [recipientId, eventKey]);
-        eventId = existing.rows[0] && Number(existing.rows[0].id);
-    }
-    if (!eventId) {
         const existing = await client.query(
             "SELECT id FROM push_notification_events WHERE user_id=$1 AND event_key=$2",
             [recipientId, eventKey]

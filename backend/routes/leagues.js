@@ -1,6 +1,7 @@
 "use strict";
 const express = require("express");
 const gameAccess = require("../middleware/gameAccess");
+const { ensureLeagueRound, recordLeagueFixtureResult } = require("../services/efootballtournament");
 
 const MAX_LEAGUE_PLAYERS = 20;
 
@@ -25,25 +26,116 @@ module.exports = function (pool, authenticateToken) {
     });
 
     router.get("/:id/fixtures", authenticateToken, async (req,res)=>{
+        const client = await pool.connect();
         try {
-            const l=await findLeague(pool,req.params.id);
-            if(!l) return res.status(404).json({success:false,message:"League not found."});
+            await client.query("BEGIN");
+            const l=await findLeague(client,req.params.id);
+            if(!l) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({success:false,message:"League not found."});
+            }
+            const membership = await client.query(
+                "SELECT * FROM efootball_league_members WHERE league_id=$1 AND user_id=$2",
+                [l.id, Number(req.user.userId)]
+            );
+            const round = membership.rows.length
+                ? await ensureLeagueRound(client, Number(l.id), true)
+                : (await client.query(
+                    "SELECT * FROM efootball_league_rounds WHERE league_id=$1 ORDER BY round_number DESC LIMIT 1",
+                    [l.id]
+                )).rows[0] || null;
+            const roundInfo = round ? {
+                number: Number(round.round_number),
+                starts_at: round.starts_at,
+                deadline_at: round.deadline_at,
+                completed_at: round.completed_at
+            } : null;
             res.set("Cache-Control", "no-store");
-            const r=await pool.query(`
-                SELECT m.id,m.creator_id AS home_id,m.opponent_id AS away_id,
+            const r=await client.query(`
+                SELECT f.id AS fixture_id,f.match_id,f.home_id,f.away_id,
+                       m.opponent_id AS matched_opponent_id,
+                       hu.username AS home,au.username AS away,
+                       COALESCE(m.round_name,'League · Round '||f.round_number) AS round_name,
+                       CASE WHEN m.status='disputed' THEN 'disputed'
+                            WHEN m.status='awaiting_verification' THEN 'awaiting_verification'
+                            WHEN m.status='cancelled' THEN 'cancelled'
+                            WHEN m.status='completed' AND m.result_status='walkover' THEN 'walkover'
+                            WHEN m.status='completed' THEN 'completed'
+                            WHEN m.status IN ('waiting','ready','playing') THEN m.status
+                            ELSE f.status END AS status,
+                       f.home_score,f.away_score,
+                       COALESCE(m.created_at,f.created_at) AS created_at,
+                       m.started_at,COALESCE(m.finished_at,f.resolved_at) AS finished_at,
+                       f.round_number
+                  FROM efootball_league_fixtures f
+                  JOIN users hu ON hu.id=f.home_id
+                  LEFT JOIN users au ON au.id=f.away_id
+                  LEFT JOIN efootball_matches m ON m.id=f.match_id
+                 WHERE f.league_id=$1
+                UNION ALL
+                SELECT NULL::bigint AS fixture_id,m.id AS match_id,m.creator_id AS home_id,m.opponent_id AS away_id,
+                       m.opponent_id AS matched_opponent_id,
                        hu.username AS home,au.username AS away,m.round_name,m.status,
                        CASE WHEN m.status='completed' THEN m.creator_score END AS home_score,
                        CASE WHEN m.status='completed' THEN m.opponent_score END AS away_score,
-                       m.created_at,m.started_at,m.finished_at
-                FROM efootball_matches m
-                JOIN users hu ON hu.id=m.creator_id
-                LEFT JOIN users au ON au.id=m.opponent_id
-                WHERE m.league=$1
-                ORDER BY COALESCE(m.started_at,m.created_at) DESC,m.id DESC
-                LIMIT 100`,[l.name]);
+                       m.created_at,m.started_at,m.finished_at,0 AS round_number
+                  FROM efootball_matches m
+                  JOIN users hu ON hu.id=m.creator_id
+                  LEFT JOIN users au ON au.id=m.opponent_id
+                 WHERE m.league=$2 AND m.league_fixture_id IS NULL
+                 ORDER BY round_number DESC,started_at DESC NULLS LAST,created_at DESC,match_id DESC
+                 LIMIT 200`,[l.id,l.name]);
             const me=Number(req.user.userId);
-            res.json({success:true,league:l,fixtures:r.rows.map(x=>({...x,id:Number(x.id),home_id:Number(x.home_id),away_id:x.away_id===null?null:Number(x.away_id),home_score:x.home_score===null?null:Number(x.home_score),away_score:x.away_score===null?null:Number(x.away_score),mine:me===Number(x.home_id)||me===Number(x.away_id)}))});
-        } catch(e){res.status(500).json({success:false,message:"Failed to load live fixtures."});}
+            const actions = membership.rows.length
+                ? await client.query(
+                    `SELECT
+                       (
+                         $3::int=0 AND $4::timestamptz IS NULL AND
+                         NOT EXISTS (
+                           SELECT 1 FROM efootball_league_fixtures f
+                            WHERE f.league_id=$1 AND f.round_number=1 AND f.away_id IS NOT NULL
+                              AND (f.home_id=$2 OR f.away_id=$2)
+                         ) AND NOT EXISTS (
+                           SELECT 1 FROM efootball_matches m
+                            WHERE (m.league_fixture_id IN (SELECT id FROM efootball_league_fixtures WHERE league_id=$1)
+                                   OR m.league=$5)
+                              AND (m.creator_id=$2 OR m.opponent_id=$2)
+                              AND (m.started_at IS NOT NULL OR m.settled_at IS NOT NULL
+                                   OR m.status IN ('playing','awaiting_verification','disputed','completed'))
+                         )
+                       ) AS can_cancel,
+                       (
+                         $3::int=0 AND $4::timestamptz IS NULL AND
+                         EXISTS (
+                           SELECT 1 FROM efootball_league_fixtures f
+                            LEFT JOIN efootball_matches m ON m.id=f.match_id
+                            WHERE f.league_id=$1 AND f.round_number=1 AND f.away_id IS NOT NULL
+                              AND f.status IN ('scheduled','playing')
+                              AND (f.home_id=$2 OR f.away_id=$2)
+                              AND (m.id IS NULL OR (m.started_at IS NULL AND m.status IN ('waiting','ready')))
+                         ) AND NOT EXISTS (
+                           SELECT 1 FROM efootball_matches m
+                            WHERE (m.league_fixture_id IN (SELECT id FROM efootball_league_fixtures WHERE league_id=$1)
+                                   OR m.league=$5)
+                              AND (m.creator_id=$2 OR m.opponent_id=$2)
+                              AND (m.started_at IS NOT NULL OR m.settled_at IS NOT NULL
+                                   OR m.status IN ('playing','awaiting_verification','disputed','completed'))
+                         )
+                       ) AS can_forfeit`,
+                    [l.id, me, Number(membership.rows[0].played || 0), membership.rows[0].forfeited_at, l.name]
+                  )
+                : { rows: [{ can_cancel: false, can_forfeit: false }] };
+            await client.query("COMMIT");
+            res.json({success:true,league:l,round:roundInfo,isMember:membership.rows.length > 0,
+                canCancel:Boolean(actions.rows[0].can_cancel),canForfeit:Boolean(actions.rows[0].can_forfeit),
+                fixtures:r.rows.map(x=>({...x,id:Number(x.match_id == null ? x.fixture_id : x.match_id),fixture_id:x.fixture_id == null ? null : Number(x.fixture_id),match_id:x.match_id == null ? null : Number(x.match_id),matched_opponent_id:x.matched_opponent_id===null?null:Number(x.matched_opponent_id),home_id:Number(x.home_id),away_id:x.away_id===null?null:Number(x.away_id),home_score:x.home_score===null?null:Number(x.home_score),away_score:x.away_score===null?null:Number(x.away_score),round_number:Number(x.round_number||0),mine:me===Number(x.home_id)||me===Number(x.away_id)}))});
+        } catch(e){
+            await client.query("ROLLBACK").catch(()=>{});
+            console.error("League fixtures load failed:", e);
+            res.status(500).json({success:false,message:"Failed to load live fixtures."});
+        } finally {
+            client.release();
+        }
     });
 
     router.get("/:id", async (req, res) => {
@@ -84,12 +176,20 @@ module.exports = function (pool, authenticateToken) {
                 "SELECT COUNT(*)::int AS n FROM efootball_league_members WHERE league_id = $1", [league.id]);
             if (count.rows[0].n >= MAX_LEAGUE_PLAYERS) throw new Error(league.name + " League is full.");
 
-            const fee = Number(league.entry_stake || 0);
+            const fee = Number(league.entry_stake);
+            if (!Number.isFinite(fee) || fee < 0) {
+                throw Object.assign(new Error("This league has an invalid entry fee and cannot accept entries."), { status: 500 });
+            }
             if (fee > 0) {
                 const w = await client.query(
                     `UPDATE wallets SET balance = balance - $1, locked_balance = locked_balance + $1, updated_at = NOW()
                       WHERE user_id = $2 AND balance >= $1 RETURNING balance`, [fee, uid]);
-                if (!w.rows.length) throw new Error("Insufficient wallet balance. You need KSh " + fee + " to join the " + league.name + " League.");
+                if (!w.rows.length) {
+                    throw Object.assign(
+                        new Error("Insufficient available wallet balance. You need KSh " + fee.toFixed(2) + " to join the " + league.name + " League."),
+                        { status: 402 }
+                    );
+                }
                 await client.query(
                     `INSERT INTO transactions(user_id, transaction_type, amount, currency, status, reference, description)
                      VALUES($1, 'league_entry', $2, 'KES', 'completed', $3, $4)`,
@@ -103,7 +203,204 @@ module.exports = function (pool, authenticateToken) {
             res.json({ success: true, message: "Joined the " + league.name + " League.", entryFee: fee });
         } catch (e) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            res.status(400).json({ success: false, message: e.message });
+            res.status(e.status || 400).json({ success: false, message: e.message });
+        } finally {
+            client.release();
+        }
+    });
+
+    router.post("/:id/cancel", authenticateToken, async (req, res) => {
+        const uid = Number(req.user.userId);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const league = await findLeague(client, req.params.id);
+            if (!league) throw Object.assign(new Error("League not found."), { status: 404 });
+            await client.query("SELECT id FROM efootball_leagues WHERE id=$1 FOR UPDATE", [league.id]);
+            const memberResult = await client.query(
+                "SELECT * FROM efootball_league_members WHERE league_id=$1 AND user_id=$2 FOR UPDATE",
+                [league.id, uid]
+            );
+            if (!memberResult.rows.length) throw Object.assign(new Error("You have not joined this league."), { status: 404 });
+            const member = memberResult.rows[0];
+            const released = await client.query(
+                `SELECT 1 FROM efootball_league_fixtures
+                  WHERE league_id=$1 AND round_number=1 AND away_id IS NOT NULL
+                    AND (home_id=$2 OR away_id=$2) LIMIT 1`,
+                [league.id, uid]
+            );
+            const played = await client.query(
+                `SELECT 1 FROM efootball_matches m
+                  WHERE (m.league_fixture_id IN (SELECT id FROM efootball_league_fixtures WHERE league_id=$1)
+                         OR m.league=$3)
+                    AND (m.creator_id=$2 OR m.opponent_id=$2)
+                    AND (m.started_at IS NOT NULL OR m.settled_at IS NOT NULL
+                         OR m.status IN ('playing','awaiting_verification','disputed','completed'))
+                  LIMIT 1 FOR UPDATE`,
+                [league.id, uid, league.name]
+            );
+            if (released.rows.length || played.rows.length || Number(member.played || 0) > 0 || member.forfeited_at) {
+                throw Object.assign(new Error("League entry can only be cancelled before your first opponent fixture is released."), { status: 409 });
+            }
+
+            const fee = Math.max(0, Number(member.fee_paid || 0));
+            if (fee > 0) {
+                const refund = await client.query(
+                    `UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$1,updated_at=NOW()
+                      WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
+                    [fee, uid]
+                );
+                if (!refund.rows.length) throw new Error("The locked league stake could not be refunded safely.");
+                await client.query(
+                    `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                     VALUES($1,'league_refund',$2,'KES','completed',$3,$4)`,
+                    [uid, fee, `LEAGUE-CANCEL-${league.id}-${uid}-${crypto.randomUUID()}`, league.name + " League entry refunded"]
+                );
+            }
+            await client.query(
+                `DELETE FROM efootball_league_fixtures
+                  WHERE league_id=$1 AND round_number=1 AND away_id IS NULL
+                    AND (home_id=$2 OR away_id=$2)`,
+                [league.id, uid]
+            );
+            await client.query("DELETE FROM efootball_league_members WHERE league_id=$1 AND user_id=$2", [league.id, uid]);
+            await client.query("COMMIT");
+            return res.json({
+                success: true,
+                refunded: fee,
+                message: fee > 0
+                    ? "League entry cancelled. KSh " + fee.toFixed(2) + " was returned to your available wallet balance."
+                    : "League entry cancelled."
+            });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            console.error("League cancellation error:", error.message);
+            return res.status(500).json({ success: false, message: "Could not cancel your league entry safely." });
+        } finally {
+            client.release();
+        }
+    });
+
+    router.post("/:id/forfeit", authenticateToken, async (req, res) => {
+        const uid = Number(req.user.userId);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const league = await findLeague(client, req.params.id);
+            if (!league) throw Object.assign(new Error("League not found."), { status: 404 });
+            await client.query("SELECT id FROM efootball_leagues WHERE id=$1 FOR UPDATE", [league.id]);
+            const memberResult = await client.query(
+                "SELECT * FROM efootball_league_members WHERE league_id=$1 AND user_id=$2 FOR UPDATE",
+                [league.id, uid]
+            );
+            if (!memberResult.rows.length) throw Object.assign(new Error("You have not joined this league."), { status: 404 });
+            const member = memberResult.rows[0];
+            if (member.forfeited_at) throw Object.assign(new Error("You have already forfeited this league."), { status: 409 });
+            if (Number(member.played || 0) > 0) {
+                throw Object.assign(new Error("You can only forfeit before your first league match is played."), { status: 409 });
+            }
+
+            const fixtureResult = await client.query(
+                `SELECT * FROM efootball_league_fixtures
+                  WHERE league_id=$1 AND round_number=1 AND away_id IS NOT NULL
+                    AND (home_id=$2 OR away_id=$2) AND status IN ('scheduled','playing')
+                  ORDER BY id LIMIT 1 FOR UPDATE`,
+                [league.id, uid]
+            );
+            if (!fixtureResult.rows.length) {
+                throw Object.assign(new Error("Forfeiting becomes available after your first opponent fixture is released."), { status: 409 });
+            }
+            const fixture = fixtureResult.rows[0];
+            const matchResult = fixture.match_id
+                ? await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [fixture.match_id])
+                : { rows: [] };
+            const match = matchResult.rows[0] || null;
+            if (match && (match.started_at || match.settled_at ||
+                ["playing", "awaiting_verification", "disputed", "completed"].includes(String(match.status)))) {
+                throw Object.assign(new Error("Your first league match has already started. Forfeiting is no longer available."), { status: 409 });
+            }
+
+            const fee = Math.max(0, Number(member.fee_paid || 0));
+            if (!Number.isFinite(fee)) throw Object.assign(new Error("The league stake is invalid."), { status: 500 });
+            const admins = fee > 0
+                ? await client.query("SELECT id FROM users WHERE role='admin' ORDER BY id FOR UPDATE")
+                : { rows: [] };
+            if (fee > 0 && admins.rows.length < 2) {
+                throw Object.assign(new Error("Both administrator accounts must be available before this stake can be forfeited."), { status: 409 });
+            }
+
+            if (match) {
+                await client.query(
+                    `UPDATE efootball_matches
+                        SET status='cancelled',result_status='league_entry_forfeit',
+                            finished_at=NOW(),settled_at=NOW(),search_last_seen_at=NULL,
+                            creator_ready=FALSE,opponent_ready=FALSE,external_room_code=NULL,
+                            code_sent=FALSE,code_sender_id=NULL
+                      WHERE id=$1 AND started_at IS NULL AND settled_at IS NULL
+                        AND status IN ('waiting','ready')`,
+                    [match.id]
+                );
+                await client.query("UPDATE efootball_league_fixtures SET match_id=NULL WHERE id=$1", [fixture.id]);
+            }
+
+            if (fee > 0) {
+                const transfer = await client.query(
+                    `UPDATE wallets SET locked_balance=locked_balance-$1,updated_at=NOW()
+                      WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
+                    [fee, uid]
+                );
+                if (!transfer.rows.length) throw new Error("The locked league stake could not be transferred safely.");
+                const totalCents = Math.round(fee * 100);
+                const baseCents = Math.floor(totalCents / admins.rows.length);
+                let remainder = totalCents - baseCents * admins.rows.length;
+                const reference = `LEAGUE-FORFEIT-${league.id}-${uid}-${crypto.randomUUID()}`;
+                for (const admin of admins.rows) {
+                    const cents = baseCents + (remainder > 0 ? 1 : 0);
+                    if (remainder > 0) remainder -= 1;
+                    const share = (cents / 100).toFixed(2);
+                    await client.query("INSERT INTO admin_wallets(admin_id) VALUES($1) ON CONFLICT(admin_id) DO NOTHING", [admin.id]);
+                    await client.query("UPDATE admin_wallets SET balance=balance+$1,updated_at=NOW() WHERE admin_id=$2", [share, admin.id]);
+                    await client.query(
+                        `INSERT INTO admin_wallet_transactions(admin_id,transaction_type,amount,currency,status,reference,description)
+                         VALUES($1,'league_forfeit_stake',$2,'KES','completed',$3,$4)`,
+                        [admin.id, share, `${reference}-${admin.id}`, league.name + " League forfeited stake share"]
+                    );
+                }
+                await client.query(
+                    `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                     VALUES($1,'league_forfeit',$2,'KES','completed',$3,$4)`,
+                    [uid, fee, reference, league.name + " League stake forfeited to both administrator wallets"]
+                );
+            }
+
+            const userIsHome = Number(fixture.home_id) === uid;
+            const winnerId = userIsHome ? Number(fixture.away_id) : Number(fixture.home_id);
+            const recorded = await recordLeagueFixtureResult(client, fixture, {
+                status: "walkover",
+                homeScore: userIsHome ? 0 : 3,
+                awayScore: userIsHome ? 3 : 0,
+                winnerId
+            });
+            if (!recorded) throw Object.assign(new Error("This league fixture has already been settled."), { status: 409 });
+            await client.query(
+                "UPDATE efootball_league_members SET forfeited_at=NOW() WHERE league_id=$1 AND user_id=$2",
+                [league.id, uid]
+            );
+            await client.query("COMMIT");
+            return res.json({
+                success: true,
+                forfeited: true,
+                stakeTransferred: fee,
+                message: fee > 0
+                    ? "League forfeited. Your KSh " + fee.toFixed(2) + " stake was split between both admin wallets, and your opponent received a walkover."
+                    : "League forfeited. Your opponent received a walkover."
+            });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            console.error("League forfeiture error:", error.message);
+            return res.status(500).json({ success: false, message: "Could not forfeit the league entry safely." });
         } finally {
             client.release();
         }

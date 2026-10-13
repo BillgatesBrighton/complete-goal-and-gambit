@@ -820,14 +820,44 @@ app.use(
 app.get("/api/announcements/current", authenticateToken, async function(req, res) {
     try {
         const r = await pool.query(
-            `SELECT id,message,created_at FROM admin_announcements
-             WHERE active=TRUE AND created_at >= NOW() - INTERVAL '30 days'
-             ORDER BY created_at DESC,id DESC LIMIT 5`
+            `SELECT a.id,a.message,a.created_at FROM admin_announcements a
+             WHERE a.active=TRUE AND a.created_at >= NOW() - INTERVAL '30 days'
+               AND NOT EXISTS (
+                   SELECT 1 FROM admin_announcement_dismissals d
+                   WHERE d.announcement_id=a.id AND d.user_id=$1
+               )
+             ORDER BY a.created_at DESC,a.id DESC LIMIT 5`,
+            [req.user.userId]
         );
         res.json({success:true,announcements:r.rows});
     } catch (error) {
         console.error("Dashboard announcement load error:", error.message);
         res.status(500).json({success:false,message:"Could not load announcements."});
+    }
+});
+
+app.post("/api/announcements/:id/dismiss", authenticateToken, async function(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({success:false,message:"Invalid announcement."});
+    }
+    try {
+        const r = await pool.query(
+            `INSERT INTO admin_announcement_dismissals(announcement_id,user_id)
+             SELECT a.id,$2 FROM admin_announcements a
+             WHERE a.id=$1 AND a.active=TRUE
+             ON CONFLICT(announcement_id,user_id)
+             DO UPDATE SET dismissed_at=NOW()
+             RETURNING announcement_id`,
+            [id, req.user.userId]
+        );
+        if (!r.rows.length) {
+            return res.status(404).json({success:false,message:"Announcement not found."});
+        }
+        res.json({success:true});
+    } catch (error) {
+        console.error("Dashboard announcement dismissal error:", error.message);
+        res.status(500).json({success:false,message:"Could not dismiss announcement."});
     }
 });
 
