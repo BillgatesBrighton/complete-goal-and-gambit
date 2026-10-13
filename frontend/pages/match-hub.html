@@ -354,6 +354,8 @@ button{
 .system-notification-actions{display:flex;gap:8px;align-items:center;margin-top:10px}
 .system-notification-actions a{color:#f0cf55;font-weight:800;text-decoration:none}
 .system-notification-actions button{width:auto;margin:0;padding:8px 10px}
+.system-notification-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.system-notification-toolbar button{width:auto;flex:1 1 180px;margin-top:12px}
 
 .ready-status{
     text-align:center;
@@ -704,6 +706,33 @@ button{
         </p>
     </div>
 
+    <!-- =====================================================
+         FIND MATCH
+    ====================================================== -->
+
+    <div class="card" id="pairingCard">
+
+        <div class="section-title">
+            Find Match
+        </div>
+
+        <p class="description">
+            Once two players are matched, GOAL$GAMBIT randomly selects
+            one player to create and send the eFootball room code.
+            After both scores are submitted, the server independently
+            selects one player to upload the match screenshot.
+        </p>
+
+        <div class="role-banner" id="pairingMessage">
+            Searching for another player...
+        </div>
+
+        <button class="danger-btn hidden" id="cancelSearchButton" type="button" onclick="cancelCurrentMatch()">
+            Cancel Search · Refund Stake
+        </button>
+
+    </div>
+
     <div class="card" id="systemNotificationsCard">
         <div class="section-title">
             Match Notifications
@@ -712,9 +741,11 @@ button{
         <p class="description">Your recent match alerts stay here. Open a linked match or mark an alert as read.</p>
         <p class="description" id="systemNotificationStatus" role="status" aria-live="polite">Loading notifications…</p>
         <div class="system-notification-list" id="systemNotificationList"></div>
-        <button class="secondary-btn" id="refreshSystemNotifications" type="button">REFRESH NOTIFICATIONS</button>
+        <div class="system-notification-toolbar">
+            <button class="secondary-btn" id="refreshSystemNotifications" type="button">REFRESH NOTIFICATIONS</button>
+            <button class="secondary-btn" id="clearSystemNotifications" type="button">CLEAR NOTIFICATIONS</button>
+        </div>
     </div>
-
 
     <!-- =====================================================
          MATCH STATUS
@@ -801,34 +832,6 @@ button{
             </div>
 
         </div>
-
-    </div>
-
-
-    <!-- =====================================================
-         AUTOMATIC PAIRING
-    ====================================================== -->
-
-    <div class="card" id="pairingCard">
-
-        <div class="section-title">
-            Automatic Pairing
-        </div>
-
-        <p class="description">
-            Once two players are matched, GOAL$GAMBIT randomly selects
-            one player to create and send the eFootball room code.
-            After both scores are submitted, the server independently
-            selects one player to upload the match screenshot.
-        </p>
-
-        <div class="role-banner" id="pairingMessage">
-            Searching for another player...
-        </div>
-
-        <button class="danger-btn hidden" id="cancelSearchButton" type="button" onclick="cancelCurrentMatch()">
-            Cancel Search · Refund Stake
-        </button>
 
     </div>
 
@@ -2978,6 +2981,23 @@ async function markSystemNotificationRead(id){
     return true;
 }
 
+async function clearSystemNotifications(){
+    const button = document.getElementById("clearSystemNotifications");
+    const status = document.getElementById("systemNotificationStatus");
+    if(!window.confirm("Clear all Match Hub notifications from your inbox?")) return;
+    button.disabled = true;
+    status.textContent = "Clearing notifications…";
+    const result = await GG.api("/api/efootball/notifications", {
+        method:"DELETE", noRedirect:true
+    });
+    button.disabled = false;
+    if(!result.ok){
+        status.textContent = result.data.message || "Could not clear notifications. Please try again.";
+        return;
+    }
+    await refreshSystemNotifications();
+}
+
 document.getElementById("systemNotificationList").addEventListener("click", async function(event){
     const readButton = event.target.closest("[data-notification-read]");
     if(readButton){
@@ -2994,6 +3014,7 @@ document.getElementById("systemNotificationList").addEventListener("click", asyn
 });
 
 document.getElementById("refreshSystemNotifications").addEventListener("click", refreshSystemNotifications);
+document.getElementById("clearSystemNotifications").addEventListener("click", clearSystemNotifications);
 window.addEventListener("gg:notification-update", function(){ window.setTimeout(refreshSystemNotifications, 350); });
 window.addEventListener("focus", refreshSystemNotifications);
 GG.startPresence();

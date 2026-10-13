@@ -2293,6 +2293,43 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
 
     /* =====================================================
+       CLEAR CURRENT USER NOTIFICATIONS
+       ===================================================== */
+
+    router.delete(
+        "/notifications",
+        authenticateToken,
+        async (req, res) => {
+
+            try {
+
+                const result = await pool.query(
+                    "DELETE FROM system_notifications WHERE user_id = $1",
+                    [req.user.userId]
+                );
+
+                return res.json({
+                    success: true,
+                    clearedCount: result.rowCount || 0
+                });
+
+            } catch (error) {
+
+                console.error(
+                    "DELETE /notifications error:",
+                    error
+                );
+
+                return res.status(500).json({
+                    success: false,
+                    message: "Unable to clear notifications."
+                });
+            }
+        }
+    );
+
+
+    /* =====================================================
        MARK NOTIFICATION READ
        ===================================================== */
 
