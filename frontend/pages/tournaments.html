@@ -126,7 +126,7 @@ function tournamentCard(tournament) {
   const progress = Math.min(100, Math.round(players / capacity * 100));
   const badge = joined ? "Entered" : !isOpen ? "Closed" : remaining === 0 ? "Full" : "Open";
   const badgeClass = joined || canJoin ? "state" : "state closed";
-  const buttonText = joined ? "Find tournament match" : canJoin ? "Join tournament" : remaining === 0 && isOpen ? "Tournament full" : "Registration closed";
+  const buttonText = canJoin ? "Join tournament" : remaining === 0 && isOpen ? "Tournament full" : "Registration closed";
   const feeText = fee > 0
     ? "The entry fee is locked from your available wallet balance when you join."
     : "Your entry is saved to your account when you join.";
@@ -139,7 +139,7 @@ function tournamentCard(tournament) {
     '<div class="fact"><span>Places left</span><strong>' + remaining + ' of ' + capacity + '</strong></div></div>' +
     '<div class="progress" aria-label="' + players + ' of ' + capacity + ' places filled"><span data-tournament-progress style="width:' + progress + '%"></span></div>' +
     '<div class="capacity"><span data-tournament-count>' + players + ' entered</span><span>' + capacity + ' places</span></div>' +
-    '<p class="card-help">' + (joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +    '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">View groups &amp; fixtures</a>' +    '<button class="join" type="button" ' + (joined ? 'data-play-id="' + id + '"' : 'data-join-id="' + id + '"') + (joined ? (isOpen ? "" : " disabled") : (canJoin ? "" : " disabled")) + '>' + escape(joined && !isOpen ? "Tournament is closed" : buttonText) + '</button>' +
+    '<p class="card-help">' + (joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +    '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">View groups &amp; fixtures</a>' +    (joined ? '' : '<button class="join" type="button" data-join-id="' + id + '"' + (canJoin ? '' : ' disabled') + '>' + escape(buttonText) + '</button>') +
     '</article>';
 }
 
