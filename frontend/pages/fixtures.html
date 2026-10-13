@@ -768,6 +768,38 @@ body{
     line-height:1.7;
 }
 
+.match-guidance{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;
+    margin:18px 0 24px;
+}
+
+.match-guidance article{
+    padding:15px 17px;
+    border:1px solid #6d5718;
+    border-left:4px solid var(--gold);
+    border-radius:9px;
+    background:#171307;
+}
+
+.match-guidance h2{
+    color:var(--gold-light);
+    font-size:13px;
+    line-height:1.4;
+    letter-spacing:.5px;
+    margin:0 0 7px;
+}
+
+.match-guidance p{
+    color:#e2dfd6;
+    font-size:13px;
+    line-height:1.55;
+    margin:0;
+}
+
+.match-guidance a{color:var(--gold-light);font-weight:800}
+
 /* MOBILE */
 
 @media(max-width:1050px){
@@ -781,6 +813,10 @@ body{
     }
 
     .main-grid{
+        grid-template-columns:1fr;
+    }
+
+    .match-guidance{
         grid-template-columns:1fr;
     }
 
@@ -1028,6 +1064,17 @@ body{
 
 
 <div id="entryActions" class="entry-actions" aria-live="polite"></div>
+
+<section class="match-guidance" aria-label="Before opening Match Hub">
+    <article>
+        <h2>SCREENSHOT REQUIRED IN MATCH SUBMISSION</h2>
+        <p>Keep a clear final-score screenshot ready. If selected for eFootball result verification, attach it with your score; it is required before your second score submission if the first reports differ.</p>
+    </article>
+    <article>
+        <h2>NOTIFICATION APPEARS FOR ROOM CODE</h2>
+        <p>When your opponent sends the room code, an alert appears on your device and in Match Hub. Open it to view and confirm the code. Enable <a href="notification-settings.html">match notifications</a> for device alerts.</p>
+    </article>
+</section>
 
 
 <!-- OVERVIEW -->

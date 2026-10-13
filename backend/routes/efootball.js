@@ -115,7 +115,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             return;
         }
 
-        await client.query(
+        const inserted = await client.query(
             `
             INSERT INTO system_notifications
             (
@@ -126,6 +126,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 match_id
             )
             VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, created_at
             `,
             [
                 userId,
@@ -135,6 +136,16 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 matchId
             ]
         );
+        if (io && inserted.rows[0]) {
+            io.to("user_" + Number(userId)).emit("efootball:notification", {
+                id: Number(inserted.rows[0].id),
+                type: String(type || ""),
+                title: String(title || ""),
+                message: String(message || ""),
+                match_id: matchId == null ? null : Number(matchId),
+                created_at: inserted.rows[0].created_at
+            });
+        }
     }
 
     async function ensureResultVerification(client, match) {
@@ -647,6 +658,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                             m.creator_id = $1
                             OR m.opponent_id = $1
                         )
+                        AND COALESCE(m.finished_at, m.created_at) > COALESCE(
+                            (SELECT cleared_at FROM user_history_clears
+                             WHERE user_id = $1 AND history_type = 'matches'),
+                            '-infinity'::timestamptz
+                        )
                         AND m.status IN
                         (
                             'completed',
@@ -779,7 +795,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
             if (isTournament) {
                 const member = await client.query(
-                    "SELECT tm.group_code FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.user_id=$1 AND tm.tournament_id=$2 AND t.status='open'",
+                    "SELECT tm.group_code FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.user_id=$1 AND tm.tournament_id=$2 AND t.status IN ('open','in_progress')",
                     [userId, tournamentId]
                 );
                 if (!member.rows.length) throw Object.assign(new Error("Join an open tournament before starting a tournament match."), { status: 403 });
@@ -1121,20 +1137,20 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             try {
 
                 const matchId = Number(req.params.id);
-                const timerContext = await pool.query(
-                    `SELECT tournament_id,league_fixture_id FROM efootball_matches
-                      WHERE id=$1 AND (creator_id=$2 OR opponent_id=$2)`,
-                    [matchId, req.user.userId]
-                );
-                if (timerContext.rows[0] && (timerContext.rows[0].tournament_id || timerContext.rows[0].league_fixture_id)) {
+                let match = await getMatchForUser(pool, matchId, req.user.userId);
+                if (!match) {
+                    return res.status(404).json({ success: false, message: "Match not found." });
+                }
+
+                if (match.tournament_id || match.league_fixture_id) {
                     await settleTournamentWalkover(matchId);
                     const timerClient = await pool.connect();
                     try {
                         await timerClient.query("BEGIN");
-                        if (timerContext.rows[0].tournament_id) {
-                            await ensureTournamentRound(timerClient, Number(timerContext.rows[0].tournament_id), false);
+                        if (match.tournament_id) {
+                            await ensureTournamentRound(timerClient, Number(match.tournament_id), false);
                         } else {
-                            const league = await timerClient.query("SELECT league_id FROM efootball_league_fixtures WHERE id=$1", [timerContext.rows[0].league_fixture_id]);
+                            const league = await timerClient.query("SELECT league_id FROM efootball_league_fixtures WHERE id=$1", [match.league_fixture_id]);
                             if (league.rows[0]) await ensureLeagueRound(timerClient, Number(league.rows[0].league_id), false);
                         }
                         await timerClient.query("COMMIT");
@@ -1144,21 +1160,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     } finally {
                         timerClient.release();
                     }
-                }
-
-                const match =
-                    await getMatchForUser(
-                        pool,
-                        req.params.id,
-                        req.user.userId
-                    );
-
-                if (!match) {
-
-                    return res.status(404).json({
-                        success: false,
-                        message: "Match not found."
-                    });
+                    match = await getMatchForUser(pool, matchId, req.user.userId);
                 }
 
                 return res.json({
@@ -2052,8 +2054,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             try {
 
-                const result =
-                    await pool.query(
+                const result = await pool.query(
                         `
                         SELECT
                             v.*,
@@ -2240,8 +2241,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             try {
 
-                const result =
-                    await pool.query(
+                const results = await Promise.all([
+                    pool.query(
                         `
                         SELECT
                             id,
@@ -2261,12 +2262,17 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         LIMIT 100
                         `,
                         [req.user.userId]
-                    );
+                    ),
+                    pool.query(
+                        "SELECT COUNT(*)::int AS unread_count FROM system_notifications WHERE user_id=$1 AND read_at IS NULL",
+                        [req.user.userId]
+                    )
+                ]);
 
                 return res.json({
                     success: true,
-                    notifications:
-                        result.rows
+                    notifications: results[0].rows,
+                    unreadCount: Number(results[1].rows[0] && results[1].rows[0].unread_count || 0)
                 });
 
             } catch (error) {

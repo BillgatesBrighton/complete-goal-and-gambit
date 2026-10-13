@@ -2,345 +2,185 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080808">
+<link rel="manifest" href="../manifest.webmanifest">
 <title>GOAL$GAMBIT · Match Room</title>
 <style>
-:root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa}
-*{box-sizing:border-box}
-body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}
-header{height:64px;padding:0 max(18px,calc((100% - 920px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}
-.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}
-a{color:var(--gold)}
-main{width:min(920px,94%);margin:32px auto 80px}
-h1{font-size:clamp(28px,5vw,38px);margin:0 0 4px;color:var(--gold)}
-.intro,.muted{color:var(--muted)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}
-.cell{background:#181818;border:1px solid #2e2e2e;border-radius:10px;padding:13px}
-.cell small{display:block;color:#888;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
-.cell strong{display:block;overflow-wrap:anywhere;margin-top:4px}
-.notice{padding:14px;border-radius:10px;background:#171307;border:1px solid #6b571c;color:#f0d67b;margin:14px 0}
-.code{font-size:clamp(24px,7vw,40px);font-weight:900;letter-spacing:.12em;color:var(--gold);overflow-wrap:anywhere}
-input{width:100%;padding:13px 14px;border:1px solid #444;border-radius:9px;background:#080808;color:#fff;font:inherit}
-button,.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:9px;padding:12px 16px;margin-top:12px;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer}
-button:disabled{opacity:.55;cursor:not-allowed}
-.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}
-.danger{background:#2a1111;border:1px solid #763838;color:#ffaaaa}
-.hidden{display:none!important}
-.error{color:#ff9999}
-.good{color:#8fe0aa}
-.row{display:flex;flex-wrap:wrap;gap:10px}
-@media(max-width:600px){header{padding:0 16px}.grid{grid-template-columns:1fr}.card{padding:18px}}
+:root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa;--green:#8fe0aa;--red:#ff9b9b}*{box-sizing:border-box}body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}header{height:64px;padding:0 max(18px,calc((100% - 900px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}a{color:var(--gold)}main{width:min(900px,94%);margin:28px auto 72px}h1{font-size:clamp(27px,5vw,38px);color:var(--gold);margin:0}.lead,.muted{color:var(--muted)}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:21px;margin:16px 0}.notice{padding:14px;border-radius:10px;background:#171307;border:1px solid #6b571c;color:#f0d67b}.error{color:var(--red);min-height:1.5em}.success{color:var(--green)}.players{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0}.player{padding:14px;border-radius:10px;background:#090909;border:1px solid var(--line)}.player small{display:block;color:var(--muted)}.player strong{font-size:18px}.hidden{display:none!important}button,.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:9px;padding:13px 17px;margin:7px 8px 0 0;background:var(--gold);color:#111;font:inherit;font-weight:850;text-decoration:none;cursor:pointer;min-height:46px}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}input{display:block;width:100%;padding:14px;border:1px solid #494949;border-radius:9px;background:#080808;color:#fff;font:inherit;margin:8px 0 4px}label{display:block;color:#ddd;font-weight:700;margin-top:14px}.code{font-size:clamp(25px,8vw,42px);font-weight:900;letter-spacing:.1em;text-align:center;color:var(--gold);word-break:break-word;padding:14px}.status-line{margin:8px 0;color:var(--muted)}@media(max-width:580px){header{padding:0 14px}.players{grid-template-columns:1fr}.card{padding:17px}button,.button{width:100%;margin-right:0}}
 </style>
 <script src="../js/api.js"></script>
 </head>
 <body>
 <header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">Konami dashboard</a></header>
 <main>
-  <h1>eFootball Match Room</h1>
-  <p class="intro">Room-code exchange and ready check. Match results are entered on a separate page.</p>
+  <h1>Match Room</h1>
+  <p class="lead">Send the eFootball room code and you’ll be marked ready automatically. The receiver confirms the code and marks ready.</p>
   <section class="card">
     <div id="status" class="notice" role="status" aria-live="polite">Loading your match…</div>
-    <div id="phoneAlertPanel" class="notice">
-      <strong>Phone room-code alerts</strong>
-      <p id="phoneAlertHelp">Enable alerts before opening eFootball, then leave this Match Room open in the background. When you are selected, your phone can notify you to tap back and send the code.</p>
-      <button id="enablePhoneAlerts" class="secondary" type="button">Enable phone alerts</button>
+    <div class="players"><div class="player"><small>You</small><strong id="yourName">—</strong></div><div class="player"><small>Opponent</small><strong id="opponentName">—</strong></div></div>
+    <p id="matchMeta" class="muted"></p>
+  </section>
+
+  <section id="searchCard" class="card hidden">
+    <h2>Waiting for an opponent</h2>
+    <p class="muted">Keep Match Hub open while searching. Your match will appear here as soon as a player in the same queue joins.</p>
+    <a class="button secondary" href="match-hub.html">Return to Match Hub</a>
+  </section>
+
+  <section id="senderCard" class="card hidden">
+    <h2>You’re sending the room code</h2>
+    <p class="muted">Open eFootball, create the room, then paste its code here. The code is sent only to your matched opponent.</p>
+    <button id="openCodePanel" type="button">Send Room Code</button>
+    <div id="codePanel" class="hidden">
+      <label for="roomCode">eFootball room code</label>
+      <input id="roomCode" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the room code">
+      <button id="sendCodeButton" type="button">Send Code</button>
+      <p id="sendStatus" class="status-line" role="status" aria-live="polite"></p>
     </div>
-    <div class="grid">
-      <div class="cell"><small>Match</small><strong id="matchId">—</strong></div>
-      <div class="cell"><small>You</small><strong id="playerName">—</strong></div>
-      <div class="cell"><small>Opponent</small><strong id="opponentName">—</strong></div>
+    <div id="senderWaiting" class="notice hidden">Room code sent. You’re ready; waiting for your opponent to confirm receipt.</div>
+    <div id="senderCorrectionWaiting" class="notice hidden">Your opponent requested a replacement. Enter the corrected code above.</div>
+    <div id="senderReceived" class="notice success hidden">Your opponent confirmed receipt. You’re already ready; waiting for them to mark ready.</div>
+  </section>
+
+  <section id="receiverCard" class="card hidden">
+    <h2>Room code from your opponent</h2>
+    <p id="receiverWaiting" class="notice">Your opponent is creating the room. We’ll show the code here when it arrives.</p>
+    <div id="receivedCodeCard" class="hidden">
+      <p class="muted">Copy this code into eFootball:</p>
+      <div id="receivedCode" class="code" aria-live="polite"></div>
+      <button id="copyCodeButton" class="secondary" type="button">Copy Code</button>
+      <button id="receivedButton" type="button">Received</button>
+      <p id="receiptStatus" class="status-line" role="status" aria-live="polite"></p>
     </div>
+    <button id="requestCodeCorrectionButton" class="secondary hidden" type="button">Code is incorrect · Request replacement</button>
+    <p id="correctionStatus" class="status-line" role="status" aria-live="polite"></p>
+  </section>
 
-    <section id="senderPanel" class="hidden">
-      <h2>You send the room code</h2>
-      <p class="muted">Create the room in eFootball, then send its code here. Your opponent will see the code on their Match Room page.</p>
-      <form id="codeForm">
-        <label for="roomCode">eFootball room code</label>
-        <input id="roomCode" maxlength="50" autocomplete="off" required placeholder="Enter the room code">
-        <button id="sendCodeButton" type="submit">Send code to opponent</button>
-      </form>
-      <p id="senderSent" class="notice hidden">Code sent. Waiting for your opponent to confirm it.</p>
-    </section>
+  <section id="readyCard" class="card hidden">
+    <h2>Confirm you’re ready</h2>
+    <p id="readyMessage" class="muted">The room code has been acknowledged. Both players must confirm before the match begins.</p>
+    <button id="readyButton" type="button">I’m Ready</button>
+    <p id="readyStatus" class="status-line"></p>
+  </section>
 
-    <section id="receiverPanel" class="hidden">
-      <h2>Room code from your opponent</h2>
-      <p id="receiverWaiting" class="notice">Your opponent is creating the eFootball room. This page will show the code when it arrives.</p>
-      <div id="codeBox" class="notice hidden">
-        <div class="muted">eFOOTBALL ROOM CODE</div>
-        <div id="receivedCode" class="code"></div>
-        <p class="muted">Join this room in eFootball, then confirm receipt below.</p><button id="receivedButton" type="button">I RECEIVED THE CODE</button><p id="receiptStatus" class="muted" aria-live="polite"></p>
-      </div>
-    </section>
-
-    <section id="readyPanel" class="hidden">
-      <h2>Ready check</h2>
-      <p class="muted">Once both players are ready, this page will move to Match Results.</p>
-      <div class="grid">
-        <div class="cell"><small>Your status</small><strong id="yourReady">Not ready</strong></div>
-        <div class="cell"><small>Opponent status</small><strong id="opponentReady">Waiting</strong></div>
-        <div class="cell"><small>Match state</small><strong id="matchState">Waiting</strong></div>
-      </div>
-      <button id="readyButton" type="button">I received the code and I’m ready</button>
-    </section>
-
-    <div class="row">
-      <!-- Open the installed eFootball app manually; this page does not launch it. -->
-      <button id="cancelButton" class="danger hidden" type="button">Cancel match</button>
-      <a class="button secondary" href="konami.html">Back to dashboard</a>
-    </div>
+  <section class="card">
     <p id="error" class="error" role="alert"></p>
+    <a id="resultsLink" class="button hidden" href="match-results.html">Open Match Results</a>
+    <button id="cancelButton" class="secondary hidden" type="button">Cancel Match</button>
+    <a class="button secondary" href="match-hub.html">Match Hub</a>
   </section>
 </main>
 <script>
 (function(){
   "use strict";
   if(!GG.requireLogin()) return;
-  var id = new URLSearchParams(location.search).get("matchId") || new URLSearchParams(location.search).get("fixture") || "";
-  var busy = false;
-  var lastMatch = null;
-  var statusNode = document.getElementById("status");
-  var errorNode = document.getElementById("error");
-  var notificationRegistration = null;
-  var notificationTagPrefix = "gg-efootball-code-";
-  var phonePushRegistered = false;
-  var phonePushBusy = false;
-
-  function phoneAlertsSupported(){
-    return "Notification" in window && "serviceWorker" in navigator;
-  }
-  async function getNotificationRegistration(){
-    if(notificationRegistration) return notificationRegistration;
-    notificationRegistration = await navigator.serviceWorker.register("../sw.js");
-    await navigator.serviceWorker.ready;
-    return notificationRegistration;
-  }
-  async function setupPhonePush(){
-    if(phonePushRegistered) return {ok:true,message:"Background alerts are connected."};
-    if(phonePushBusy) return {ok:false,message:"Background alerts are still connecting."};
-    phonePushBusy = true;
-    updatePhoneAlertHelp();
-  if(phoneAlertsSupported() && Notification.permission === "granted") setupPhonePush();
-    var result;
-    try{ result = await GG.enablePushNotifications(); }
-    catch(error){ result = {ok:false,message:error && error.message || "Could not connect background alerts."}; }
-    phonePushBusy = false;
-    phonePushRegistered = !!(result && result.ok);
-    updatePhoneAlertHelp();
-    return result || {ok:false,message:"Could not connect background alerts."};
-  }
-  function updatePhoneAlertHelp(){
-    var help = document.getElementById("phoneAlertHelp");
-    var button = document.getElementById("enablePhoneAlerts");
-    if(!phoneAlertsSupported()){
-      help.textContent = "This browser does not support background notifications. Keep the Match Room open to receive updates.";
-      button.classList.add("hidden");
-      button.disabled = true;
-    }else if(Notification.permission === "granted" && phonePushRegistered){
-      help.textContent = "Background alerts are connected to your account. Tap the notification to return to this Match Room.";
-      button.textContent = "✓ Phone alerts enabled";
-      button.disabled = true;
-    }else if(Notification.permission === "granted" && phonePushBusy){
-      help.textContent = "Connecting background alerts to your account…";
-      button.textContent = "Connecting…";
-      button.disabled = true;
-    }else if(Notification.permission === "granted"){
-      help.textContent = "Browser permission is allowed. Connect this device to your account to receive background match alerts.";
-      button.textContent = "Connect phone alerts";
-      button.disabled = false;
-    }else if(Notification.permission === "denied"){
-      help.textContent = "Phone notifications are blocked for this site. Allow them in your browser or phone settings to receive room-code alerts.";
-      button.textContent = "Notifications blocked";
-      button.disabled = true;
-    }else{
-      help.textContent = "Enable phone alerts to receive room-code updates while the browser is in the background.";
-      button.textContent = "Enable phone alerts";
-      button.disabled = false;
-    }
-  }
-  async function enablePhoneAlerts(){
-    if(!phoneAlertsSupported()) return;
-    try{
-      var permission = Notification.permission;
-      if(permission === "default") permission = await Notification.requestPermission();
-      if(permission !== "granted"){ updatePhoneAlertHelp(); return; }
-      var result = await setupPhonePush();
-      if(!result.ok){
-        document.getElementById("phoneAlertHelp").textContent = "Background alerts could not connect: " + result.message;
-        return;
-      }
-      if(lastMatch) await notifyForMatch(lastMatch);
-    }catch(error){
-      document.getElementById("phoneAlertHelp").textContent = error && error.message || "Could not enable phone alerts. Check your browser notification settings.";
-    }
-  }
-  async function showSystemAlert(title, body, id, role){
-    if(!phoneAlertsSupported() || Notification.permission !== "granted") return;
-    try{
-      var registration = await getNotificationRegistration();
-      var tag = notificationTagPrefix + role + "-" + id;
-      var options = {
-        body: body,
-        tag: tag,
-        renotify: false,
-        requireInteraction: true,
-        actions: [{action:"send-code",title:role === "sender" ? "Send code" : "View code"}],
-        data: {targetPath:"pages/match-room.html?matchId=" + encodeURIComponent(id)}
-      };
-      try{
-        await registration.showNotification(title, options);
-      }catch(actionError){
-        delete options.actions;
-        await registration.showNotification(title, options);
-      }
-      localStorage.setItem("goalGambitAlertShown_" + role + "_" + id, "1");
-    }catch(_){}
-  }
-  async function closeSystemAlert(id, role){
-    if(!phoneAlertsSupported()) return;
-    try{
-      var registration = await getNotificationRegistration();
-      var tag = notificationTagPrefix + role + "-" + id;
-      var notifications = await registration.getNotifications({tag:tag});
-      notifications.forEach(function(notification){ notification.close(); });
-    }catch(_){}
-  }
-  async function notifyForMatch(m){
-    if(!m || !m.opponentFound) return;
-    if(m.youAreSender && !m.codeSent){
-      var senderKey = "goalGambitAlertShown_sender_" + m.id;
-      if(!localStorage.getItem(senderKey)){
-        await showSystemAlert(
-          "GOAL$GAMBIT · Send room code",
-          "You were selected to create the eFootball room. Tap to open the code form.",
-          m.id,
-          "sender"
-        );
-      }
-    }else if(m.youAreSender && m.codeSent){
-      await closeSystemAlert(m.id,"sender");
-    }
-    if(!m.youAreSender && m.codeSent){
-      var receiverKey = "goalGambitAlertShown_receiver_" + m.id;
-      if(!localStorage.getItem(receiverKey)){
-        await showSystemAlert(
-          "GOAL$GAMBIT · Room code received",
-          "Your opponent sent the room code. Tap to view it and confirm.",
-          m.id,
-          "receiver"
-        );
-      }
-    }
-  }
-
-  function showError(message){ errorNode.textContent = message || ""; }
-  function goToResults(matchId){ location.replace("match-results.html?matchId=" + encodeURIComponent(matchId)); }
-  function isPlaying(m){ return ["playing","awaiting_verification","disputed","completed"].indexOf(m.status) !== -1; }
-
+  var params=new URLSearchParams(location.search);
+  var matchId=params.get("matchId")||"";
+  var openCodeFromNotification=params.get("action")==="send-code";
+  var latest=null,busy=false,submitting=false;
+  var statusNode=document.getElementById("status");
+  var errorNode=document.getElementById("error");
+  function showError(message){errorNode.textContent=message||"";}
+  function goToResults(id){location.replace("match-results.html?matchId="+encodeURIComponent(id));}
   function render(m){
-    lastMatch = m;
-    document.getElementById("matchId").textContent = "GG-" + m.id;
-    document.getElementById("playerName").textContent = m.yourName || "You";
-    document.getElementById("opponentName").textContent = m.opponentFound ? (m.opponentName || "Opponent") : "Searching…";
-    var cancelable = ["waiting","ready"].indexOf(m.status) !== -1;
-    document.getElementById("cancelButton").classList.toggle("hidden", !cancelable);
-    if(m.status === "cancelled"){
-      statusNode.textContent = "This match was cancelled. Any locked stakes were handled by the server.";
-      document.getElementById("senderPanel").classList.add("hidden");
-      document.getElementById("receiverPanel").classList.add("hidden");
-      document.getElementById("readyPanel").classList.add("hidden");
-      return;
-    }
-    if(!m.opponentFound){
-      statusNode.textContent = "Searching for an opponent. Keep this page open; it will update when a player is matched.";
-      document.getElementById("senderPanel").classList.add("hidden");
-      document.getElementById("receiverPanel").classList.add("hidden");
-      document.getElementById("readyPanel").classList.add("hidden");
-      return;
-    }
-    statusNode.textContent = m.codeSent ? "Opponent found · room code sent" : "Opponent found · waiting for room code";
-    document.getElementById("senderPanel").classList.toggle("hidden", !m.youAreSender);
-    document.getElementById("receiverPanel").classList.toggle("hidden", !!m.youAreSender);
-    document.getElementById("senderSent").classList.toggle("hidden", !(m.youAreSender && m.codeSent));
-    document.getElementById("codeForm").classList.toggle("hidden", !m.youAreSender || !!m.codeSent);
-    document.getElementById("receiverWaiting").classList.toggle("hidden", !!m.codeSent);
-    document.getElementById("codeBox").classList.toggle("hidden", !m.codeSent || !!m.youAreSender);
-    document.getElementById("receivedCode").textContent = !m.youAreSender && m.codeSent ? (m.room_code || "") : "";
-    document.getElementById("readyPanel").classList.toggle("hidden", !m.codeReceived);document.getElementById("receivedButton").classList.toggle("hidden", !m.codeSent || !!m.youAreSender || !!m.codeReceived);document.getElementById("receiptStatus").textContent=m.codeReceived?"Room code received successfully.":(m.youAreSender?"Waiting for receiver to confirm receipt.":"Copy the code, join the room in eFootball, then confirm receipt.");
-    document.getElementById("yourReady").textContent = m.yourReady ? "Ready" : "Not ready";
-    document.getElementById("opponentReady").textContent = m.opponentReady ? "Ready" : "Waiting";
-    document.getElementById("matchState").textContent = m.status === "playing" ? "In progress" : "Waiting for both players";
-    var readyButton = document.getElementById("readyButton");
-    readyButton.disabled = !!m.yourReady || !m.codeReceived;
-    readyButton.textContent = m.yourReady ? "✓ You are ready" : "I’m Ready";
+    latest=m;
+    document.getElementById("yourName").textContent=m.yourName||"You";
+    document.getElementById("opponentName").textContent=m.opponentName||"Opponent";
+    document.querySelector("#senderCard h2").textContent="You're sending the room code to "+(m.codeReceiverName||m.opponentName||"your opponent");
+    document.querySelector("#receiverCard h2").textContent="Room code from "+(m.codeSenderName||m.opponentName||"your opponent");
+    document.getElementById("matchMeta").textContent="Match GG-"+m.id+(m.league?" · "+m.league:"")+(Number(m.stake_amount)>0?" · KSh "+Number(m.stake_amount).toLocaleString("en-KE"):"");
+    var paired=!!m.opponentFound;
+    document.getElementById("searchCard").classList.toggle("hidden",paired||m.status!=="waiting");
+    document.getElementById("senderCard").classList.toggle("hidden",!paired||!m.youAreSender||!["waiting","ready"].includes(m.status));
+    document.getElementById("receiverCard").classList.toggle("hidden",!paired||!!m.youAreSender||!["waiting","ready"].includes(m.status));
+    document.getElementById("openCodePanel").classList.toggle("hidden",!!m.codeSent&&!m.codeCorrectionRequested);
+    document.getElementById("openCodePanel").textContent=m.codeCorrectionRequested?"Replace Room Code":"Send Room Code";
+    document.getElementById("senderWaiting").classList.toggle("hidden",!m.codeSent||m.codeReceived||m.codeCorrectionRequested);
+    document.getElementById("senderCorrectionWaiting").classList.toggle("hidden",!m.youAreSender||!m.codeCorrectionRequested);
+    document.getElementById("senderReceived").classList.toggle("hidden",!m.codeSent||!m.codeReceived);
+    document.getElementById("receiverWaiting").classList.toggle("hidden",!!m.codeSent&&!!m.room_code&&!m.codeCorrectionRequested);
+    document.getElementById("receiverWaiting").textContent=m.codeCorrectionRequested?"A replacement code was requested. Waiting for your opponent to send it.":"Your opponent is creating the room. We’ll show the code here when it arrives.";
+    document.getElementById("receivedCodeCard").classList.toggle("hidden",!(m.codeSent&&m.room_code)||m.codeCorrectionRequested);
+    document.getElementById("receivedCode").textContent=m.room_code||"";
+    document.getElementById("receivedButton").classList.toggle("hidden",!m.codeSent||!m.room_code||!!m.codeReceived||m.codeCorrectionRequested);
+    var canRequestCorrection=!m.youAreSender&&m.codeSent&&["waiting","ready"].includes(m.status)&&!m.codeCorrectionRequested;
+    document.getElementById("requestCodeCorrectionButton").classList.toggle("hidden",!canRequestCorrection);
+    document.getElementById("correctionStatus").textContent=m.codeCorrectionRequested?(m.youAreSender?"Replacement requested by your opponent.":"Replacement requested. Your opponent has been notified."):"";
+    document.getElementById("receiptStatus").textContent=m.codeReceived?"Room code received successfully.":"This confirmation only acknowledges the code; it does not start or complete the match.";
+    var canReady=paired&&!!m.codeReceived&&!["playing","awaiting_verification","disputed","completed","cancelled"].includes(m.status);
+    document.getElementById("readyCard").classList.toggle("hidden",!canReady);
+    document.getElementById("readyButton").classList.toggle("hidden",!!m.yourReady);
+    document.getElementById("readyStatus").textContent=m.yourReady?(m.opponentReady?"Both players confirmed. Opening results…":"You’re ready. Waiting for your opponent."):"";
+    document.getElementById("cancelButton").classList.toggle("hidden",!paired||!(["waiting","ready"].includes(m.status)));
+    if(!paired){statusNode.textContent=m.status==="cancelled"?"This match search ended.":"Searching for an opponent in your selected queue…";return;}
+    if(m.status==="cancelled"){statusNode.textContent="This match was cancelled. Any locked stakes were handled by the server.";return;}
+    statusNode.textContent=m.codeCorrectionRequested?(m.youAreSender?"Your opponent requested a corrected room code.":"Waiting for your opponent to send a replacement room code."):m.codeSent?(m.codeReceived?"Room code received · both players can confirm readiness.":(m.youAreSender?"Room code sent · waiting for receiver confirmation.":"Your opponent sent the room code · confirm receipt after copying it.")):(m.youAreSender?"Your match is ready · send the room code.":"Opponent found · waiting for the room code.");
   }
-
   async function load(){
-    if(busy) return;
-    busy = true;
+    if(busy||submitting)return;busy=true;
     try{
-      var m = null;
-      if(!id){
-        var active = await GG.api("/api/efootball/matches/active", {noRedirect:true});
-        if(active.ok && active.data.match) id = String(active.data.match.id);
-      }
-      if(id){
-        var response = await GG.api("/api/efootball/matches/" + encodeURIComponent(id), {noRedirect:true});
-        if(response.ok && response.data.match) m = response.data.match;
-        else if(response.status !== 0) showError(response.data.message || "Could not load this match.");
-      }
-      if(!m){
-        statusNode.textContent = "No active match was found. Start matchmaking from the Konami dashboard.";
-        return;
-      }
-      id = String(m.id);
-      if(location.search.indexOf("matchId=") === -1) history.replaceState(null,"","?matchId=" + encodeURIComponent(id));
-      if(isPlaying(m)){ goToResults(id); return; }
+      if(!matchId){var active=await GG.api("/api/efootball/matches/active",{noRedirect:true});if(active.ok&&active.data.match)matchId=String(active.data.match.id);}
+      if(!matchId){statusNode.textContent="No active match was found. Start matchmaking from the Konami dashboard.";return;}
+      var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId),{noRedirect:true});
+      if(!r.ok||!r.data.match){showError(r.data.message||"Could not load this match.");return;}
+      var m=r.data.match;matchId=String(m.id);
+      if(location.search.indexOf("matchId=")===-1)history.replaceState(null,"","?matchId="+encodeURIComponent(matchId));
+      if(["playing","awaiting_verification","disputed","completed"].includes(m.status)){goToResults(matchId);return;}
       render(m);
-      updatePhoneAlertHelp();
-      await notifyForMatch(m);
-    }catch(error){ showError(error.message || "Unable to load the match."); }
-    finally{ busy = false; }
+      if(openCodeFromNotification && m.youAreSender && (!m.codeSent || m.codeCorrectionRequested)){
+        openCodeFromNotification=false;
+        document.getElementById("codePanel").classList.remove("hidden");
+        document.getElementById("roomCode").focus();
+      }
+    }catch(e){showError(e.message||"Unable to load the match.");}
+    finally{busy=false;}
   }
-
-  document.getElementById("enablePhoneAlerts").addEventListener("click", enablePhoneAlerts);
-  updatePhoneAlertHelp();
-
-  document.getElementById("codeForm").addEventListener("submit", async function(event){
-    event.preventDefault();
-    if(!id) return;
-    var input = document.getElementById("roomCode");
-    var button = document.getElementById("sendCodeButton");
-    var code = input.value.trim();
-    if(!code){ input.focus(); return; }
-    button.disabled = true;
-    showError("");
-    var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/roomcode", {method:"POST",body:{code:code}});
-    if(!result.ok){ showError(result.data.message || "The room code was not sent. Try again."); button.disabled = false; return; }
-    input.value = "";
-    goToResults(id);
+  document.getElementById("openCodePanel").addEventListener("click",function(){document.getElementById("codePanel").classList.remove("hidden");document.getElementById("roomCode").focus();});
+  document.getElementById("sendCodeButton").addEventListener("click",async function(){
+    if(!latest||!latest.youAreSender||latest.codeSent&&!latest.codeCorrectionRequested||submitting)return;
+    var input=document.getElementById("roomCode"),code=input.value.trim();
+    if(!code){input.focus();document.getElementById("sendStatus").textContent="Paste the room code first.";return;}
+    if(!/^[A-Za-z0-9 _-]{1,50}$/.test(code)){document.getElementById("sendStatus").textContent="Use letters, numbers, spaces, hyphens or underscores only.";return;}
+    submitting=true;this.disabled=true;document.getElementById("sendStatus").textContent="Sending code…";showError("");
+    var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId)+"/roomcode",{method:"POST",body:{code:code},noRedirect:true});
+    submitting=false;this.disabled=false;
+    if(!r.ok){document.getElementById("sendStatus").textContent=r.data.message||"The code was not sent. Try again.";return;}
+    input.value="";document.getElementById("sendStatus").textContent="Room code sent successfully. Opening Match Results…";goToResults(matchId);
   });
-
-  document.getElementById("receivedButton").addEventListener("click",async function(){if(!id||!lastMatch||lastMatch.youAreSender||lastMatch.codeReceived||!lastMatch.codeSent)return;var button=this;button.disabled=true;showError("");try{var result=await GG.api("/api/efootball/matches/"+encodeURIComponent(id)+"/code-received",{method:"POST",body:{},noRedirect:true});if(!result.ok){showError(result.data.message||"Could not confirm receipt.");button.disabled=false;return;}await load();}catch(_){showError("Could not reach the server. Receipt was not confirmed.");button.disabled=false;}});document.getElementById("readyButton").addEventListener("click", async function(){
-    if(!id || !lastMatch || !lastMatch.codeReceived) return;
-    var button = this;
-    button.disabled = true;
-    showError("");
-    var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/ready", {method:"POST",body:{ready:true},noRedirect:true});
-    if(!result.ok){ showError(result.data.message || "Could not confirm readiness. Try again."); button.disabled = false; return; }
-    await load();
+  document.getElementById("copyCodeButton").addEventListener("click",async function(){
+    var code=document.getElementById("receivedCode").textContent;
+    try{await navigator.clipboard.writeText(code);document.getElementById("receiptStatus").textContent="Code copied. Paste it into eFootball, then confirm receipt.";}
+    catch(_){var range=document.createRange(),selection=window.getSelection();range.selectNodeContents(document.getElementById("receivedCode"));selection.removeAllRanges();selection.addRange(range);document.getElementById("receiptStatus").textContent="Select and copy the highlighted code, then return here to confirm receipt.";}
   });
-
-  document.getElementById("cancelButton").addEventListener("click", async function(){
-    if(!id || !confirm("Cancel this match before play starts? The server will handle any stake refunds.")) return;
-    this.disabled = true;
-    var result = await GG.api("/api/efootball/matches/" + encodeURIComponent(id) + "/cancel", {method:"POST",noRedirect:true});
-    if(!result.ok){ showError(result.data.message || "Could not cancel the match."); this.disabled = false; return; }
-    await load();
+  document.getElementById("receivedButton").addEventListener("click",async function(){
+    if(!latest||latest.youAreSender||latest.codeReceived||!latest.room_code)return;
+    this.disabled=true;showError("");
+    var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId)+"/code-received",{method:"POST",body:{},noRedirect:true});
+    if(!r.ok){showError(r.data.message||"Could not confirm receipt.");this.disabled=false;return;}
+    document.getElementById("receiptStatus").textContent="Room code received successfully.";await load();
   });
-
-  load();
-  window.setInterval(load, 2500);
+  document.getElementById("requestCodeCorrectionButton").addEventListener("click",async function(){
+    if(!latest||latest.youAreSender||!latest.codeSent||latest.codeCorrectionRequested)return;
+    if(!confirm("Request a corrected room code? The previous code will be hidden and both players must confirm readiness again."))return;
+    this.disabled=true;showError("");
+    var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId)+"/code-correction",{method:"POST",body:{},noRedirect:true});
+    if(!r.ok){showError(r.data.message||"Could not request a replacement code.");this.disabled=false;return;}
+    document.getElementById("correctionStatus").textContent="Replacement requested. Your opponent has been notified.";await load();
+  });
+  document.getElementById("readyButton").addEventListener("click",async function(){
+    if(!latest||!latest.codeReceived||latest.yourReady)return;
+    this.disabled=true;showError("");
+    var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId)+"/ready",{method:"POST",body:{ready:true},noRedirect:true});
+    if(!r.ok){showError(r.data.message||"Could not confirm readiness.");this.disabled=false;return;}await load();
+  });
+  document.getElementById("cancelButton").addEventListener("click",async function(){
+    if(!confirm("Cancel this match before play starts? The server handles any stake refunds."))return;
+    this.disabled=true;var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId)+"/cancel",{method:"POST",noRedirect:true});
+    if(!r.ok){showError(r.data.message||"Could not cancel the match.");this.disabled=false;return;}await load();
+  });
+  window.addEventListener("gg:match-update",function(event){if(!event.detail||String(event.detail.matchId)===String(matchId))load();});
+  load();window.setInterval(load,2500);
 })();
 </script>
 </body>

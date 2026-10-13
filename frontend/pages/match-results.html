@@ -2,35 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080808">
+<link rel="manifest" href="../manifest.webmanifest">
 <title>GOAL$GAMBIT · Match Results</title>
 <style>
-:root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa}
-*{box-sizing:border-box}
-body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}
-header{height:64px;padding:0 max(18px,calc((100% - 920px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}
-.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}
-a{color:var(--gold)}
-main{width:min(920px,94%);margin:32px auto 80px}
-h1{font-size:clamp(28px,5vw,38px);margin:0 0 4px;color:var(--gold)}
-.intro,.muted{color:var(--muted)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}
-.notice{padding:14px;border-radius:10px;background:#171307;border:1px solid #6b571c;color:#f0d67b;margin:14px 0}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
-label{display:block;color:#bbb;font-size:13px;margin:10px 0 6px}
-input[type=number]{width:100%;padding:14px;border:1px solid #444;border-radius:9px;background:#080808;color:#fff;font:inherit}
-button,.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:9px;padding:12px 16px;margin-top:12px;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer}
-button:disabled{opacity:.55;cursor:not-allowed}
-.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}
-.hidden{display:none!important}
-.error{color:#ff9999}
-.good{color:#8fe0aa}
-.score{font-size:clamp(28px,7vw,42px);font-weight:900;color:var(--gold);text-align:center;letter-spacing:.04em}
-.upload{border:1px dashed #8c7428;border-radius:12px;padding:22px;text-align:center;background:#171307}
-.upload input{max-width:100%;margin:12px auto}
-.preview{display:block;max-width:100%;max-height:420px;margin:16px auto;border-radius:10px}
-.row{display:flex;flex-wrap:wrap;gap:10px}
-@media(max-width:600px){header{padding:0 16px}.grid{grid-template-columns:1fr}.card{padding:18px}}
+:root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa;--green:#8fe0aa;--red:#ff9b9b}*{box-sizing:border-box}body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}header{height:64px;padding:0 max(18px,calc((100% - 920px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}a{color:var(--gold)}main{width:min(920px,94%);margin:30px auto 80px}h1{font-size:clamp(28px,5vw,38px);margin:0 0 4px;color:var(--gold)}.intro,.muted{color:var(--muted)}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}.notice{padding:14px;border-radius:10px;background:#171307;border:1px solid #6b571c;color:#f0d67b;margin:14px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}label{display:block;color:#bbb;font-size:14px;margin:10px 0 6px}input[type=number]{width:100%;padding:14px;border:1px solid #444;border-radius:9px;background:#080808;color:#fff;font:inherit}button,.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:9px;padding:12px 16px;margin-top:12px;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer;min-height:46px}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}.hidden{display:none!important}.error{color:var(--red);min-height:1.5em}.good{color:var(--green)}.score{font-size:clamp(30px,7vw,44px);font-weight:900;color:var(--gold);text-align:center;letter-spacing:.04em}.upload{border:1px dashed #8c7428;border-radius:12px;padding:20px;text-align:center;background:#171307}.upload input{max-width:100%;margin:12px auto}.preview{display:block;max-width:100%;max-height:430px;margin:16px auto;border-radius:10px}.row{display:flex;flex-wrap:wrap;gap:10px}@media(max-width:600px){header{padding:0 16px}.grid{grid-template-columns:1fr}.card{padding:18px}.button,button{width:100%}}
 </style>
 <script src="../js/api.js"></script>
 </head>
@@ -41,7 +18,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
   <p class="intro">Both players submit once. Matching scores settle the match. Only if the first reports differ do both players submit again; the selected player must attach a screenshot before their second submission. A second mismatch goes to admin with both rounds and the screenshot.</p>
   <section class="card">
     <div id="status" class="notice" role="status" aria-live="polite">Loading match…</div>
-    <p id="matchPlayers" class="muted"></p>
+    <p id="players" class="muted"></p>
     <div id="scoreFormWrap" class="hidden">
       <form id="scoreForm">
         <div class="grid">
@@ -53,16 +30,16 @@ button:disabled{opacity:.55;cursor:not-allowed}
     </div>
     <div id="scoreSummary" class="hidden">
       <h2>Your submitted score</h2>
-      <div id="yourReport" class="score">—</div>
-      <p id="opponentReport" class="muted"></p>
+      <div id="scoreValue" class="score">—</div>
+      <p id="otherReport" class="muted"></p>
     </div>
   </section>
 
-  <section id="screenshotCard" class="card hidden">
+  <section id="screenshotCard" class="card">
     <h2>Match screenshot</h2>
     <p id="screenshotMessage" class="muted">The selected player can upload the final score screenshot here. It is required before their second score submission if the first reports differ.</p>
     <div id="uploadArea" class="upload">
-      <p id="uploadHelp">The selected player can upload early or after a first-round mismatch. JPEG, PNG, or WebP, up to 8 MB.</p>
+      <p id="uploadHelp">Attach the final eFootball score screen (JPEG, PNG, or WebP, 8 MB maximum). The selected uploader is chosen for the match and can upload early; if Round 1 differs, they must upload before submitting Round 2.</p>
       <label class="button secondary" for="screenshotInput">Choose screenshot</label>
       <input id="screenshotInput" type="file" accept="image/jpeg,image/png,image/webp">
       <img id="screenshotPreview" class="preview hidden" alt="Selected match screenshot preview">
@@ -74,10 +51,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     <h2>Match status</h2>
     <p id="detailStatus" class="muted">Waiting for match data…</p>
     <p id="error" class="error" role="alert"></p>
-    <div class="row">
-      <a class="button secondary" id="roomLink" href="match-room.html">Match room</a>
-      <a class="button secondary" href="konami.html">Konami dashboard</a>
-    </div>
+    <div class="row"><a class="button secondary" id="roomLink" href="match-room.html">Match Room</a><a class="button secondary" href="konami.html">Konami dashboard</a></div>
   </section>
 </main>
 <script>
@@ -118,7 +92,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
       errorNode.textContent = "";
     }
     latest = m;
-    document.getElementById("matchPlayers").textContent =
+    document.getElementById("players").textContent =
       (m.yourName || "You") + " vs " + (m.opponentName || "Opponent") + " · Match GG-" + m.id;
     document.getElementById("roomLink").href = "match-room.html?matchId=" + encodeURIComponent(m.id);
 
@@ -141,8 +115,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
       statusNode.textContent = m.verificationStatus === "verified" ? "Result verified" : "Match settled";
       formWrap.classList.add("hidden");
       summary.classList.remove("hidden");
-      document.getElementById("yourReport").textContent = score(ownFinal) + " – " + score(otherFinal);
-      document.getElementById("opponentReport").textContent = "Final match score";
+      document.getElementById("scoreValue").textContent = score(ownFinal) + " – " + score(otherFinal);
+      document.getElementById("otherReport").textContent = "Final match score";
       screenshotCard.classList.toggle("hidden", !isTrue(m.screenshotSubmitted));
       uploadArea.classList.add("hidden");
       uploadButton.classList.add("hidden");
@@ -171,8 +145,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
         : (isTrue(m.youMustUploadScreenshot)
           ? "Your screenshot is still needed for the open admin case. Upload it now or add it later from the match page."
           : "The selected player can add screenshot evidence to the open admin case.");
-      document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
-      document.getElementById("opponentReport").textContent = "Both score rounds differed. Any locked stake is held until admin review.";
+      document.getElementById("scoreValue").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+      document.getElementById("otherReport").textContent = "Both score rounds differed. Any locked stake is held until admin review.";
       if(!complaintRedirectScheduled){
         complaintRedirectScheduled = true;
         document.getElementById("detailStatus").textContent = "Complaint submitted. Returning to the Konami dashboard in a few seconds.";
@@ -219,8 +193,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
       } else {
         formWrap.classList.add("hidden");
         summary.classList.remove("hidden");
-        document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
-        document.getElementById("opponentReport").textContent = otherSubmitted(m)
+        document.getElementById("scoreValue").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+        document.getElementById("otherReport").textContent = otherSubmitted(m)
           ? "Both players submitted round " + roundNo + ". Checking the reports…"
           : "Your round " + roundNo + " report is saved. Waiting for your opponent.";
         statusNode.textContent = "Round " + roundNo + " submitted";
@@ -232,8 +206,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
       formWrap.classList.add("hidden");
       summary.classList.remove("hidden");
       screenshotCard.classList.remove("hidden");
-      document.getElementById("yourReport").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
-      document.getElementById("opponentReport").textContent = "The match is held for admin review.";
+      document.getElementById("scoreValue").textContent = score(ownScore(m)) + " – " + score(ownAgainst(m));
+      document.getElementById("otherReport").textContent = "The match is held for admin review.";
       if(isTrue(m.screenshotSubmitted)){
         uploadArea.classList.add("hidden");
         uploadButton.classList.add("hidden");
@@ -347,7 +321,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     posting = true;
     this.disabled = true;
     errorNode.textContent = "";
-    document.getElementById("screenshotMessage").textContent = "Uploading screenshot… OCR checks may take up to 15 seconds.";
+      document.getElementById("screenshotMessage").textContent = "Uploading screenshot for result verification…";
     var form = new FormData();
     form.append("screenshot", file, file.name);
     var uploadButton = this;

@@ -30,7 +30,7 @@ async function main() {
     assert(adminScript.includes('addEventListener("visibilitychange"'), "returning to the tab must recheck access");
 
     const queryLog = [];
-    const phone = "TEST_PHONE_ADMIN_ONLY";
+    const phone = "254700123456";
     const pool = {
         async query(sql, params) {
             queryLog.push(String(sql));
@@ -39,7 +39,7 @@ async function main() {
             }
             if (String(sql).includes("SELECT COUNT(*)::int AS total")) return { rows: [{ total: 1 }] };
             if (String(sql).includes("SELECT c.id,c.complaint_ref")) {
-                return { rows: [{ id: 7, complaint_ref: "GG-000007", reporter_username: "reporter", reporter_phone: phone, reported_username: "reported", reported_phone: "TEST_PHONE_ADMIN_ONLY", status: "open" }] };
+                return { rows: [{ id: 7, complaint_ref: "GG-000007", reporter_username: "reporter", reporter_phone: phone, reported_username: "reported", reported_phone: "254711111111", status: "open" }] };
             }
             if (String(sql).includes("SELECT status,COUNT(*)::int AS count FROM complaints")) return { rows: [{ status: "open", count: 1 }] };
             throw new Error("Unexpected test query: " + String(sql).slice(0, 100));

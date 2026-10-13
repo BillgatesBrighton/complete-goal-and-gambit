@@ -1,7 +1,6 @@
 "use strict";
 
 const express = require("express");
-const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
@@ -140,6 +139,37 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
         } catch (error) {
             console.error("Admin complaint list failed:", error.message);
             return res.status(500).json({ success: false, message: "Failed to load complaints." });
+        }
+    });
+
+    router.post("/clear-resolved", authenticateToken, adminOnly, async (req, res) => {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const cleared = await client.query(
+                `UPDATE complaints
+                    SET admin_cleared_at=NOW(),updated_at=NOW()
+                  WHERE admin_cleared_at IS NULL AND status IN ('resolved','dismissed')
+                    AND source <> 'efootball_result_dispute'
+                 RETURNING id`
+            );
+            const ids = cleared.rows.map((row) => Number(row.id));
+            if (ids.length) {
+                await client.query(
+                    `INSERT INTO complaint_case_events(complaint_id,actor_id,actor_role,event_type,message)
+                     SELECT cases.id,$2,'admin','cleared','Complaint hidden from the active list.'
+                       FROM unnest($1::bigint[]) AS cases(id)`,
+                    [ids, req.user.userId]
+                );
+            }
+            await client.query("COMMIT");
+            return res.json({ success: true, count: ids.length, message: ids.length ? ids.length + " resolved complaint(s) cleared from the admin list." : "There are no resolved complaints to clear." });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Admin bulk complaint clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear resolved complaints." });
+        } finally {
+            client.release();
         }
     });
 
@@ -444,11 +474,11 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
         } finally { client.release(); }
     });
 
-    router.post("/:id/forfeit-stakes", authenticateToken, adminOnly, async (req, res) => {
+    async function refundDisputedStakes(req, res) {
         const id = validId(req.params.id);
         const reason = String(req.body && req.body.reason || "").trim().slice(0, 2000);
         if (!id || !req.body || req.body.confirm !== true || reason.length < 10) {
-            return res.status(400).json({ success: false, message: "Confirm the transfer and enter a reason of at least 10 characters." });
+            return res.status(400).json({ success: false, message: "Confirm the refund and enter a reason of at least 10 characters." });
         }
 
         const client = await pool.connect();
@@ -466,7 +496,7 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             }
             if (!complaint.match_id || complaint.source !== "efootball_result_dispute") {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "Only an open eFootball result dispute can transfer match stakes." });
+                return res.status(409).json({ success: false, message: "Only an open eFootball result dispute can refund match stakes." });
             }
 
             const matchResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [complaint.match_id]);
@@ -477,12 +507,12 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             const match = matchResult.rows[0];
             if (match.status !== "disputed" || match.settled_at || !match.opponent_id) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "This match is no longer an unsettled dispute eligible for stake transfer." });
+                return res.status(409).json({ success: false, message: "This match is no longer an unsettled dispute eligible for a stake refund." });
             }
             const stake = Number(match.stake_amount || 0);
             if (!Number.isFinite(stake) || stake <= 0) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "This disputed match has no staked funds to transfer." });
+                return res.status(409).json({ success: false, message: "This disputed match has no locked stake to refund." });
             }
             const stakeAmount = stake.toFixed(2);
             const totalAmount = (stake * 2).toFixed(2);
@@ -490,60 +520,66 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             const wallets = await client.query("SELECT user_id,locked_balance FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE", [participants]);
             if (wallets.rows.length !== 2 || wallets.rows.some((wallet) => Number(wallet.locked_balance || 0) < stake)) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "The players’ locked stakes do not match this match. Transfer stopped for reconciliation." });
+                return res.status(409).json({ success: false, message: "The players’ locked stakes do not match this match. Refund stopped for reconciliation." });
             }
 
-            await client.query("INSERT INTO admin_wallets(admin_id) VALUES($1) ON CONFLICT(admin_id) DO NOTHING", [req.user.userId]);
+            const refundReferences = participants.map((playerId) => "EF-DISPUTE-REFUND-" + match.id + "-" + playerId);
+            const priorRefund = await client.query(
+                "SELECT reference FROM transactions WHERE reference=ANY($1::text[]) LIMIT 1",
+                [refundReferences]
+            );
+            if (priorRefund.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "A refund is already recorded for this match. No second credit was issued." });
+            }
             for (const playerId of participants) {
-                const debited = await client.query(
-                    "UPDATE wallets SET locked_balance=locked_balance-$1,updated_at=NOW() WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id",
+                const refunded = await client.query(
+                    "UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$1,updated_at=NOW() WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id",
                     [stakeAmount, playerId]
                 );
-                if (debited.rowCount !== 1) throw new Error("A player's locked stake changed during transfer.");
-                const reference = "EF-FORFEIT-" + match.id + "-" + playerId;
+                if (refunded.rowCount !== 1) throw new Error("A player's locked stake changed during refund.");
+                const reference = "EF-DISPUTE-REFUND-" + match.id + "-" + playerId;
                 await client.query(
-                    "INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description) VALUES($1,'stake_forfeiture',$2,'KES','completed',$3,$4)",
-                    [playerId, stakeAmount, reference, "eFootball dispute stakes transferred to administrator " + req.admin.username + " · " + complaint.complaint_ref]
+                    "INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description) VALUES($1,'match_refund',$2,'KES','completed',$3,$4)",
+                    [playerId, stakeAmount, reference, "eFootball dispute resolved; locked stake returned to player · " + complaint.complaint_ref]
                 );
             }
-            await client.query("UPDATE admin_wallets SET balance=balance+$1,updated_at=NOW() WHERE admin_id=$2", [totalAmount, req.user.userId]);
-            const transferRef = "AD-DISPUTE-" + match.id + "-" + randomUUID();
             await client.query(
-                "INSERT INTO admin_wallet_transactions(admin_id,transaction_type,amount,currency,status,reference,description,complaint_id,match_id) VALUES($1,'dispute_stake_transfer',$2,'KES','completed',$3,$4,$5,$6)",
-                [req.user.userId, totalAmount, transferRef, "Final transfer of both locked eFootball stakes from complaint " + complaint.complaint_ref, id, match.id]
-            );
-            await client.query(
-                "UPDATE efootball_matches SET status='cancelled',result_status='admin_forfeited',settled_at=NOW(),finished_at=COALESCE(finished_at,NOW()),winner_id=NULL,submitted_by=$1 WHERE id=$2",
+                "UPDATE efootball_matches SET status='cancelled',result_status='admin_refunded',settled_at=NOW(),finished_at=COALESCE(finished_at,NOW()),winner_id=NULL,submitted_by=$1 WHERE id=$2",
                 [req.user.userId, match.id]
             );
             await client.query(
-                "UPDATE efootball_result_verifications SET status='admin_forfeited',score_check='admin_forfeited',reviewed_by=$1,review_note=$2,reviewed_at=NOW() WHERE match_id=$3",
+                "UPDATE efootball_result_verifications SET status='admin_refunded',score_check='admin_refunded',reviewed_by=$1,review_note=$2,reviewed_at=NOW() WHERE match_id=$3",
                 [req.user.userId, reason, match.id]
             );
             await client.query(
                 "UPDATE complaints SET status='resolved',admin_id=$1,resolution_reason=$2,resolved_at=NOW(),updated_at=NOW() WHERE id=$3",
                 [req.user.userId, reason, id]
             );
-            await audit(client, id, req.user.userId, "stakes_transferred_to_admin", complaint.status, "resolved", reason, {
-                matchId: Number(match.id), adminId: Number(req.user.userId), stakePerPlayer: stakeAmount, totalTransferred: totalAmount, transferReference: transferRef
+            await audit(client, id, req.user.userId, "stakes_refunded_to_players", complaint.status, "resolved", reason, {
+                matchId: Number(match.id), refundedPlayers: participants, stakePerPlayer: stakeAmount, totalRefunded: totalAmount, references: refundReferences
             });
-            const notice = "The administrator closed disputed match " + match.id + " and transferred both locked stakes (KSh " + totalAmount + ") to the administrator wallet. Reason: " + reason;
+            const notice = "The administrator resolved disputed match " + match.id + " and returned your locked stake (KSh " + stakeAmount + ") to your wallet. Reason: " + reason;
             for (const playerId of participants) {
                 await client.query("INSERT INTO system_notifications(user_id,type,title,message,match_id) VALUES($1,'match_dispute_resolved','Dispute Resolved', $2,$3)", [playerId, notice, match.id]);
-                await queuePush(client, playerId, "match-forfeit:" + match.id + ":" + playerId, Number(match.id), "Dispute Resolved", "The administrator resolved the disputed match. Check your GOAL$GAMBIT notices for details.", "match-hub");
+                await queuePush(client, playerId, "match-refunded:" + match.id + ":" + playerId, Number(match.id), "Dispute Resolved · Stake Returned", "The administrator returned your match stake. Check your wallet for details.", "match-hub");
             }
-            const balanceResult = await client.query("SELECT balance FROM admin_wallets WHERE admin_id=$1", [req.user.userId]);
             await client.query("COMMIT");
             if (pushService && typeof pushService.sendPendingJobs === "function") pushService.sendPendingJobs().catch(() => {});
-            return res.json({ success: true, message: "Both stakes were transferred to your administrator wallet and the complaint was resolved.", amount: Number(totalAmount), balance: Number(balanceResult.rows[0].balance) });
+            return res.json({ success: true, message: "The complaint was resolved and both players’ locked stakes were returned to their wallets.", amount: Number(totalAmount), refundedPlayers: participants.length });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            console.error("Admin dispute stake transfer failed:", error.message);
-            return res.status(500).json({ success: false, message: error.message === "A player's locked stake changed during transfer." ? "A player's locked stake changed. No money was transferred; refresh and reconcile the match." : "Could not transfer the disputed stakes." });
+            console.error("Admin disputed stake refund failed:", error.message);
+            return res.status(500).json({ success: false, message: error.message === "A player's locked stake changed during refund." ? "A player's locked stake changed. No refund was issued; refresh and reconcile the match." : "Could not refund the disputed stakes." });
         } finally {
             client.release();
         }
-    });
+    }
+
+    router.post("/:id/refund-stakes", authenticateToken, adminOnly, refundDisputedStakes);
+    // Older open admin pages use the former path. It now invokes the safe
+    // refund flow too, so a stale client can never transfer players' stakes.
+    router.post("/:id/forfeit-stakes", authenticateToken, adminOnly, refundDisputedStakes);
 
     router.post("/:id/clear", authenticateToken, adminOnly, async (req, res) => {
         const id = validId(req.params.id);

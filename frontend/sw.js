@@ -15,8 +15,6 @@ self.addEventListener("push", function(event) {
         const body = String(payload.body || "Open GOAL$GAMBIT to view your match update.").slice(0, 240);
         const eventId = Number(payload.eventId) || 0;
         const targetPath = safeTargetPath(payload.targetPath);
-        const isSender = String(payload.type || "").indexOf("room-code-needed") !== -1;
-        const isReceiver = String(payload.type || "").indexOf("room-code-sent") !== -1;
         const options = {
             body: body,
             icon: "images/notification-icon.svg",
@@ -29,8 +27,6 @@ self.addEventListener("push", function(event) {
                 trackingUrl: String(payload.trackingUrl || "")
             }
         };
-        if (isSender) options.actions = [{ action: "send-code", title: "Send code" }];
-        else if (isReceiver) options.actions = [{ action: "view-code", title: "View code" }];
         try {
             await self.registration.showNotification(title, options);
         } catch (_) {

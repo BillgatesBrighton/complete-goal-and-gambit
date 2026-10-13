@@ -672,6 +672,7 @@ async function sendStkPush({
 
         error.mpesaStatus =
             response.status;
+        error.providerHint = providerHint || genericHint;
 
         throw error;
     }
@@ -685,11 +686,63 @@ async function sendStkPush({
 
 module.exports = function (
     pool,
-    authenticateToken
+    authenticateToken,
+    pushService
 ) {
 
     const router =
         express.Router();
+
+    async function alertAdminsOfStkIssue(category, diagnostic) {
+        let client;
+        try {
+            client = await pool.connect();
+            await client.query("BEGIN");
+            const admins = await client.query(
+                "SELECT id FROM users WHERE role='admin' AND account_status='active'"
+            );
+            const detail = String(diagnostic || "No provider reason was returned.")
+                .replace(/(?:\+?254|0)\d{8,12}/g, "[phone redacted]")
+                .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[value redacted]")
+                .slice(0, 700);
+            process.stderr.write("M-Pesa STK issue (" + category + "): " + detail + "\n");
+            for (const admin of admins.rows) {
+                const adminId = Number(admin.id);
+                await client.query(
+                    `INSERT INTO system_notifications(user_id,type,title,message)
+                     VALUES($1,'mpesa_issue','M-Pesa deposit issue',$2)`,
+                    [adminId, "An STK deposit request failed (" + category + "). Review the backend log. Detail: " + detail]
+                );
+                if (pushService && typeof pushService.enqueueNotification === "function") {
+                    try {
+                        await pushService.enqueueNotification(client, adminId, {
+                            eventKey: "mpesa-issue:" + category + ":" + Date.now() + ":" + adminId,
+                            title: "M-Pesa deposit issue",
+                            body: "An STK request failed. Open the admin dashboard and review the backend log.",
+                            page: "match-hub"
+                        });
+                    } catch (_) {}
+                }
+            }
+            await client.query("COMMIT");
+            if (pushService && typeof pushService.sendPendingJobs === "function") {
+                pushService.sendPendingJobs().catch(() => {});
+            }
+        } catch (error) {
+            if (client) await client.query("ROLLBACK").catch(() => {});
+            process.stderr.write("M-Pesa admin alert could not be saved.\n");
+        } finally {
+            if (client) client.release();
+        }
+    }
+
+    function stkConfigurationFailure(res, category, diagnostic) {
+        alertAdminsOfStkIssue(category, diagnostic).catch(() => {});
+        return res.status(503).json({
+            success: false,
+            message: "The M-Pesa payment service is not ready. Admin has been notified to review the setup."
+        });
+    }
 
     router.get("/connectivity", authenticateToken, async (req, res) => {
         if (!req.user || req.user.role !== "admin") {
@@ -850,9 +903,10 @@ module.exports = function (
                     envValue("MPESA_TILL_NUMBER");
 
                 if (!["CustomerPayBillOnline", "CustomerBuyGoodsOnline"].includes(transactionType)) {
+                    alertAdminsOfStkIssue("invalid-transaction-type", "MPESA_TRANSACTION_TYPE is unsupported.").catch(() => {});
                     return res.status(503).json({
                         success: false,
-                        message: "MPESA_TRANSACTION_TYPE must be CustomerPayBillOnline or CustomerBuyGoodsOnline."
+                        message: "The M-Pesa payment service is not ready. Admin has been notified to review the setup."
                     });
                 }
 
@@ -864,23 +918,26 @@ module.exports = function (
                 }
 
                 if (transactionType === "CustomerBuyGoodsOnline" && !tillNumber) {
+                    alertAdminsOfStkIssue("missing-till-number", "CustomerBuyGoodsOnline is selected but MPESA_TILL_NUMBER is missing.").catch(() => {});
                     return res.status(503).json({
                         success: false,
-                        message: "MPESA_TILL_NUMBER is required for CustomerBuyGoodsOnline; set it to the Buy Goods Till number.",
+                        message: "The M-Pesa payment service is not ready. Admin has been notified to review the setup."
                     });
                 }
 
                 if (transactionType === "CustomerBuyGoodsOnline" && storeNumber && storeNumber !== shortcode) {
+                    alertAdminsOfStkIssue("shortcode-mismatch", "MPESA_STORE_NUMBER does not match MPESA_SHORTCODE.").catch(() => {});
                     return res.status(503).json({
                         success: false,
-                        message: "MPESA_STORE_NUMBER must match MPESA_SHORTCODE because the STK passkey is generated for that shortcode.",
+                        message: "The M-Pesa payment service is not ready. Admin has been notified to review the setup."
                     });
                 }
 
                 if (!isProduction() && shortcode !== "174379") {
+                    alertAdminsOfStkIssue("sandbox-shortcode-mismatch", "Sandbox shortcode does not match the expected shortcode.").catch(() => {});
                     return res.status(503).json({
                         success: false,
-                        message: "Sandbox Lipa na M-Pesa Online requires shortcode 174379 and its matching sandbox passkey."
+                        message: "The M-Pesa payment service is not ready. Admin has been notified to review the setup."
                     });
                 }
 
@@ -900,7 +957,8 @@ module.exports = function (
 
                 const callbackIssue = callbackUrlIssue(callbackUrl);
                 if (callbackIssue) {
-                    return res.status(503).json({ success:false, message:callbackIssue });
+                    alertAdminsOfStkIssue("invalid-callback-url", callbackIssue).catch(() => {});
+                    return res.status(503).json({ success:false, message:"The M-Pesa payment service is not ready. Admin has been notified to review the setup." });
                 }
 
                 // ------------------------------------------
@@ -1046,17 +1104,15 @@ module.exports = function (
                     ) !== "0"
                 ) {
 
+                    const providerReason = String(stkResponse.ResponseDescription || "M-Pesa rejected the STK Push.").slice(0, 250);
+                    alertAdminsOfStkIssue("provider-rejected", providerReason).catch(() => {});
+
                     return res.status(502).json({
 
                         success:
                             false,
 
-                        message:
-                            stkResponse.ResponseDescription ||
-                            "M-Pesa rejected the STK Push.",
-
-                        data:
-                            stkResponse
+                        message: providerReason + " Admin has been notified to review the payment service."
                     });
                 }
 
@@ -1068,16 +1124,15 @@ module.exports = function (
                     !stkResponse.CheckoutRequestID
                 ) {
 
+                    alertAdminsOfStkIssue("missing-checkout-reference", "Daraja returned no CheckoutRequestID.").catch(() => {});
+
                     return res.status(502).json({
 
                         success:
                             false,
 
                         message:
-                            "M-Pesa did not return a CheckoutRequestID.",
-
-                        data:
-                            stkResponse
+                            "Safaricom did not return a payment reference. Admin has been notified; check wallet history before retrying."
                     });
                 }
 
@@ -1160,13 +1215,22 @@ module.exports = function (
                     error
                 );
 
+                const diagnostic = error && error.message ? error.message : "Unknown STK request error.";
+                alertAdminsOfStkIssue("request-error", diagnostic).catch(() => {});
+                const userMessage = error && error.providerHint
+                    ? error.providerHint
+                    : error && error.mpesaStatus
+                        ? "Safaricom rejected the payment request (HTTP " + Number(error.mpesaStatus) + "). Admin has been notified to review the payment service."
+                        : error && error.invalidToken
+                            ? "Safaricom rejected the payment service credentials. Admin has been notified to review the Daraja app settings."
+                            : "The payment service could not start this STK request. Admin has been notified to review it.";
+
                 return res.status(error.upstreamFailure || error.mpesaStatus ? 502 : 500).json({
 
                     success:
                         false,
 
-                    message:
-                        error.message
+                    message: userMessage
                 });
             }
         }

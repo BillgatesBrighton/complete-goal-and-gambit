@@ -37,18 +37,44 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
         const adminId = Number(req.user.userId);
         try {
             await pool.query("INSERT INTO admin_wallets(admin_id) VALUES($1) ON CONFLICT(admin_id) DO NOTHING", [adminId]);
-            const [wallet, transactions] = await Promise.all([
+            const [wallet, clearMarker, transactions] = await Promise.all([
                 pool.query("SELECT balance,currency FROM admin_wallets WHERE admin_id=$1", [adminId]),
-                pool.query("SELECT transaction_type,amount,currency,status,reference,description,created_at FROM admin_wallet_transactions WHERE admin_id=$1 ORDER BY created_at DESC,id DESC LIMIT 50", [adminId])
+                pool.query("SELECT cleared_at FROM admin_wallet_history_clears WHERE admin_id=$1", [adminId]),
+                pool.query(`SELECT transaction_type,amount,currency,status,reference,description,created_at
+                              FROM admin_wallet_transactions
+                             WHERE admin_id=$1
+                               AND created_at > COALESCE((SELECT cleared_at FROM admin_wallet_history_clears WHERE admin_id=$1),'-infinity'::timestamptz)
+                             ORDER BY created_at DESC,id DESC LIMIT 50`, [adminId])
             ]);
             return res.json({
                 success: true,
                 wallet: { balance: Number(wallet.rows[0].balance || 0), currency: wallet.rows[0].currency || "KES" },
+                historyClearedAt: clearMarker.rows[0] ? clearMarker.rows[0].cleared_at : null,
                 transactions: transactions.rows
             });
         } catch (error) {
             console.error("Admin wallet read failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not load the administrator wallet." });
+        }
+    });
+
+    router.post("/history/clear", authenticateToken, adminOnly, async (req, res) => {
+        try {
+            const result = await pool.query(
+                `INSERT INTO admin_wallet_history_clears(admin_id,cleared_at)
+                 VALUES($1,NOW())
+                 ON CONFLICT(admin_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at
+                 RETURNING cleared_at`,
+                [Number(req.user.userId)]
+            );
+            return res.json({
+                success: true,
+                clearedAt: result.rows[0].cleared_at,
+                message: "Administrator wallet activity was cleared from this view. Financial ledger records were retained for reconciliation."
+            });
+        } catch (error) {
+            console.error("Admin wallet history clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear administrator wallet activity." });
         }
     });
 

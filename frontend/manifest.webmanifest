@@ -1,0 +1,14 @@
+{
+  "id": "./",
+  "name": "GOAL$GAMBIT",
+  "short_name": "GOAL$GAMBIT",
+  "description": "Chess and Konami eFootball matches",
+  "start_url": "pages/dashboard.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#080808",
+  "theme_color": "#080808",
+  "icons": [
+    { "src": "images/notification-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

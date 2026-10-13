@@ -19,18 +19,21 @@ require("dotenv").config({
 
 const authRoutes = require("./routes/auth");
 const walletRoutes = require("./routes/wallet");
+const userHistoryRoutes = require("./routes/userHistory");
 const chessRoutes = require("./routes/chess");
 const leaderboardRoutes = require("./routes/leaderboard");
 const chessCompetitionRoutes = require("./routes/chessCompetitions");
 const efootballRoutes = require("./routes/efootball");
 const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
+const createAndroidPushService = require("./services/androidPush");
 const tournamentRoutes = require("./routes/tournaments");
 const leagueRoutes = require("./routes/leagues");
 const mpesaRoutes = require("./routes/mpesa");
 const mpesaB2cFactory = require("./services/mpesaB2c");
 const mpesaC2bFactory = require("./services/mpesaC2b");
 const adminRoutes = require("./routes/admin");
+const adminMatchManagementRoutes = require("./routes/adminMatchManagement");
 const adminComplaintCases = require("./routes/adminComplaintCases");
 const adminWalletRoutes = require("./routes/adminWallet");
 const chatRoutes = require("./routes/chat");
@@ -83,7 +86,44 @@ const pool = new pg.Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000
 });
-const pushService = createWebPushService(pool);
+const webPushService = createWebPushService(pool);
+const androidPushService = createAndroidPushService(pool);
+const pushService = {
+    status: function () {
+        return Object.assign({}, webPushService.status(), {
+            androidConfigured: androidPushService.status().configured
+        });
+    },
+    enqueueNotification: async function (client, userId, notification) {
+        const event = await webPushService.enqueueNotification(client, userId, notification);
+        if (event.created) {
+            await client.query("SAVEPOINT android_push_enqueue");
+            try {
+                await androidPushService.enqueueNotification(client, event.id, userId);
+                await client.query("RELEASE SAVEPOINT android_push_enqueue");
+            } catch (error) {
+                await client.query("ROLLBACK TO SAVEPOINT android_push_enqueue").catch(function () {});
+                await client.query("RELEASE SAVEPOINT android_push_enqueue").catch(function () {});
+                console.error("Android push enqueue failed; match action remains committed.");
+            }
+        }
+        return event;
+    },
+    sendPendingJobs: function () {
+        return Promise.allSettled([
+            webPushService.sendPendingJobs(),
+            androidPushService.sendPendingJobs()
+        ]);
+    },
+    start: function () {
+        webPushService.start();
+        androidPushService.start();
+    },
+    stop: function () {
+        webPushService.stop();
+        androidPushService.stop();
+    }
+};
 
 authenticateToken.setPool(pool);
 
@@ -715,7 +755,7 @@ io.on(
 // REST API ROUTES
 // ======================================================
 
-const mpesaApi = mpesaRoutes(pool, authenticateToken);
+const mpesaApi = mpesaRoutes(pool, authenticateToken, pushService);
 const mpesaB2c = mpesaB2cFactory(pool);
 const mpesaC2b = mpesaC2bFactory(pool, authenticateToken);
 
@@ -734,6 +774,8 @@ app.use(
     )
 );
 
+app.use("/api/history", userHistoryRoutes(pool, authenticateToken));
+
 app.use(
     "/api/leaderboard",
     leaderboardRoutes(pool)
@@ -748,7 +790,7 @@ app.use(
 // before the authenticated chess router so these read-only views are public.
 app.use(
     "/api/chess/competitions",
-    chessCompetitionRoutes(pool)
+    chessCompetitionRoutes(pool, authenticateToken)
 );
 
 app.use(
@@ -805,6 +847,11 @@ app.use(
 app.use(
     "/api/admin",
     adminRoutes(pool, authenticateToken)
+);
+
+app.use(
+    "/api/admin/matches",
+    adminMatchManagementRoutes(pool, authenticateToken)
 );
 
 app.use(

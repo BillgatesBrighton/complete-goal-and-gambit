@@ -10,13 +10,23 @@
 node_modules/
 **/node_modules/
 
+# Android local configuration and build output
+android/.gradle/
+android/local.properties
+android/**/build/
+android/app/google-services.json
+android/*.jks
+android/*.keystore
+android/app/*.jks
+android/app/*.keystore
+
 # Logs and local data
 *.log
 npm-debug.log*
 *.db
-*.sqlite*
-*.sqlite3*
-**/uploads/
+*.sqlite
+*.sqlite3
+backend/uploads/
 
 # OS files
 Thumbs.db

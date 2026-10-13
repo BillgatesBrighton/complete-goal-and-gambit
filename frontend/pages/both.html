@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GOAL$GAMBIT | My Games</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <style>
         /* Combined dashboard background image */
@@ -14,7 +17,7 @@
         }
         .both-wrap { max-width: 1000px; margin: 0 auto; padding: 50px 20px 90px; }
         .both-wrap h1 { font-size: clamp(30px, 5vw, 50px); margin: 8px 0 6px; }
-        .both-wrap h1 span { color: var(--gold, #f4bd20); }
+        .both-wrap h1 span { color: inherit; font-family: "Pacifico", cursive; font-size: 1.2em; font-weight: 700; }
         .both-sub { color: var(--muted, #aaa); margin-bottom: 30px; }
         .both-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 34px; }
         .both-stat { background: rgba(15,15,15,0.88); border: 1px solid rgba(255,255,255,0.12); border-radius: 18px; padding: 22px; }
@@ -28,7 +31,14 @@
         .both-actions a, .both-actions button { cursor: pointer; }
         .both-logout { background: transparent; border: 1px solid rgba(255,255,255,0.25); color: #fff; padding: 14px 24px; border-radius: 12px; font-size: 15px; }
         .both-logout:hover { border-color: #f4bd20; }
-        .nav-user { color: #f4bd20; font-weight: 700; margin-right: 14px; }
+        .nav-user { color: inherit; font-family: "Pacifico", cursive; font-size: 18px; font-weight: 700; margin-right: 14px; }
+        .active-tournament-list { display:grid; gap:10px; }
+        .active-tournament-card { padding:13px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; background:rgba(8,8,8,0.65); }
+        .active-tournament-card h3 { margin:0 0 7px; color:#f4bd20; font-size:16px; }
+        .active-tournament-card p { margin:0 0 10px; color:#aaa; font-size:12px; }
+        .active-tournament-action { display:inline-block; margin:3px 7px 0 0; padding:8px 10px; border:1px solid #695719; border-radius:8px; color:#f4bd20; font-size:12px; font-weight:800; }
+        .active-tournament-action.secondary { border-color:#393939; color:#ddd; }
+        .active-tournament-empty { color:#aaa; font-size:13px; line-height:1.6; }
     </style>
 </head>
 <body>
@@ -73,6 +83,16 @@
             <p>Ranked head-to-head matches, leagues and tournaments against other players.</p>
             <a href="konami.html" class="primary-button">Enter eFootball <b>→</b></a>
         </article>
+
+        <article class="both-card">
+            <h3>♟ Your active Chess tournaments</h3>
+            <div id="bothActiveChessTournaments" aria-live="polite"><p class="active-tournament-empty">Loading your Chess entries…</p></div>
+        </article>
+
+        <article class="both-card">
+            <h3>⚽ Your active eFootball tournaments</h3>
+            <div id="bothActiveKonamiTournaments" aria-live="polite"><p class="active-tournament-empty">Loading your eFootball entries…</p></div>
+        </article>
     </div>
 
     <div class="both-actions">
@@ -92,9 +112,17 @@
 </footer>
 
 <script src="../js/api.js"></script>
+<script src="../js/active-tournaments.js"></script>
 <script>
 (function () {
-    function load() { GG.initDashboard("both"); }
+    async function load() {
+        const user = await GG.initDashboard("both");
+        if (!user) return;
+        await Promise.all([
+            GGActiveTournaments.loadChess("bothActiveChessTournaments"),
+            GGActiveTournaments.loadKonami("bothActiveKonamiTournaments")
+        ]);
+    }
     load();
     window.addEventListener("pageshow", function (e) { if (e.persisted) load(); });
     setInterval(function () { GG.refreshBalance().then(function (b) { if (b !== null) GG.fillBalance(b); }); }, 10000);

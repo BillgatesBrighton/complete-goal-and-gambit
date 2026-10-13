@@ -11,7 +11,8 @@ const vm = require("vm");
 
 process.env.JWT_SECRET = "push-tests-only-secret";
 const createWebPushService = require("../services/webPush");
-const { cleanSubscription } = require("../routes/push");
+const createAndroidPushService = require("../services/androidPush");
+const { cleanSubscription, cleanAndroidToken } = require("../routes/push");
 const createPushRoutes = require("../routes/push");
 
 const validSubscription = {
@@ -40,6 +41,82 @@ test("subscription validation accepts secure browser subscriptions and rejects u
     assert.equal(cleanSubscription({ ...validSubscription, endpoint: "https://127.0.0.1/push" }), null);
     assert.equal(cleanSubscription({ ...validSubscription, endpoint: "https://push.localhost/push" }), null);
     assert.equal(cleanSubscription({ ...validSubscription, keys: { p256dh: "short", auth: "short" } }), null);
+});
+
+test("Android token validation rejects empty, short, and whitespace-bearing tokens", () => {
+    assert.equal(cleanAndroidToken("A".repeat(100)), "A".repeat(100));
+    assert.equal(cleanAndroidToken("short"), null);
+    assert.equal(cleanAndroidToken("A".repeat(40) + "\n"), null);
+});
+
+test("Android subscription API assigns device ownership from authentication", async (t) => {
+    const calls = [];
+    const pool = {
+        query: async (sql, values) => {
+            calls.push({ sql, values });
+            return { rows: [{ id: 1 }], rowCount: 1 };
+        }
+    };
+    const service = { status: () => ({ configured: true, androidConfigured: true }) };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/push", createPushRoutes(pool, (req, _res, next) => {
+        req.user = { userId: 12 };
+        next();
+    }, service));
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const token = "A".repeat(120);
+    const response = await fetch("http://127.0.0.1:" + server.address().port + "/api/push/android/subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: 999, token, deviceId: "device-1" })
+    });
+    assert.equal(response.status, 201);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].values[0], 12);
+    assert.equal(calls[0].values[1], token);
+});
+
+test("Android push queue sends a data-only room-code action and records the delivery", async () => {
+    const sentMessages = [];
+    const queries = [];
+    const job = {
+        id: 9, event_id: 5, token_id: 2, attempt_count: 0,
+        event_key: "efootball-match:44:room-code-needed", match_id: 44,
+        title: "Your Match Is Ready", body: "Open GOAL$GAMBIT to send your room code.",
+        target_path: "pages/match-room.html?matchId=44", token: "fake-fcm-registration-token"
+    };
+    const pool = {
+        connect: async () => ({
+            query: async (sql, values) => {
+                queries.push({ sql, values });
+                return sql.includes("SELECT j.id,j.event_id") ? { rows: [job] } : { rows: [], rowCount: 1 };
+            },
+            release: () => {}
+        })
+    };
+    const service = createAndroidPushService(pool, {
+        projectId: "test-project",
+        messaging: { send: async (message) => { sentMessages.push(message); return "fcm-message-id"; } }
+    });
+    const inserted = await service.enqueueNotification({
+        query: async (sql, values) => {
+            queries.push({ sql, values });
+            return { rows: [] };
+        }
+    }, 5, 7);
+    assert.equal(inserted, true);
+    await service.sendPendingJobs();
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0].data.matchId, "44");
+    assert.equal(sentMessages[0].data.eventKey, "efootball-match:44:room-code-needed");
+    assert.equal(sentMessages[0].android.priority, "high");
+    assert.equal(Object.prototype.hasOwnProperty.call(sentMessages[0], "notification"), false);
+    assert.equal(sentMessages[0].data.roomCode, undefined);
+    assert.ok(queries.some((query) => query.sql.includes("INSERT INTO android_push_delivery_attempts")));
+    assert.ok(queries.some((query) => query.sql.includes("UPDATE android_push_delivery_jobs SET status=$2")));
 });
 
 test("subscription API stores ownership from the authenticated account", async (t) => {
@@ -82,6 +159,20 @@ test("match workflow, chat, and wallet page scripts parse", () => {
         scripts.forEach((source, index) => new vm.Script(source, { filename: file + ":script-" + index }));
         assert.doesNotMatch(html, /Notification\.requestPermission\(\)/);
     }
+});
+
+test("Android sender alert offers inline code reply and persists until successful send", () => {
+    const androidRoot = path.join(__dirname, "..", "..", "android", "app", "src", "main");
+    const notificationSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "Notifications.java"), "utf8");
+    const replySource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeReplyReceiver.java"), "utf8");
+    const manifest = fs.readFileSync(path.join(androidRoot, "AndroidManifest.xml"), "utf8");
+    assert.match(notificationSource, /new RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
+    assert.match(notificationSource, /"ENTER ROOM CODE"/);
+    assert.match(notificationSource, /\.setAutoCancel\(!persistent\)/);
+    assert.match(notificationSource, /NotificationManager\.IMPORTANCE_DEFAULT/);
+    assert.match(replySource, /Notifications\.showReplySending/);
+    assert.match(replySource, /Notifications\.showReplySuccess/);
+    assert.doesNotMatch(manifest, /SYSTEM_ALERT_WINDOW|TYPE_APPLICATION_OVERLAY/);
 });
 
 test("push notification insertion is idempotent and never accepts an external target", async () => {

@@ -424,6 +424,12 @@ td:nth-child(2) {
     </div>
 
 
+    <div class="status-box">
+        <h3>SEASON PRIZES</h3>
+        <p>1st: KSh 100 &nbsp; · &nbsp; 2nd: KSh 80 &nbsp; · &nbsp; 3rd: KSh 60</p>
+    </div>
+
+
     <div
         class="message"
         id="message">
@@ -459,6 +465,7 @@ td:nth-child(2) {
         </p>
 
         <button
+            id="joinLeagueButton"
             class="join-button"
             onclick="joinLeague()">
 
@@ -617,6 +624,8 @@ const PLAYERS_KEY =
 
 const RESULTS_KEY =
     "goalGambitLeagueResults_Bronze";
+const STANDINGS_KEY =
+    "goalGambitLeagueStandings_Bronze";
 
 
 function getUsername() {
@@ -738,17 +747,12 @@ async function joinLeague() {
     if (players.some(function (player) {
         return String(player.username).toLowerCase() === username.toLowerCase();
     })) {
-        showMessage("You are already in the Bronze League.");
+        openLeagueFixtures();
         return;
     }
 
     if (players.length >= 20) {
         alert("Bronze League is full.");
-        return;
-    }
-
-    // No balance, no entry: check the real wallet before asking the server.
-    if (!(await GG.hasBalance(STAKE))) {
         return;
     }
 
@@ -762,23 +766,30 @@ async function joinLeague() {
     await syncLeague();
     await GG.refreshBalance();
 
-    showMessage("You successfully joined the Bronze League.");
+    showMessage("You joined the Bronze League. KSh " + Number(result.data.entryFee || 0).toFixed(2) + " was locked from your wallet.");
+}
+
+function openLeagueFixtures() {
+    window.location.href = "fixtures.html?league=" + encodeURIComponent(LEAGUE);
 }
 
 // The league table comes from the server so every player sees the same members.
 async function syncLeague() {
-    const result = await GG.api("/api/leagues/" + LEAGUE, { noRedirect: true });
-    if (result.ok && Array.isArray(result.data.standings)) {
-        const players = result.data.standings.map(function (row) {
+    const tableResult = await GG.api("/api/leagues/" + LEAGUE, { noRedirect: true });
+    if (tableResult.ok && Array.isArray(tableResult.data.standings)) {
+        const players = tableResult.data.standings.map(function (row) {
             return {
                 username: row.username,
-                stake: STAKE,
-                paid: true,
+                stake: Number(row.fee_paid || 0),
+                paid: Number(row.fee_paid || 0) >= STAKE,
                 refunded: false,
-                joinedAt: new Date().toISOString()
+                joinedAt: row.joined_at || null
             };
         });
         localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
+        localStorage.setItem(STANDINGS_KEY, JSON.stringify(tableResult.data.standings.map(function(row) {
+            return { username:row.username, P:Number(row.played||0), W:Number(row.wins||0), D:Number(row.draws||0), L:Number(row.losses||0), GF:Number(row.goals_for||0), GA:Number(row.goals_against||0), GD:Number(row.goal_difference||0), Pts:Number(row.points||0) };
+        })));
     }
     render();
 }
@@ -794,6 +805,19 @@ function renderStats() {
 
     const username =
         getUsername();
+
+    let serverStandings = null;
+    try { serverStandings = JSON.parse(localStorage.getItem(STANDINGS_KEY) || "null"); } catch (_) {}
+    if (Array.isArray(serverStandings)) {
+        const mine = serverStandings.find(function(row) { return String(row.username).toLowerCase() === username.toLowerCase(); });
+        const totalPlayed = serverStandings.reduce(function(total,row) { return total + Number(row.P||0); }, 0);
+        document.getElementById("statPlayers").textContent = players.length;
+        document.getElementById("statMatches").textContent = Math.floor(totalPlayed / 2);
+        document.getElementById("statYourGames").textContent = Number(mine && mine.P || 0);
+        document.getElementById("statYourPoints").textContent = Number(mine && mine.Pts || 0);
+        document.getElementById("leagueStatus").textContent = players.length + " / 20 players have joined.";
+        return;
+    }
 
     let games = 0;
     let points = 0;
@@ -932,6 +956,22 @@ function renderPlayers() {
 
 
 function renderStandings() {
+
+    let serverStandings = null;
+    try { serverStandings = JSON.parse(localStorage.getItem(STANDINGS_KEY) || "null"); } catch (_) {}
+    if (Array.isArray(serverStandings)) {
+        const username = getUsername().toLowerCase();
+        const body = document.getElementById("standingsBody");
+        if (!serverStandings.length) {
+            body.innerHTML = '<tr><td colspan="10">No players have joined the Bronze League yet.</td></tr>';
+            return;
+        }
+        body.innerHTML = serverStandings.map(function(player,index) {
+            const current = String(player.username).toLowerCase() === username;
+            return '<tr><td class="position">' + (index+1) + '</td><td style="' + (current ? 'color:#fff;font-weight:bold;' : '') + '">' + escapeHTML(player.username) + '</td><td>' + Number(player.P||0) + '</td><td>' + Number(player.W||0) + '</td><td>' + Number(player.D||0) + '</td><td>' + Number(player.L||0) + '</td><td>' + Number(player.GF||0) + '</td><td>' + Number(player.GA||0) + '</td><td>' + Number(player.GD||0) + '</td><td><strong>' + Number(player.Pts||0) + '</strong></td></tr>';
+        }).join("");
+        return;
+    }
 
     const players =
         getPlayers();
@@ -1135,6 +1175,14 @@ function render() {
     renderStats();
     renderPlayers();
     renderStandings();
+    const joined = getPlayers().some(function(player) {
+        return String(player.username || "").toLowerCase() === getUsername().toLowerCase();
+    });
+    const joinButton = document.getElementById("joinLeagueButton");
+    if (joinButton) {
+        joinButton.textContent = joined ? "VIEW LEAGUE FIXTURES" : "JOIN BRONZE LEAGUE";
+        joinButton.onclick = joined ? openLeagueFixtures : joinLeague;
+    }
 
 }
 
@@ -1148,7 +1196,7 @@ window.addEventListener(
 
 window.addEventListener(
     "pageshow",
-    render
+    syncLeague
 );
 
 </script>

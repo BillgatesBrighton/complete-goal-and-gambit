@@ -820,7 +820,8 @@ async function settleMatch(
 pool,
 matchId,
 result,
-winnerId
+winnerId,
+adminAction = null
 ) {
 
 const client =
@@ -896,7 +897,7 @@ try {
                 winner_id = $2,
                 finished_at = NOW(),
                 settled_at = NOW(),
-                payout_status = 'not_applicable'
+                payout_status = CASE WHEN stake_amount > 0 THEN 'pending_competition' ELSE 'not_applicable' END
             WHERE id = $3
             `,
             [
@@ -905,6 +906,14 @@ try {
                 matchId
             ]
         );
+
+        if (adminAction) {
+            await client.query(
+                `INSERT INTO admin_match_management_events(game,match_id,admin_id,action,reason,details)
+                 VALUES('chess',$1,$2,'scores_set',$3,$4::jsonb)`,
+                [matchId, adminAction.adminId, adminAction.reason, JSON.stringify({ result: result, winnerId: winnerId || null })]
+            );
+        }
 
         await client.query("COMMIT");
 
@@ -942,6 +951,14 @@ try {
                 matchId
             ]
         );
+
+        if (adminAction) {
+            await client.query(
+                `INSERT INTO admin_match_management_events(game,match_id,admin_id,action,reason,details)
+                 VALUES('chess',$1,$2,'scores_set',$3,$4::jsonb)`,
+                [matchId, adminAction.adminId, adminAction.reason, JSON.stringify({ result: result, winnerId: winnerId || null })]
+            );
+        }
 
         await client.query("COMMIT");
 
@@ -1241,6 +1258,14 @@ try {
         ]
     );
 
+    if (adminAction) {
+        await client.query(
+            `INSERT INTO admin_match_management_events(game,match_id,admin_id,action,reason,details)
+             VALUES('chess',$1,$2,'scores_set',$3,$4::jsonb)`,
+            [matchId, adminAction.adminId, adminAction.reason, JSON.stringify({ result: result, winnerId: result === "draw" ? null : Number(winnerId) })]
+        );
+    }
+
     await client.query("COMMIT");
 
     return {
@@ -1280,6 +1305,21 @@ try {
 module.exports = function (pool, authenticateToken, io) {
 
     const router = express.Router();
+
+    async function registerTournamentEntry(client, userId, control, stake) {
+        const entry = await client.query(
+            `INSERT INTO chess_tournament_entries(season_key,time_control,stake_amount,user_id)
+             VALUES(TO_CHAR(date_trunc('month',NOW()),'YYYY-MM'),$1,$2,$3)
+             ON CONFLICT(season_key,time_control,stake_amount,user_id) DO UPDATE
+                SET cancelled_at=NULL
+              WHERE chess_tournament_entries.forfeited_at IS NULL
+             RETURNING id`,
+            [control.label, stake, userId]
+        );
+        if (!entry.rows.length) {
+            throw Object.assign(new Error("You have forfeited this chess tournament for the current month."), { status: 409 });
+        }
+    }
 
     async function settleExpiredClock(matchId) {
         const client = await pool.connect();
@@ -1583,6 +1623,7 @@ module.exports = function (pool, authenticateToken, io) {
             if (open.rows.length) {
                 const id = open.rows[0].id;
                 if (stake > 0) await lockStake(client,userId,stake,`CHESS-LOCK-${Date.now()}-${userId}`);
+                if (matchType === "tournament") await registerTournamentEntry(client,userId,control,stake);
                 await client.query(
                     `UPDATE chess_matches
                         SET player_black_id=$1, status='active', started_at=NOW(), last_move_at=NOW(), active_color='w'
@@ -1594,6 +1635,7 @@ module.exports = function (pool, authenticateToken, io) {
             }
 
             if (stake > 0) await lockStake(client,userId,stake,`CHESS-LOCK-${Date.now()}-${userId}`);
+            if (matchType === "tournament") await registerTournamentEntry(client,userId,control,stake);
             const r = await client.query(
                 `INSERT INTO chess_matches(player_white_id,status,fen,white_time_ms,black_time_ms,time_control,match_type,stake_amount,active_color)
                  VALUES($1,'waiting',$2,$3,$3,$4,$5,$6,'w') RETURNING id`,
@@ -1616,6 +1658,11 @@ module.exports = function (pool, authenticateToken, io) {
                         player_white_id, player_black_id, finished_at
                    FROM chess_matches
                   WHERE (player_white_id = $1 OR player_black_id = $1) AND status = 'completed'
+                    AND COALESCE(finished_at, created_at) > COALESCE(
+                        (SELECT cleared_at FROM user_history_clears
+                         WHERE user_id = $1 AND history_type = 'matches'),
+                        '-infinity'::timestamptz
+                    )
                   ORDER BY finished_at DESC NULLS LAST, id DESC
                   LIMIT 100`, [uid]);
             const games = r.rows.map(function (m) {
@@ -1668,6 +1715,10 @@ module.exports = function (pool, authenticateToken, io) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            await client.query(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                ["goal-gambit-chess-user:" + userId]
+            );
             const account = await client.query(
                 "SELECT game, account_status FROM users WHERE id=$1 FOR UPDATE",
                 [userId]
@@ -1698,6 +1749,9 @@ module.exports = function (pool, authenticateToken, io) {
             }
             if (stake > 0) {
                 await lockStake(client, userId, stake, `CHESS-LOCK-${Date.now()}-${userId}`);
+            }
+            if (match.match_type === "tournament") {
+                await registerTournamentEntry(client,userId,{label:match.time_control},stake);
             }
             await client.query(
                 `UPDATE chess_matches
@@ -1877,4 +1931,6 @@ module.exports = function (pool, authenticateToken, io) {
     return router;
 
 };
+
+module.exports.settleMatch = settleMatch;
 

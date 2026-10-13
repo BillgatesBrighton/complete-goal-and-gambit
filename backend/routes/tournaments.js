@@ -27,46 +27,42 @@ module.exports = function (pool, authenticateToken) {
                 `SELECT t.id, t.name, t.tier, t.entry_fee, t.max_players,
                         t.status, t.starts_at, t.created_at,
                         COUNT(tm.id)::int AS players,
-                        COALESCE(BOOL_OR(tm.user_id = $1), FALSE) AS joined,
+                        EXISTS (
+                            SELECT 1 FROM efootball_tournament_members own
+                             WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.forfeited_at IS NULL
+                        ) AS joined,
+                        EXISTS (
+                            SELECT 1 FROM efootball_tournament_members own
+                             WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.forfeited_at IS NOT NULL
+                        ) AS forfeited,
                         EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.first_match_at IS NULL
                                AND own.forfeited_at IS NULL
-                               AND NOT EXISTS (
-                                   SELECT 1 FROM efootball_tournament_fixtures f
-                                    WHERE f.tournament_id=t.id AND f.round_number=1 AND f.away_id IS NOT NULL
-                                      AND (f.home_id=$1 OR f.away_id=$1)
-                               )
+                               AND t.status IN ('open','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
                                       AND (played.creator_id=$1 OR played.opponent_id=$1)
                                       AND (played.started_at IS NOT NULL OR played.status IN ('playing','awaiting_verification','disputed','completed'))
                                )
-                        ) AS can_cancel
-                        , EXISTS (
+                        ) AS can_cancel,
+                        EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
-                             WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.first_match_at IS NULL
-                               AND own.forfeited_at IS NULL AND own.played=0
-                               AND EXISTS (
-                                   SELECT 1 FROM efootball_tournament_fixtures f
-                                    LEFT JOIN efootball_matches m ON m.id=f.match_id
-                                    WHERE f.tournament_id=t.id AND f.round_number=1 AND f.away_id IS NOT NULL
-                                      AND f.status IN ('scheduled','playing')
-                                      AND (f.home_id=$1 OR f.away_id=$1)
-                                      AND (m.id IS NULL OR (m.started_at IS NULL AND m.status IN ('waiting','ready')))
-                               )
+                             WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.forfeited_at IS NULL
+                               AND own.played > 0
+                               AND t.status IN ('open','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
                                       AND (played.creator_id=$1 OR played.opponent_id=$1)
-                                      AND (played.started_at IS NOT NULL OR played.settled_at IS NOT NULL
-                                           OR played.status IN ('playing','awaiting_verification','disputed','completed'))
+                                      AND (played.status IN ('playing','awaiting_verification','disputed')
+                                           OR (played.started_at IS NOT NULL AND played.status NOT IN ('completed','cancelled')))
                                )
                         ) AS can_forfeit
                  FROM efootball_tournaments t
                  LEFT JOIN efootball_tournament_members tm
-                   ON tm.tournament_id = t.id
+                   ON tm.tournament_id = t.id AND tm.forfeited_at IS NULL
                  GROUP BY t.id
                  ORDER BY CASE WHEN t.status = 'open' THEN 0 ELSE 1 END,
                           t.starts_at NULLS LAST, t.created_at DESC`,
@@ -99,45 +95,41 @@ module.exports = function (pool, authenticateToken) {
                 `SELECT t.id, t.name, t.tier, t.entry_fee, t.max_players,
                         t.status, t.starts_at, t.created_at,
                         COUNT(tm.id)::int AS players,
-                        COALESCE(BOOL_OR(tm.user_id = $2), FALSE) AS joined,
+                        EXISTS (
+                            SELECT 1 FROM efootball_tournament_members own
+                             WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.forfeited_at IS NULL
+                        ) AS joined,
+                        EXISTS (
+                            SELECT 1 FROM efootball_tournament_members own
+                             WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.forfeited_at IS NOT NULL
+                        ) AS forfeited,
                         EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.first_match_at IS NULL
                                AND own.forfeited_at IS NULL
-                               AND NOT EXISTS (
-                                   SELECT 1 FROM efootball_tournament_fixtures f
-                                    WHERE f.tournament_id=t.id AND f.round_number=1 AND f.away_id IS NOT NULL
-                                      AND (f.home_id=$2 OR f.away_id=$2)
-                               )
+                               AND t.status IN ('open','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
                                       AND (played.creator_id=$2 OR played.opponent_id=$2)
                                       AND (played.started_at IS NOT NULL OR played.status IN ('playing','awaiting_verification','disputed','completed'))
                                )
-                        ) AS can_cancel
-                        , EXISTS (
+                        ) AS can_cancel,
+                        EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
-                             WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.first_match_at IS NULL
-                               AND own.forfeited_at IS NULL AND own.played=0
-                               AND EXISTS (
-                                   SELECT 1 FROM efootball_tournament_fixtures f
-                                    LEFT JOIN efootball_matches m ON m.id=f.match_id
-                                    WHERE f.tournament_id=t.id AND f.round_number=1 AND f.away_id IS NOT NULL
-                                      AND f.status IN ('scheduled','playing')
-                                      AND (f.home_id=$2 OR f.away_id=$2)
-                                      AND (m.id IS NULL OR (m.started_at IS NULL AND m.status IN ('waiting','ready')))
-                               )
+                             WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.forfeited_at IS NULL
+                               AND own.played > 0
+                               AND t.status IN ('open','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
                                       AND (played.creator_id=$2 OR played.opponent_id=$2)
-                                      AND (played.started_at IS NOT NULL OR played.settled_at IS NOT NULL
-                                           OR played.status IN ('playing','awaiting_verification','disputed','completed'))
+                                      AND (played.status IN ('playing','awaiting_verification','disputed')
+                                           OR (played.started_at IS NOT NULL AND played.status NOT IN ('completed','cancelled')))
                                )
                         ) AS can_forfeit
                  FROM efootball_tournaments t
-                 LEFT JOIN efootball_tournament_members tm ON tm.tournament_id=t.id
+                 LEFT JOIN efootball_tournament_members tm ON tm.tournament_id=t.id AND tm.forfeited_at IS NULL
                  WHERE t.id=$1 GROUP BY t.id`,
                 [id, req.user.userId]
             );
@@ -152,7 +144,7 @@ module.exports = function (pool, authenticateToken) {
                         tm.played, tm.wins, tm.draws, tm.losses, tm.points,
                         tm.goal_difference, tm.goals_for, tm.goals_against
                    FROM efootball_tournament_members tm JOIN users u ON u.id=tm.user_id
-                  WHERE tm.tournament_id=$1
+                  WHERE tm.tournament_id=$1 AND tm.forfeited_at IS NULL
                   ORDER BY tm.group_code, tm.points DESC, tm.goal_difference DESC,
                            tm.goals_for DESC, tm.wins DESC, tm.joined_at, tm.id`,
                 [id]
@@ -420,17 +412,6 @@ module.exports = function (pool, authenticateToken) {
             if (!memberResult.rows.length) throw httpError(404, "You have not entered this tournament.");
             const member = memberResult.rows[0];
 
-            const releasedFixture = await client.query(
-                `SELECT 1 FROM efootball_tournament_fixtures
-                  WHERE tournament_id=$1 AND round_number=1 AND away_id IS NOT NULL
-                    AND (home_id=$2 OR away_id=$2)
-                  LIMIT 1`,
-                [id, userId]
-            );
-            if (releasedFixture.rows.length) {
-                throw httpError(409, "The first fixture is out. Use Forfeit tournament to transfer the locked stake to the admins.");
-            }
-
             const played = await client.query(
                 `SELECT 1 FROM efootball_matches
                   WHERE tournament_id=$1 AND (creator_id=$2 OR opponent_id=$2)
@@ -547,10 +528,13 @@ module.exports = function (pool, authenticateToken) {
         try {
             await client.query("BEGIN");
             const tournamentResult = await client.query(
-                "SELECT id,name FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
+                "SELECT id,name,status FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
                 [id]
             );
             if (!tournamentResult.rows.length) throw httpError(404, "Tournament not found.");
+            if (!["open", "in_progress"].includes(String(tournamentResult.rows[0].status))) {
+                throw httpError(409, "This tournament is no longer active, so entries cannot be forfeited.");
+            }
 
             const memberResult = await client.query(
                 `SELECT * FROM efootball_tournament_members
@@ -560,29 +544,37 @@ module.exports = function (pool, authenticateToken) {
             if (!memberResult.rows.length) throw httpError(404, "You have not entered this tournament.");
             const member = memberResult.rows[0];
             if (member.forfeited_at) throw httpError(409, "You have already forfeited this tournament.");
-            if (member.first_match_at || Number(member.played || 0) > 0) {
-                throw httpError(409, "You can only forfeit before your first tournament match is played.");
+            if (Number(member.played || 0) < 1) {
+                throw httpError(409, "Forfeit becomes available after your first tournament match is completed. Cancel before then to receive your locked entry fee back.");
             }
 
-            const fixtureResult = await client.query(
-                `SELECT * FROM efootball_tournament_fixtures
-                  WHERE tournament_id=$1 AND round_number=1 AND away_id IS NOT NULL
-                    AND (home_id=$2 OR away_id=$2) AND status IN ('scheduled','playing')
-                  ORDER BY id LIMIT 1 FOR UPDATE`,
+            const activeMatch = await client.query(
+                `SELECT id FROM efootball_matches
+                  WHERE tournament_id=$1 AND (creator_id=$2 OR opponent_id=$2)
+                    AND (status IN ('playing','awaiting_verification','disputed')
+                         OR (started_at IS NOT NULL AND status NOT IN ('completed','cancelled')))
+                  LIMIT 1 FOR UPDATE`,
                 [id, userId]
             );
-            if (!fixtureResult.rows.length) {
-                throw httpError(409, "Forfeiting becomes available after your first opponent fixture is released.");
+            if (activeMatch.rows.length) {
+                throw httpError(409, "Finish or resolve your current tournament match before forfeiting.");
             }
-            const fixture = fixtureResult.rows[0];
-            const linkedMatchResult = fixture.match_id
-                ? await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [fixture.match_id])
-                : { rows: [] };
-            const linkedMatch = linkedMatchResult.rows[0] || null;
-            if (linkedMatch && (linkedMatch.started_at || linkedMatch.settled_at ||
-                ["playing", "awaiting_verification", "disputed", "completed"].includes(String(linkedMatch.status)))) {
-                throw httpError(409, "Your first match has already started. Forfeiting is no longer available.");
-            }
+
+            const queuedMatches = await client.query(
+                `SELECT * FROM efootball_matches
+                  WHERE tournament_id=$1 AND (creator_id=$2 OR opponent_id=$2)
+                    AND status IN ('waiting','ready') AND started_at IS NULL AND settled_at IS NULL
+                  FOR UPDATE`,
+                [id, userId]
+            );
+
+            const openFixtures = await client.query(
+                `SELECT * FROM efootball_tournament_fixtures
+                  WHERE tournament_id=$1 AND status IN ('scheduled','playing')
+                    AND (home_id=$2 OR away_id=$2)
+                  ORDER BY round_number,id FOR UPDATE`,
+                [id, userId]
+            );
 
             const fee = Math.max(0, Number(member.fee_paid || 0));
             if (!Number.isFinite(fee)) throw httpError(500, "The tournament stake is invalid.");
@@ -593,7 +585,7 @@ module.exports = function (pool, authenticateToken) {
                 throw httpError(409, "Both administrator accounts must be available before this stake can be forfeited.");
             }
 
-            if (linkedMatch) {
+            for (const match of queuedMatches.rows) {
                 await client.query(
                     `UPDATE efootball_matches
                         SET status='cancelled',result_status='tournament_entry_forfeit',
@@ -602,7 +594,7 @@ module.exports = function (pool, authenticateToken) {
                             code_sent=FALSE,code_sender_id=NULL
                       WHERE id=$1 AND started_at IS NULL AND settled_at IS NULL
                         AND status IN ('waiting','ready')`,
-                    [linkedMatch.id]
+                    [match.id]
                 );
             }
 
@@ -645,29 +637,61 @@ module.exports = function (pool, authenticateToken) {
                 );
             }
 
-            const forfeiterIsHome = Number(fixture.home_id) === userId;
-            const winnerId = forfeiterIsHome ? Number(fixture.away_id) : Number(fixture.home_id);
-            const homeScore = forfeiterIsHome ? 0 : 3;
-            const awayScore = forfeiterIsHome ? 3 : 0;
-            const recorded = await recordFixtureResult(client, fixture, {
-                status: "walkover",
-                homeScore,
-                awayScore,
-                winnerId
-            });
-            if (!recorded) throw httpError(409, "This fixture has already been settled.");
-
             await client.query(
                 `UPDATE efootball_tournament_members
-                    SET forfeited_at=NOW(),first_match_at=COALESCE(first_match_at,NOW())
+                    SET forfeited_at=NOW()
                   WHERE tournament_id=$1 AND user_id=$2`,
                 [id, userId]
             );
-            await client.query(
-                `UPDATE efootball_tournament_members SET first_match_at=COALESCE(first_match_at,NOW())
-                  WHERE tournament_id=$1 AND user_id=$2`,
-                [id, winnerId]
-            );
+
+            let walkovers = 0;
+            for (const fixture of openFixtures.rows) {
+                if (fixture.match_id) {
+                    const matchResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [fixture.match_id]);
+                    const match = matchResult.rows[0];
+                    if (match && (match.started_at || ["playing","awaiting_verification","disputed"].includes(String(match.status)))) {
+                        throw httpError(409, "Finish or resolve your current tournament match before forfeiting.");
+                    }
+                    if (match && match.settled_at && match.status === "completed") {
+                        const creatorId = Number(match.creator_id);
+                        const opponentId = Number(match.opponent_id);
+                        const homeScore = creatorId === Number(fixture.home_id) ? Number(match.creator_score || 0) : Number(match.opponent_score || 0);
+                        const awayScore = opponentId === Number(fixture.away_id) ? Number(match.opponent_score || 0) : Number(match.creator_score || 0);
+                        const winnerId = homeScore > awayScore ? Number(fixture.home_id) : awayScore > homeScore ? Number(fixture.away_id) : null;
+                        await client.query(
+                            `UPDATE efootball_tournament_fixtures
+                                SET status='completed',home_score=$1,away_score=$2,winner_id=$3,resolved_at=COALESCE(resolved_at,NOW())
+                              WHERE id=$4`,
+                            [homeScore, awayScore, winnerId, fixture.id]
+                        );
+                        continue;
+                    }
+                }
+
+                const remainingPlayer = Number(fixture.home_id) === userId ? fixture.away_id : fixture.home_id;
+                if (remainingPlayer == null) {
+                    await client.query(
+                        "UPDATE efootball_tournament_fixtures SET status='cancelled',resolved_at=NOW() WHERE id=$1",
+                        [fixture.id]
+                    );
+                    continue;
+                }
+                const forfeiterIsHome = Number(fixture.home_id) === userId;
+                const winnerId = Number(remainingPlayer);
+                const recorded = await recordFixtureResult(client, fixture, {
+                    status: "walkover",
+                    homeScore: forfeiterIsHome ? 0 : 3,
+                    awayScore: forfeiterIsHome ? 3 : 0,
+                    winnerId
+                });
+                if (!recorded) throw httpError(409, "A remaining tournament fixture has already been settled.");
+                await client.query(
+                    `UPDATE efootball_tournament_members SET first_match_at=COALESCE(first_match_at,NOW())
+                      WHERE tournament_id=$1 AND user_id=$2`,
+                    [id, winnerId]
+                );
+                walkovers += 1;
+            }
 
             await client.query("COMMIT");
             return res.json({
@@ -675,8 +699,8 @@ module.exports = function (pool, authenticateToken) {
                 forfeited: true,
                 stakeTransferred: fee,
                 message: fee > 0
-                    ? "Tournament forfeited. Your KSh " + fee.toFixed(2) + " stake was split between both admin wallets, and your opponent received a walkover."
-                    : "Tournament forfeited. Your opponent received a walkover."
+                    ? "Tournament forfeited. Your KSh " + fee.toFixed(2) + " entry stake was split between both admin wallets." + (walkovers ? " Remaining fixtures were awarded as walkovers." : "")
+                    : "Tournament forfeited." + (walkovers ? " Remaining fixtures were awarded as walkovers." : "")
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});

@@ -198,6 +198,40 @@ body {
     cursor: not-allowed;
 }
 
+.match-guidance {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0 0 18px;
+}
+
+.match-guidance article {
+    padding: 15px 17px;
+    border: 1px solid #6d5718;
+    border-left: 4px solid #d4af37;
+    border-radius: 9px;
+    background: #171307;
+}
+
+.match-guidance h2 {
+    color: #f0cf55;
+    font-size: 13px;
+    line-height: 1.4;
+    letter-spacing: .5px;
+    margin-bottom: 7px;
+}
+
+.match-guidance p {
+    color: #e2dfd6;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.match-guidance a {
+    color: #f0cf55;
+    font-weight: 800;
+}
+
 .message {
     display: none;
 
@@ -379,6 +413,10 @@ body {
         grid-template-columns: 1fr 1fr;
     }
 
+    .match-guidance {
+        grid-template-columns: 1fr;
+    }
+
     .balance-box {
         gap: 15px;
         align-items: flex-start;
@@ -507,6 +545,18 @@ body {
             </button>
 
         </div>
+
+
+        <section class="match-guidance" aria-label="Before you enter matchmaking">
+            <article>
+                <h2>SCREENSHOT REQUIRED IN MATCH SUBMISSION</h2>
+                <p>Keep a clear final-score screenshot ready. If you are selected for result verification, attach it when submitting your score. It is required before your second score submission if the first reports differ.</p>
+            </article>
+            <article>
+                <h2>NOTIFICATION APPEARS FOR ROOM CODE</h2>
+                <p>When your opponent sends the room code, an alert appears on your device and in Match Hub. Open it to view and confirm the code. Enable <a href="notification-settings.html">match notifications</a> to receive device alerts; the selected sender is notified when the match is ready.</p>
+            </article>
+        </section>
 
 
         <button
@@ -1394,4 +1444,3 @@ window.addEventListener(
 </body>
 
 </html>
-

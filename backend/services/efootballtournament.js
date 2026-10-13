@@ -2,6 +2,7 @@
 
 const ROUND_DURATION_MINUTES = 20;
 const LEAGUE_ROUND_DURATION_MINUTES = 25;
+const { settleEfootballCompetition } = require("./efootballpayouts");
 
 function pairingsForRound(players, roundNumber) {
     const circle = players.slice();
@@ -10,7 +11,9 @@ function pairingsForRound(players, roundNumber) {
 
     const count = circle.length;
     const roundsPerCycle = count - 1;
-    const rotation = (Math.max(1, Number(roundNumber) || 1) - 1) % roundsPerCycle;
+    const requestedRound = Math.max(1, Number(roundNumber) || 1);
+    const cycle = Math.floor((requestedRound - 1) / roundsPerCycle);
+    const rotation = (requestedRound - 1) % roundsPerCycle;
     for (let turn = 0; turn < rotation; turn += 1) {
         const last = circle.pop();
         circle.splice(1, 0, last);
@@ -18,12 +21,69 @@ function pairingsForRound(players, roundNumber) {
 
     const pairings = [];
     for (let index = 0; index < count / 2; index += 1) {
-        const home = circle[index];
-        const away = circle[count - 1 - index];
+        let home = circle[index];
+        let away = circle[count - 1 - index];
+        if (cycle % 2 === 1) [home, away] = [away, home];
         if (home) pairings.push({ home, away: away || null });
         else if (away) pairings.push({ home: away, away: null });
     }
     return pairings;
+}
+
+async function tournamentRoundCount(client, tournamentId) {
+    const groups = await client.query(
+        `SELECT group_code,COUNT(*)::int AS players
+           FROM efootball_tournament_members
+          WHERE tournament_id=$1
+          GROUP BY group_code`,
+        [tournamentId]
+    );
+    const largestGroup = groups.rows.reduce((largest, row) => Math.max(largest, Number(row.players || 0)), 0);
+    return largestGroup < 2 ? 0 : (largestGroup % 2 === 0 ? largestGroup - 1 : largestGroup);
+}
+
+async function leagueRoundCount(client, leagueId) {
+    const count = await client.query(
+        "SELECT COUNT(*)::int AS players FROM efootball_league_members WHERE league_id=$1",
+        [leagueId]
+    );
+    const players = Number(count.rows[0] && count.rows[0].players || 0);
+    if (players < 2) return 0;
+    return (players % 2 === 0 ? players - 1 : players) * 2;
+}
+
+async function finishTournament(client, tournament, finalRound) {
+    await client.query(
+        "UPDATE efootball_tournament_rounds SET completed_at=COALESCE(completed_at,NOW()) WHERE id=$1",
+        [finalRound.id]
+    );
+    const result = await client.query(
+        `UPDATE efootball_tournaments SET status='completed',completed_at=COALESCE(completed_at,NOW())
+          WHERE id=$1 AND status<>'completed'
+          RETURNING id,name,entry_fee`,
+        [tournament.id]
+    );
+    if (result.rows.length) {
+        return settleEfootballCompetition(client, "tournament", result.rows[0], `season-${tournament.id}`);
+    }
+    return { alreadySettled: true };
+}
+
+async function finishLeague(client, league, finalRound) {
+    await client.query(
+        "UPDATE efootball_league_rounds SET completed_at=COALESCE(completed_at,NOW()) WHERE id=$1",
+        [finalRound.id]
+    );
+    const result = await client.query(
+        `UPDATE efootball_leagues SET status='completed',completed_at=COALESCE(completed_at,NOW())
+          WHERE id=$1 AND status<>'completed'
+          RETURNING id,name,entry_stake`,
+        [league.id]
+    );
+    if (result.rows.length) {
+        return settleEfootballCompetition(client, "league", result.rows[0], `season-${league.id}`);
+    }
+    return { alreadySettled: true };
 }
 
 async function recordFixtureResult(client, fixture, result) {
@@ -222,10 +282,11 @@ async function createRound(client, tournamentId, roundNumber) {
 
 async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
     const tournamentResult = await client.query(
-        "SELECT id,status FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
+        "SELECT id,name,status,entry_fee,season_rounds FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
         [tournamentId]
     );
-    if (!tournamentResult.rows.length || tournamentResult.rows[0].status !== "open") return null;
+    if (!tournamentResult.rows.length || !["open", "in_progress"].includes(tournamentResult.rows[0].status)) return null;
+    const tournament = tournamentResult.rows[0];
 
     let latestResult = await client.query(
         `SELECT * FROM efootball_tournament_rounds
@@ -241,6 +302,17 @@ async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
             "SELECT * FROM efootball_tournament_rounds WHERE tournament_id=$1 ORDER BY round_number DESC LIMIT 1 FOR UPDATE",
             [tournamentId]
         )).rows[0];
+        const rounds = Number(tournament.season_rounds || 0);
+        if (rounds > 0 && Number(latest.round_number) >= rounds) {
+            await finishTournament(client, tournament, latest);
+            return { ...latest, completed_at: latest.completed_at || new Date() };
+        }
+    }
+
+    if (latest && latest.completed_at && Number(tournament.season_rounds || 0) > 0 &&
+        Number(latest.round_number) >= Number(tournament.season_rounds)) {
+        await finishTournament(client, tournament, latest);
+        return latest;
     }
 
     if (!latest || latest.completed_at) {
@@ -248,6 +320,8 @@ async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
         const nextRound = latest ? Number(latest.round_number) + 1 : 1;
         latest = await createRound(client, tournamentId, nextRound);
         if ((startIfNeeded || roundJustClosed) && !latest.deadline_at) {
+            const seasonRounds = Number(tournament.season_rounds || 0) || await tournamentRoundCount(client, tournamentId);
+            if (seasonRounds < 1) return latest;
             latest = (await client.query(
                 `UPDATE efootball_tournament_rounds
                     SET starts_at=NOW(), deadline_at=NOW()+($2::int * INTERVAL '1 minute')
@@ -255,6 +329,14 @@ async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
                   RETURNING *`,
                 [latest.id, ROUND_DURATION_MINUTES]
             )).rows[0] || latest;
+            if (latest.deadline_at) {
+                await client.query(
+                    `UPDATE efootball_tournaments
+                        SET status='in_progress',started_at=COALESCE(started_at,NOW()),season_rounds=COALESCE(season_rounds,$2)
+                      WHERE id=$1 AND status='open'`,
+                    [tournamentId, seasonRounds]
+                );
+            }
         }
     } else if (!latest.deadline_at) {
         // Before the first match starts, refresh scheduled pairings so players
@@ -273,6 +355,8 @@ async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
     }
 
     if (startIfNeeded && !latest.deadline_at && !latest.completed_at) {
+        const seasonRounds = Number(tournament.season_rounds || 0) || await tournamentRoundCount(client, tournamentId);
+        if (seasonRounds < 1) return latest;
         latest = (await client.query(
             `UPDATE efootball_tournament_rounds
                 SET starts_at=NOW(), deadline_at=NOW()+($2::int * INTERVAL '1 minute')
@@ -280,6 +364,14 @@ async function ensureTournamentRound(client, tournamentId, startIfNeeded) {
               RETURNING *`,
             [latest.id, ROUND_DURATION_MINUTES]
         )).rows[0] || latest;
+        if (latest.deadline_at) {
+            await client.query(
+                `UPDATE efootball_tournaments
+                    SET status='in_progress',started_at=COALESCE(started_at,NOW()),season_rounds=COALESCE(season_rounds,$2)
+                  WHERE id=$1 AND status='open'`,
+                [tournamentId, seasonRounds]
+            );
+        }
     }
     return latest;
 }
@@ -352,8 +444,9 @@ async function createLeagueRound(client, leagueId, roundNumber) {
 }
 
 async function ensureLeagueRound(client, leagueId, startIfNeeded) {
-    const league = await client.query("SELECT id FROM efootball_leagues WHERE id=$1 FOR UPDATE", [leagueId]);
-    if (!league.rows.length) return null;
+    const league = await client.query("SELECT id,name,status,entry_stake,season_rounds FROM efootball_leagues WHERE id=$1 FOR UPDATE", [leagueId]);
+    if (!league.rows.length || !["open", "in_progress"].includes(league.rows[0].status)) return null;
+    const leagueRow = league.rows[0];
     const memberCount = await client.query(
         "SELECT COUNT(*)::int AS count FROM efootball_league_members WHERE league_id=$1 AND forfeited_at IS NULL",
         [leagueId]
@@ -373,16 +466,36 @@ async function ensureLeagueRound(client, leagueId, startIfNeeded) {
             "SELECT * FROM efootball_league_rounds WHERE league_id=$1 ORDER BY round_number DESC LIMIT 1 FOR UPDATE",
             [leagueId]
         )).rows[0];
+        const rounds = Number(leagueRow.season_rounds || 0);
+        if (rounds > 0 && Number(latest.round_number) >= rounds) {
+            await finishLeague(client, leagueRow, latest);
+            return { ...latest, completed_at: latest.completed_at || new Date() };
+        }
+    }
+    if (latest && latest.completed_at && Number(leagueRow.season_rounds || 0) > 0 &&
+        Number(latest.round_number) >= Number(leagueRow.season_rounds)) {
+        await finishLeague(client, leagueRow, latest);
+        return latest;
     }
     if (!latest || latest.completed_at) {
         const roundJustClosed = Boolean(latest && latest.completed_at);
         latest = await createLeagueRound(client, leagueId, latest ? Number(latest.round_number) + 1 : 1);
         if ((startIfNeeded || roundJustClosed) && latest && !latest.deadline_at) {
+            const seasonRounds = Number(leagueRow.season_rounds || 0) || await leagueRoundCount(client, leagueId);
+            if (seasonRounds < 1) return latest;
             latest = (await client.query(
                 `UPDATE efootball_league_rounds SET starts_at=NOW(),deadline_at=NOW()+($2::int*INTERVAL '1 minute')
                   WHERE id=$1 AND deadline_at IS NULL AND completed_at IS NULL RETURNING *`,
                 [latest.id, LEAGUE_ROUND_DURATION_MINUTES]
             )).rows[0] || latest;
+            if (latest.deadline_at) {
+                await client.query(
+                    `UPDATE efootball_leagues
+                        SET status='in_progress',started_at=COALESCE(started_at,NOW()),season_rounds=COALESCE(season_rounds,$2)
+                      WHERE id=$1 AND status='open'`,
+                    [leagueId, seasonRounds]
+                );
+            }
         }
     } else if (!latest.deadline_at) {
         const activeMatch = await client.query(
@@ -395,11 +508,21 @@ async function ensureLeagueRound(client, leagueId, startIfNeeded) {
         }
     }
     if (startIfNeeded && latest && !latest.deadline_at && !latest.completed_at) {
+        const seasonRounds = Number(leagueRow.season_rounds || 0) || await leagueRoundCount(client, leagueId);
+        if (seasonRounds < 1) return latest;
         latest = (await client.query(
             `UPDATE efootball_league_rounds SET starts_at=NOW(),deadline_at=NOW()+($2::int*INTERVAL '1 minute')
               WHERE id=$1 AND deadline_at IS NULL AND completed_at IS NULL RETURNING *`,
             [latest.id, LEAGUE_ROUND_DURATION_MINUTES]
         )).rows[0] || latest;
+        if (latest.deadline_at) {
+            await client.query(
+                `UPDATE efootball_leagues
+                    SET status='in_progress',started_at=COALESCE(started_at,NOW()),season_rounds=COALESCE(season_rounds,$2)
+                  WHERE id=$1 AND status='open'`,
+                [leagueId, seasonRounds]
+            );
+        }
     }
     return latest;
 }

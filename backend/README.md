@@ -103,6 +103,33 @@ subscription was expired and deactivated; re-enable notifications on that
 device. For an unreachable public site, check `tailscale funnel status`, the
 HTTPS URL shown by the online launcher, and the matching frontend API hostname.
 
+## Native Android companion with notification reply
+
+The optional source project in `../android` uses Firebase Cloud Messaging
+(FCM). FCM data messages let the app create a normal Android notification with
+a `RemoteInput` action, so the room-code sender can submit the code from the
+notification while eFootball remains open. The notification contains no room
+code; the sender enters it in the reply field. This does not use a floating
+bubble, pop a heads-up banner over eFootball, or ask for overlay permission.
+Browser notifications continue to open the Match Hub.
+
+Setup requires Android Studio, JDK 17, Android SDK 36, a Firebase Android app
+with package name `com.goalgambit.companion`, and Cloud Messaging enabled. Put
+the Firebase client configuration at `android/app/google-services.json`; this
+file is ignored by Git. Give the backend a Firebase service account through
+`FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS`. The credential JSON
+must stay outside this repository. A placeholder is in `backend/.env.example`;
+merge its settings into the private `.env` or provide them in the backend
+process environment.
+
+Build a debug APK from the `android` directory with
+`gradlew.bat assembleDebug`. To use a different HTTPS API host, add
+`-PGG_API_BASE_URL=https://your-backend-host`. The result is
+`android/app/build/outputs/apk/debug/app-debug.apk`. After installation, sign
+in to the companion, enable notifications, and send a test notification. A
+real phone test is still required to verify notification display and inline
+reply behavior on the target Android version.
+
 ## Daraja STK
 
 Keep `MPESA_ENVIRONMENT=sandbox` while validating. The Daraja consumer key,
@@ -119,30 +146,39 @@ The STK request uses the store shortcode for `BusinessShortCode` and its passwor
 and the Till number for `PartyB`. PayBill requests continue to use the shortcode
 for both fields.
 
-## Daraja B2C wallet withdrawals (sandbox)
+## Daraja B2C wallet withdrawals
 
-The wallet withdrawal endpoint sends B2C requests only when
-MPESA_B2C_ENABLED=true and MPESA_ENVIRONMENT=sandbox. Leave it disabled
-until M-Pesa B2C is enabled on the same Daraja sandbox app that supplies
-the consumer key and secret. Set MPESA_B2C_SHORTCODE,
-MPESA_B2C_INITIATOR_NAME, and MPESA_B2C_SECURITY_CREDENTIAL in the private
-backend .env. MPESA_B2C_SECURITY_CREDENTIAL must be Daraja's encrypted
-credential for the matching sandbox initiator; do not put the raw initiator
-password in .env or source control. The command defaults to BusinessPayment.
+The wallet withdrawal endpoint uses its own Daraja app, OAuth token cache,
+environment, and credentials, separate from the existing STK/C2B deposit app.
+Set `MPESA_B2C_ENABLED=true`, `MPESA_B2C_ENVIRONMENT=sandbox` or `production`,
+and the B2C app keys below. Keep the existing C2B app and its credentials
+unchanged for deposits. Safaricom currently allows either C2B or B2C on a
+Daraja app, so use a separate production B2C app to avoid disrupting deposits.
+Production also requires Safaricom B2C go-live approval and an approved B2C
+disbursement shortcode (or a PayBill/Till converted to a one account that can
+receive and disburse).
 
-The public PUBLIC_BASE_URL must point to this backend over HTTPS so Safaricom
-can reach the per-withdrawal result and queue-timeout callbacks. Each callback
+Set `MPESA_B2C_CONSUMER_KEY`, `MPESA_B2C_CONSUMER_SECRET`,
+`MPESA_B2C_SHORTCODE`, `MPESA_B2C_INITIATOR_NAME`, and
+`MPESA_B2C_SECURITY_CREDENTIAL` in the private backend .env. The security
+credential must be Daraja's encrypted credential for the matching B2C API
+initiator; never put the raw initiator password in .env or source control.
+The command defaults to BusinessPayment. Keep MPESA_B2C_ENABLED=false until
+the separate B2C app, shortcode, and initiator are approved and ready.
+
+PUBLIC_BASE_URL (or the platform-provided public URL) must point to this backend
+over HTTPS so Safaricom can reach the per-withdrawal result and queue-timeout callbacks. Each callback
 uses a random secret token, stored only as a hash, and can settle only its
 matching withdrawal. The backend holds the withdrawal amount while Daraja
 processes it, completes it only after a success callback, and restores it after
 a failure or queue timeout. If the provider response is unclear, the request
 stays pending; do not retry it until its state is known.
 
-Amounts must be whole shillings. The 5% fee is rounded to the nearest KSh, and
-the user is shown the estimated net payout before submitting. This implementation
-is sandbox-only; production withdrawals require Safaricom production B2C
-approval, live initiator credentials, a live shortcode, and a verified public
-callback configuration.
+Amounts must be whole shillings. The processing fee is 5% for withdrawals up to
+KSh 100, 10% for KSh 101–200, and 20% above KSh 200, rounded to the nearest
+shilling. The wallet shows the estimated net payout before submitting without
+displaying the percentage schedule. The wallet rejects requests before
+deducting funds when any required B2C or public callback setting is missing.
 
 Safaricom references:
 [B2C API](https://developer.safaricom.co.ke/apis/BusinessToCustomer) and
@@ -158,10 +194,11 @@ are in this backend has the C2B product enabled. Then set
 reliable account reference for wallet crediting, so this flow intentionally
 accepts PayBill only.
 
-If C2B is enabled on a separate Daraja app from STK/B2C, set
+If C2B is enabled on a separate Daraja app from STK, set
 `MPESA_C2B_CONSUMER_KEY` and `MPESA_C2B_CONSUMER_SECRET`; otherwise C2B falls
-back to `MPESA_CONSUMER_KEY` and `MPESA_CONSUMER_SECRET`. Keep C2B disabled
-until its own app credentials and shortcode are confirmed.
+back to `MPESA_CONSUMER_KEY` and `MPESA_CONSUMER_SECRET`. Do not point C2B at
+the separate B2C app. Keep C2B disabled until its app credentials and shortcode
+are confirmed.
 
 The wallet shows a per-account payment reference. The confirmation callback
 credits a wallet only when its signed reference resolves to an active account;

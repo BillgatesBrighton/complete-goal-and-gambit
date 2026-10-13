@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_reference_unique ON transactions (reference);
 
+-- Per-user view markers let players clear old history without deleting the
+-- financial ledger or match records used for settlements, disputes and audit.
+CREATE TABLE IF NOT EXISTS user_history_clears (
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    history_type VARCHAR(20) NOT NULL CHECK (history_type IN ('transactions', 'matches')),
+    cleared_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, history_type)
+);
+
 -- C2B receipts are durable and idempotent. Unmapped payments stay visible for
 -- later reconciliation instead of being silently credited to the wrong wallet.
 CREATE TABLE IF NOT EXISTS mpesa_c2b_payments (
@@ -140,6 +149,13 @@ ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS pgn TEXT;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS active_color CHAR(1);
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS draw_offer_user_id BIGINT;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS rating_updated_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20);
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+UPDATE chess_matches
+   SET payout_status='pending_competition'
+ WHERE match_type='tournament' AND status='completed' AND stake_amount>0
+   AND (payout_status IS NULL OR payout_status='not_applicable');
 -- Queue rows have no black player until a match is found. Keep both player
 -- references nullable so older installations match the current table shape
 -- and account deletion can anonymize shared game history safely.
@@ -186,6 +202,45 @@ ALTER TABLE chess_matches
 CREATE INDEX IF NOT EXISTS idx_chess_matches_white  ON chess_matches (player_white_id);
 CREATE INDEX IF NOT EXISTS idx_chess_matches_black  ON chess_matches (player_black_id);
 CREATE INDEX IF NOT EXISTS idx_chess_matches_status ON chess_matches (status);
+CREATE INDEX IF NOT EXISTS idx_chess_matches_admin_history
+    ON chess_matches (admin_cleared_at, finished_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS chess_tournament_entries (
+    id              BIGSERIAL PRIMARY KEY,
+    season_key      VARCHAR(7) NOT NULL,
+    time_control    VARCHAR(20) NOT NULL,
+    stake_amount    NUMERIC(12,2) NOT NULL CHECK (stake_amount >= 0),
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    cancelled_at    TIMESTAMPTZ,
+    forfeited_at    TIMESTAMPTZ,
+    forfeited_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (forfeited_amount >= 0),
+    UNIQUE(season_key,time_control,stake_amount,user_id)
+);
+ALTER TABLE chess_tournament_entries ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE chess_tournament_entries ADD COLUMN IF NOT EXISTS forfeited_at TIMESTAMPTZ;
+ALTER TABLE chess_tournament_entries ADD COLUMN IF NOT EXISTS forfeited_amount NUMERIC(12,2) NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_chess_tournament_entries_live
+    ON chess_tournament_entries(season_key,time_control,stake_amount,joined_at)
+    WHERE cancelled_at IS NULL AND forfeited_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS chess_competition_settlements (
+    id              BIGSERIAL PRIMARY KEY,
+    season_key      VARCHAR(7) NOT NULL,
+    time_control    VARCHAR(20) NOT NULL,
+    stake_amount    NUMERIC(12,2) NOT NULL,
+    user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    username        VARCHAR(30) NOT NULL,
+    final_rank      INTEGER,
+    contributed     NUMERIC(12,2) NOT NULL DEFAULT 0,
+    prize_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
+    refund_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+    reference       VARCHAR(120) NOT NULL UNIQUE,
+    settled_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(season_key,time_control,stake_amount,username)
+);
+CREATE INDEX IF NOT EXISTS idx_chess_competition_settlements_season
+    ON chess_competition_settlements(season_key,time_control,stake_amount,final_rank);
 
 
 -- ======================================================
@@ -225,9 +280,28 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS creator_last_seen_at TIME
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_last_seen_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS paired_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS attendance_deadline_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS admin_cleared_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_status ON efootball_matches(status);
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_creator ON efootball_matches(creator_id);
 CREATE INDEX IF NOT EXISTS idx_efootball_matches_opponent ON efootball_matches(opponent_id);
+CREATE INDEX IF NOT EXISTS idx_efootball_matches_admin_history
+    ON efootball_matches (admin_cleared_at, finished_at DESC, id DESC);
+
+-- Audited administrative match actions. Game and match ID are a polymorphic
+-- pair so the same history can cover chess and Konami records.
+CREATE TABLE IF NOT EXISTS admin_match_management_events (
+    id          BIGSERIAL PRIMARY KEY,
+    game        VARCHAR(10) NOT NULL CHECK (game IN ('chess', 'konami')),
+    match_id    BIGINT NOT NULL,
+    admin_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action      VARCHAR(30) NOT NULL,
+    reason      TEXT,
+    details     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_match_management_events_recent
+    ON admin_match_management_events(game, match_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_efootball_waiting_search_activity
     ON efootball_matches(search_last_seen_at, created_at)
     WHERE status='waiting' AND opponent_id IS NULL;
@@ -237,8 +311,13 @@ CREATE TABLE IF NOT EXISTS efootball_leagues (
     name                VARCHAR(30) NOT NULL UNIQUE,
     description         TEXT,
     entry_stake         NUMERIC(12,2) NOT NULL DEFAULT 0,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status              VARCHAR(20) NOT NULL DEFAULT 'open'
 );
+ALTER TABLE efootball_leagues ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'open';
+ALTER TABLE efootball_leagues ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE efootball_leagues ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE efootball_leagues ADD COLUMN IF NOT EXISTS season_rounds INTEGER;
 
 CREATE TABLE IF NOT EXISTS efootball_league_members (
     id                  BIGSERIAL PRIMARY KEY,
@@ -437,6 +516,50 @@ CREATE TABLE IF NOT EXISTS push_delivery_attempts (
     UNIQUE(job_id, attempt_number)
 );
 
+-- Native Android devices use Firebase Cloud Messaging so their notification
+-- can contain an Android RemoteInput reply action. Tokens and jobs are kept
+-- separate from browser Push API subscriptions.
+CREATE TABLE IF NOT EXISTS android_push_tokens (
+    id                  BIGSERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token               TEXT NOT NULL UNIQUE,
+    device_id           VARCHAR(80),
+    device_name         VARCHAR(120),
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_android_push_tokens_user_active
+    ON android_push_tokens(user_id, active);
+
+CREATE TABLE IF NOT EXISTS android_push_delivery_jobs (
+    id                  BIGSERIAL PRIMARY KEY,
+    event_id            BIGINT NOT NULL REFERENCES push_notification_events(id) ON DELETE CASCADE,
+    token_id            BIGINT NOT NULL REFERENCES android_push_tokens(id) ON DELETE CASCADE,
+    status              VARCHAR(20) NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued', 'sending', 'accepted', 'failed')),
+    attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at         TIMESTAMPTZ,
+    last_error          VARCHAR(240),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(event_id, token_id)
+);
+CREATE INDEX IF NOT EXISTS idx_android_push_jobs_pending
+    ON android_push_delivery_jobs(status, next_attempt_at, id)
+    WHERE status IN ('queued', 'sending');
+
+CREATE TABLE IF NOT EXISTS android_push_delivery_attempts (
+    id                  BIGSERIAL PRIMARY KEY,
+    job_id              BIGINT NOT NULL REFERENCES android_push_delivery_jobs(id) ON DELETE CASCADE,
+    attempt_number      INTEGER NOT NULL CHECK (attempt_number > 0),
+    outcome             VARCHAR(20) NOT NULL,
+    error_summary       VARCHAR(240),
+    attempted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(job_id, attempt_number)
+);
+
 
 -- ======================================================
 -- MIGRATIONS (safe to re-run)
@@ -472,6 +595,8 @@ ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS points INTEGER
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goal_difference INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goals_for INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS goals_against INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE efootball_tournaments ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE efootball_tournaments ADD COLUMN IF NOT EXISTS season_rounds INTEGER;
 
 -- Assign existing entries to stable groups of up to four, preserving entry order.
 WITH ranked_members AS (
@@ -491,6 +616,57 @@ UPDATE efootball_tournament_members tm
 ALTER TABLE efootball_tournament_members ALTER COLUMN group_code SET NOT NULL;
 CREATE INDEX IF NOT EXISTS efootball_tournament_members_group_idx
     ON efootball_tournament_members(tournament_id, group_code, user_id);
+
+-- Season-end awards and player-funded entry-pool refunds. The per-player
+-- row makes payout execution idempotent and keeps a readable audit trail.
+CREATE TABLE IF NOT EXISTS efootball_competition_settlements (
+    id                  BIGSERIAL PRIMARY KEY,
+    competition_type    VARCHAR(20) NOT NULL CHECK (competition_type IN ('league','tournament')),
+    competition_id      BIGINT NOT NULL,
+    season_key          VARCHAR(40) NOT NULL,
+    user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    username            VARCHAR(30) NOT NULL,
+    final_rank          INTEGER,
+    entry_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+    prize_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+    refund_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+    reference           VARCHAR(120) NOT NULL UNIQUE,
+    settled_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(competition_type, competition_id, season_key, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_competition_settlements_season
+    ON efootball_competition_settlements(competition_type, competition_id, season_key, final_rank);
+
+-- Every administrator balance or competition-table edit is retained for review.
+CREATE TABLE IF NOT EXISTS admin_wallet_adjustments (
+    id                  BIGSERIAL PRIMARY KEY,
+    admin_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    username            VARCHAR(30) NOT NULL,
+    amount              NUMERIC(12,2) NOT NULL CHECK (amount <> 0),
+    previous_balance    NUMERIC(12,2) NOT NULL,
+    new_balance         NUMERIC(12,2) NOT NULL,
+    reason              TEXT NOT NULL CHECK (length(trim(reason)) >= 10),
+    reference           VARCHAR(120) NOT NULL UNIQUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_wallet_adjustments_recent
+    ON admin_wallet_adjustments(user_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS admin_competition_adjustments (
+    id                  BIGSERIAL PRIMARY KEY,
+    admin_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    competition_type    VARCHAR(20) NOT NULL CHECK (competition_type IN ('league','tournament')),
+    competition_id      BIGINT NOT NULL,
+    user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    username            VARCHAR(30) NOT NULL,
+    previous_stats      JSONB NOT NULL,
+    new_stats           JSONB NOT NULL,
+    reason              TEXT NOT NULL CHECK (length(trim(reason)) >= 10),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_competition_adjustments_recent
+    ON admin_competition_adjustments(competition_type, competition_id, created_at DESC, id DESC);
 
 -- Keep existing active, same-group matches in the correct group-stage feed.
 UPDATE efootball_matches m
@@ -572,6 +748,9 @@ CREATE TABLE IF NOT EXISTS chat_threads (
     UNIQUE(thread_type, user_one_id, user_two_id)
 );
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_one_cleared_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_two_cleared_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_cleared_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS chat_messages (
     id BIGSERIAL PRIMARY KEY,
@@ -598,6 +777,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     resolved_at TIMESTAMPTZ
 );
 ALTER TABLE complaints ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS user_cleared_at TIMESTAMPTZ;
 ALTER TABLE complaints ADD COLUMN IF NOT EXISTS complaint_ref VARCHAR(40);
 ALTER TABLE complaints ADD COLUMN IF NOT EXISTS match_id BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL;
 ALTER TABLE complaints ADD COLUMN IF NOT EXISTS priority VARCHAR(20) NOT NULL DEFAULT 'normal';
@@ -710,6 +890,13 @@ CREATE TABLE IF NOT EXISTS admin_wallet_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_wallet_transactions_recent
     ON admin_wallet_transactions(admin_id, created_at DESC, id DESC);
+
+-- Administrators may clear the activity view without deleting financial
+-- entries that are needed for payout reconciliation and audit.
+CREATE TABLE IF NOT EXISTS admin_wallet_history_clears (
+    admin_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    cleared_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS admin_mpesa_payouts (
     reference                  VARCHAR(120) PRIMARY KEY REFERENCES admin_wallet_transactions(reference) ON DELETE CASCADE,

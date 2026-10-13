@@ -89,6 +89,8 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                      SELECT m.message,m.created_at,m.read_at
                      FROM chat_messages m
                      WHERE m.thread_id=t.id
+                       AND (CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END IS NULL
+                            OR m.created_at > CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END)
                      ORDER BY m.created_at DESC,m.id DESC
                      LIMIT 1
                  ) lm ON TRUE
@@ -96,10 +98,14 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                      SELECT COUNT(*) AS unread_count
                      FROM chat_messages m
                      WHERE m.thread_id=t.id AND m.sender_id<>$1 AND m.read_at IS NULL
+                       AND (CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END IS NULL
+                            OR m.created_at > CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END)
                  ) un ON TRUE
                  WHERE t.thread_type='direct'
                    AND (t.user_one_id=$1 OR t.user_two_id=$1)
                    AND u.account_status='active'
+                   AND (CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END IS NULL
+                        OR lm.created_at IS NOT NULL)
                  ORDER BY COALESCE(lm.created_at,t.created_at) DESC,t.id DESC
                  LIMIT 100`,
                 [me]
@@ -126,6 +132,8 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                  WHERE m.sender_id<>$1
                    AND m.read_at IS NULL
                    AND (t.user_one_id=$1 OR t.user_two_id=$1)
+                   AND (CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END IS NULL
+                        OR m.created_at > CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END)
                  ORDER BY m.created_at DESC,m.id DESC
                  LIMIT 50`,
                 [me]
@@ -193,20 +201,47 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                  VALUES('direct',$1,$2)
                  ON CONFLICT(thread_type,user_one_id,user_two_id)
                  DO UPDATE SET user_one_id=EXCLUDED.user_one_id
-                 RETURNING id`,[low,high]);
+                 RETURNING id,user_one_cleared_at,user_two_cleared_at`,[low,high]);
+            const clearedAt=me===low?t.rows[0].user_one_cleared_at:t.rows[0].user_two_cleared_at;
             await pool.query(
                 `UPDATE chat_messages SET read_at=NOW()
-                 WHERE thread_id=$1 AND sender_id=$2 AND read_at IS NULL`,
-                [t.rows[0].id,other]
+                 WHERE thread_id=$1 AND sender_id=$2 AND read_at IS NULL
+                   AND ($3::timestamptz IS NULL OR created_at>$3)`,
+                [t.rows[0].id,other,clearedAt]
             );
             const messages=await pool.query(
                 `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
-                 WHERE m.thread_id=$1 ORDER BY m.created_at ASC LIMIT 500`,[t.rows[0].id]);
+                 WHERE m.thread_id=$1 AND ($2::timestamptz IS NULL OR m.created_at>$2)
+                 ORDER BY m.created_at ASC LIMIT 500`,[t.rows[0].id,clearedAt]);
             res.json({success:true,threadId:t.rows[0].id,other:Object.assign({},target,{online:isOnline(target.id)}),messages:messages.rows});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load conversation."});
+        }
+    });
+
+    router.post("/direct/:userId/clear", authenticateToken, async (req,res) => {
+        const other=Number(req.params.userId), me=Number(req.user.userId);
+        if(!Number.isInteger(other)||other<=0||other===me)
+            return res.status(400).json({success:false,message:"Invalid chat user."});
+        try {
+            const target=await activeUser(other);
+            if(!target||target.account_status!=="active")
+                return res.status(404).json({success:false,message:"That user is not available for chat."});
+            const low=Math.min(me,other),high=Math.max(me,other);
+            const t=await pool.query(
+                `INSERT INTO chat_threads(thread_type,user_one_id,user_two_id)
+                 VALUES('direct',$1,$2)
+                 ON CONFLICT(thread_type,user_one_id,user_two_id)
+                 DO UPDATE SET user_one_id=EXCLUDED.user_one_id
+                 RETURNING id`,[low,high]);
+            const clearColumn=me===low?"user_one_cleared_at":"user_two_cleared_at";
+            await pool.query(`UPDATE chat_threads SET ${clearColumn}=NOW() WHERE id=$1`,[t.rows[0].id]);
+            res.json({success:true,message:"Conversation cleared from your view. New messages will appear here."});
+        } catch(e) {
+            console.error(e);
+            res.status(500).json({success:false,message:"Could not clear this conversation."});
         }
     });
 
@@ -254,19 +289,35 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const me=Number(req.user.userId);
         try {
             const threadId = await getOrCreateSupportThread(me);
+            const thread=await pool.query(`SELECT user_cleared_at FROM chat_threads WHERE id=$1`,[threadId]);
+            const clearedAt=thread.rows[0]&&thread.rows[0].user_cleared_at;
             await pool.query(
                 `UPDATE chat_messages SET read_at=NOW()
-                 WHERE thread_id=$1 AND sender_id<>$2 AND read_at IS NULL`,
-                [threadId,me]
+                 WHERE thread_id=$1 AND sender_id<>$2 AND read_at IS NULL
+                   AND ($3::timestamptz IS NULL OR created_at>$3)`,
+                [threadId,me,clearedAt]
             );
             const messages=await pool.query(
                 `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
-                 WHERE m.thread_id=$1 ORDER BY m.created_at ASC LIMIT 500`,[threadId]);
+                 WHERE m.thread_id=$1 AND ($2::timestamptz IS NULL OR m.created_at>$2)
+                 ORDER BY m.created_at ASC LIMIT 500`,[threadId,clearedAt]);
             res.json({success:true,threadId,messages:messages.rows});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load support chat."});
+        }
+    });
+
+    router.post("/support/clear", authenticateToken, async (req,res) => {
+        const me=Number(req.user.userId);
+        try {
+            const threadId=await getOrCreateSupportThread(me);
+            await pool.query(`UPDATE chat_threads SET user_cleared_at=NOW() WHERE id=$1 AND user_one_id=$2`,[threadId,me]);
+            res.json({success:true,message:"Support messages cleared from your view. The support team’s history is preserved."});
+        } catch(e) {
+            console.error(e);
+            res.status(500).json({success:false,message:"Could not clear support messages."});
         }
     });
 
@@ -407,6 +458,10 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
     // PLAYER COMPLAINTS AND PRIVATE EVIDENCE
     // =========================================================
     router.get("/complaints", authenticateToken, async (req, res) => {
+        const status = String(req.query.status || "all").toLowerCase();
+        if (!["all", "active", "resolved"].includes(status)) {
+            return res.status(400).json({ success: false, message: "Choose a valid complaint status." });
+        }
         try {
             const result = await pool.query(
                 `SELECT c.id,c.complaint_ref,c.match_id,c.category,c.subject,c.description,c.status,c.priority,
@@ -414,13 +469,36 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                         m.status AS match_status,m.mode AS match_mode,m.league AS league_name,
                         (SELECT COUNT(*)::int FROM complaint_evidence e WHERE e.complaint_id=c.id) AS evidence_count
                    FROM complaints c LEFT JOIN efootball_matches m ON m.id=c.match_id
-                  WHERE c.reporter_id=$1 ORDER BY c.updated_at DESC,c.id DESC LIMIT 100`,
-                [req.user.userId]
+                  WHERE c.reporter_id=$1 AND (c.user_cleared_at IS NULL OR c.status NOT IN ('resolved','dismissed'))
+                    AND ($2::text='all'
+                         OR ($2::text='active' AND c.status NOT IN ('resolved','dismissed'))
+                         OR ($2::text='resolved' AND c.status IN ('resolved','dismissed')))
+                  ORDER BY c.updated_at DESC,c.id DESC LIMIT 100`,
+                [req.user.userId, status]
             );
             return res.json({ success: true, complaints: result.rows });
         } catch (error) {
             console.error("Player complaint list failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not load your complaints." });
+        }
+    });
+
+    router.post("/complaints/:id/clear", authenticateToken, async (req, res) => {
+        const caseId=Number(req.params.id), userId=Number(req.user.userId);
+        if(!Number.isSafeInteger(caseId)||caseId<=0)
+            return res.status(400).json({success:false,message:"Invalid complaint reference."});
+        try {
+            const result=await pool.query(
+                `UPDATE complaints SET user_cleared_at=NOW(),updated_at=NOW()
+                  WHERE id=$1 AND reporter_id=$2 AND status IN ('resolved','dismissed')
+                  RETURNING id`,[caseId,userId]
+            );
+            if(!result.rows.length)
+                return res.status(409).json({success:false,message:"Only a resolved or dismissed complaint can be cleared."});
+            return res.json({success:true,message:"Resolved complaint cleared from your list. The case history remains available to administrators."});
+        } catch(error) {
+            console.error("Player complaint clear failed:",error.message);
+            return res.status(500).json({success:false,message:"Could not clear this resolved complaint."});
         }
     });
 

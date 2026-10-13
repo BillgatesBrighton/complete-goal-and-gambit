@@ -69,6 +69,9 @@
             socket.on("efootball:match-update", function(data) {
                 window.dispatchEvent(new CustomEvent("gg:match-update", { detail: data || {} }));
             });
+            socket.on("efootball:notification", function(data) {
+                window.dispatchEvent(new CustomEvent("gg:notification-update", { detail: data || {} }));
+            });
             socket.on("disconnect", function(reason) {
                 publishPresence([]);
                 if (reason === "io server disconnect" && presenceSocket === socket) {
@@ -154,11 +157,25 @@
                 method: options.method || "GET",
                 headers: headers,
                 body: options.body === undefined ? undefined :
-                    (isFormData ? options.body : JSON.stringify(options.body))
+                    (isFormData ? options.body : JSON.stringify(options.body)),
+                // Account history and wallet responses must never come back
+                // from a browser cache after a user clears a list.
+                cache: options.cache || "no-store"
             });
 
             var data = null;
             try { data = await response.json(); } catch (e) {}
+
+            if (response.status === 404 && (!data || !data.message || data.message === "API endpoint not found.")) {
+                data = Object.assign({}, data || {}, {
+                    message: "This API route was not found on the selected server. Check the API address and update or restart the backend."
+                });
+            }
+            if ([502, 503, 504].indexOf(response.status) >= 0 && (!data || !data.message)) {
+                data = Object.assign({}, data || {}, {
+                    message: "The API server is temporarily unavailable (HTTP " + response.status + "). Check that the backend and its public tunnel are running."
+                });
+            }
 
             if (response.status === 401 && token && !options.noRedirect) {
                 clearSession();

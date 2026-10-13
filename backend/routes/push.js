@@ -23,6 +23,17 @@ function cleanSubscription(value) {
     return { endpoint, p256dh, auth, expiresAt: expiry === null ? null : new Date(expiry).toISOString() };
 }
 
+function cleanAndroidToken(value) {
+    const raw = String(value || "");
+    const token = raw.trim();
+    if (raw !== token || token.length < 20 || token.length > 4096 ||
+        token.split("").some(function (character) {
+            const code = character.charCodeAt(0);
+            return code < 33 || code === 127;
+        })) return null;
+    return token;
+}
+
 module.exports = function createPushRoutes(pool, authenticateToken, pushService) {
     const router = express.Router();
     const registerLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, message: "Too many notification setup requests. Please wait a minute." });
@@ -40,12 +51,18 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                 "SELECT COUNT(*)::int AS active_subscriptions FROM push_subscriptions WHERE user_id=$1 AND active=TRUE",
                 [req.user.userId]
             );
+            const android = await pool.query(
+                "SELECT COUNT(*)::int AS active_subscriptions FROM android_push_tokens WHERE user_id=$1 AND active=TRUE",
+                [req.user.userId]
+            );
             const config = pushService.status();
             return res.json({
                 success: true,
                 configured: config.configured,
+                androidConfigured: Boolean(config.androidConfigured),
                 permissionRequired: true,
-                activeSubscriptions: Number(result.rows[0].active_subscriptions || 0)
+                activeSubscriptions: Number(result.rows[0].active_subscriptions || 0),
+                activeAndroidDevices: Number(android.rows[0].active_subscriptions || 0)
             });
         } catch (error) {
             console.error("Push status query failed.");
@@ -97,17 +114,63 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
         }
     });
 
+    router.post("/android/subscriptions", authenticateToken, registerLimiter, async (req, res) => {
+        if (!pushService.status().androidConfigured) {
+            return res.status(503).json({ success: false, message: "Android push is not configured on the backend yet." });
+        }
+        const token = cleanAndroidToken(req.body && req.body.token);
+        if (!token) return res.status(400).json({ success: false, message: "The Android push token is invalid." });
+        const deviceId = String(req.body && req.body.deviceId || "").trim().slice(0, 80) || null;
+        const deviceName = String(req.body && req.body.deviceName || "").trim().slice(0, 120) || null;
+        try {
+            const saved = await pool.query(
+                "INSERT INTO android_push_tokens(user_id,token,device_id,device_name,active,updated_at) " +
+                "VALUES($1,$2,$3,$4,TRUE,NOW()) ON CONFLICT(token) DO UPDATE SET " +
+                "device_id=EXCLUDED.device_id,device_name=EXCLUDED.device_name,active=TRUE,updated_at=NOW() " +
+                "WHERE android_push_tokens.user_id=EXCLUDED.user_id RETURNING id",
+                [req.user.userId, token, deviceId, deviceName]
+            );
+            if (!saved.rows.length) {
+                return res.status(409).json({ success: false, message: "This device is registered to a different GOAL$GAMBIT account. Sign out of that account first." });
+            }
+            return res.status(201).json({ success: true, registered: true });
+        } catch (error) {
+            console.error("Android push token save failed.");
+            return res.status(500).json({ success: false, message: "Unable to register this Android device." });
+        }
+    });
+
+    router.delete("/android/subscriptions", authenticateToken, async (req, res) => {
+        const token = req.body && req.body.token ? cleanAndroidToken(req.body.token) : null;
+        if (req.body && req.body.token && !token) {
+            return res.status(400).json({ success: false, message: "The Android push token is invalid." });
+        }
+        try {
+            const result = token
+                ? await pool.query("UPDATE android_push_tokens SET active=FALSE,updated_at=NOW() WHERE user_id=$1 AND token=$2 RETURNING id", [req.user.userId, token])
+                : await pool.query("UPDATE android_push_tokens SET active=FALSE,updated_at=NOW() WHERE user_id=$1 AND active=TRUE RETURNING id", [req.user.userId]);
+            return res.json({ success: true, disabled: result.rowCount || 0 });
+        } catch (error) {
+            console.error("Android push token disable failed.");
+            return res.status(500).json({ success: false, message: "Unable to disable Android notifications." });
+        }
+    });
+
     router.get("/history", authenticateToken, async (req, res) => {
         try {
             const result = await pool.query(
                 `SELECT e.id, e.title, e.body, e.match_id, e.event_key, e.target_path,
                         e.created_at, e.clicked_at, e.click_action,
-                        COUNT(j.id)::int AS delivery_count,
-                        COUNT(j.id) FILTER (WHERE j.status='accepted')::int AS accepted_count,
-                        COUNT(j.id) FILTER (WHERE j.status='failed')::int AS failed_count,
-                        COUNT(j.id) FILTER (WHERE j.status IN ('queued','sending'))::int AS pending_count
+                        COUNT(j.status)::int AS delivery_count,
+                        COUNT(j.status) FILTER (WHERE j.status='accepted')::int AS accepted_count,
+                        COUNT(j.status) FILTER (WHERE j.status='failed')::int AS failed_count,
+                        COUNT(j.status) FILTER (WHERE j.status IN ('queued','sending'))::int AS pending_count
                    FROM push_notification_events e
-                   LEFT JOIN push_delivery_jobs j ON j.event_id=e.id
+                   LEFT JOIN LATERAL (
+                       SELECT status FROM push_delivery_jobs WHERE event_id=e.id
+                       UNION ALL
+                       SELECT status FROM android_push_delivery_jobs WHERE event_id=e.id
+                   ) j ON TRUE
                   WHERE e.user_id=$1
                   GROUP BY e.id
                   ORDER BY e.created_at DESC, e.id DESC
@@ -155,6 +218,43 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
         }
     });
 
+    router.post("/android/test", authenticateToken, testLimiter, async (req, res) => {
+        if (!pushService.status().androidConfigured) {
+            return res.status(503).json({ success: false, message: "Android push is not configured on the backend yet." });
+        }
+        try {
+            const active = await pool.query(
+                "SELECT 1 FROM android_push_tokens WHERE user_id=$1 AND active=TRUE LIMIT 1",
+                [req.user.userId]
+            );
+            if (!active.rows.length) {
+                return res.status(409).json({ success: false, message: "Sign in to the Android companion app to register this device first." });
+            }
+            const client = await pool.connect();
+            let event;
+            try {
+                await client.query("BEGIN");
+                event = await pushService.enqueueNotification(client, req.user.userId, {
+                    eventKey: "android-push-test:" + crypto.randomUUID(),
+                    title: "GOAL$GAMBIT Android test",
+                    body: "Android notifications are enabled for this account.",
+                    page: "match-hub"
+                });
+                await client.query("COMMIT");
+            } catch (error) {
+                await client.query("ROLLBACK").catch(() => {});
+                throw error;
+            } finally {
+                client.release();
+            }
+            pushService.sendPendingJobs().catch(() => {});
+            return res.status(201).json({ success: true, eventId: event.id, message: "Android test notification queued." });
+        } catch (error) {
+            console.error("Android push test could not be queued.");
+            return res.status(500).json({ success: false, message: "Unable to queue an Android test notification." });
+        }
+    });
+
     // The click token is a per-event HMAC. This endpoint cannot read private
     // notification content and can only record an interaction for a real event.
     router.post("/click", async (req, res) => {
@@ -184,3 +284,4 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
 };
 
 module.exports.cleanSubscription = cleanSubscription;
+module.exports.cleanAndroidToken = cleanAndroidToken;

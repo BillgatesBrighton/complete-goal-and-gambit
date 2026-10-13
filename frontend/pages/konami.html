@@ -2,6 +2,10 @@
 <html lang="en">
 
 <head>
+    <link rel="manifest" href="../manifest.webmanifest">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -104,14 +108,43 @@ body {
 .hero p {
     color: #888;
 }
-
 /* Dashboard identity stays with the page heading instead of competing with navigation. */
 .hero #welcomeText {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
     color: #c9b86f;
     font-size: 14px;
     font-weight: 600;
     margin-top: 2px;
 }
+.hero #welcomeText strong {
+    color: inherit;
+    font-family: "Pacifico", cursive;
+    font-size: clamp(36px, 6vw, 60px);
+    font-weight: 700;
+    line-height: 1.1;
+}
+.history-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.history-clear-button {
+    padding: 9px 12px;
+    border: 1px solid #393939;
+    border-radius: 8px;
+    background: #141414;
+    color: #ddd;
+    font-weight: 700;
+    cursor: pointer;
+}
+.history-clear-button:hover { border-color: #d4af37; color: #f4bd20; }
+.history-clear-button:disabled { opacity: .55; cursor: wait; }
+.history-feedback { margin: 0 0 10px; color: #aaa; font-size: 12px; }
 
 /* Konami chat panel */
 .chat-launcher {
@@ -347,10 +380,24 @@ body {
     padding: 25px;
     margin-bottom: 25px;
 }
+.active-tournament-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.active-tournament-card { padding:16px; border:1px solid #292929; border-radius:12px; background:#111; }
+.active-tournament-card h3 { margin:0 0 8px; color:#d4af37; font-size:16px; }
+.active-tournament-card p { margin:0 0 12px; color:#999; font-size:12px; }
+.active-tournament-action { display:inline-block; margin:4px 8px 0 0; padding:8px 10px; border:1px solid #4a3c17; border-radius:8px; color:#f4bd20; font-size:12px; font-weight:800; }
+.active-tournament-action.secondary { border-color:#333; color:#ddd; }
+.active-tournament-empty { color:#888; font-size:13px; line-height:1.6; }
 
 .section h2 {
     color: #d4af37;
     margin-bottom: 20px;
+}
+
+.prize-note {
+    color: #aaa;
+    font-size: 12px;
+    line-height: 1.55;
+    margin: 12px 0 0;
 }
 
 /* =========================
@@ -654,7 +701,11 @@ td {
 @media (max-width: 650px) {
 
     .navbar {
-        padding: 0 15px;
+        padding: 8px 15px;
+        height: auto;
+        min-height: 70px;
+        flex-wrap: wrap;
+        gap: 8px;
     }
 
     .nav-links {
@@ -719,6 +770,7 @@ body {
 </button>
 <aside id="chatPanel" class="chat-panel" role="dialog" aria-modal="false" aria-label="GOAL$GAMBIT chat" hidden>
     <header class="chat-panel-header">
+    <link rel="manifest" href="../manifest.webmanifest">
         <div class="chat-panel-title"><strong>GOAL$GAMBIT Chat</strong><small>Talk with players or contact support</small></div>
         <div class="chat-panel-controls" aria-label="Chat options">
             <button class="chat-mode is-active" type="button" data-chat-page="chat-users.html?embedded=1" aria-pressed="true">Players</button>
@@ -760,7 +812,8 @@ body {
     
     <a
         href="both.html"
-        class="logout">
+        class="logout main-dashboard-link"
+        aria-label="Return to the main Chess and eFootball dashboard">
 
         MAIN DASHBOARD
 
@@ -877,6 +930,14 @@ body {
 
         </a>
 
+    </div>
+
+
+    <div class="section" aria-labelledby="myActiveKonamiTournamentsTitle">
+        <h2 id="myActiveKonamiTournamentsTitle">YOUR ACTIVE TOURNAMENTS</h2>
+        <div id="myActiveKonamiTournaments" aria-live="polite">
+            <p class="active-tournament-empty">Loading your tournament entries…</p>
+        </div>
     </div>
 
 
@@ -1030,15 +1091,15 @@ body {
                 </p>
 
                 <p>
-                    1st: KSh 120
+                    1st: KSh 100
                 </p>
 
                 <p>
-                    2nd: KSh 72
+                    2nd: KSh 80
                 </p>
 
                 <p>
-                    3rd: KSh 48
+                    3rd: KSh 60
                 </p>
 
             </div>
@@ -1055,15 +1116,15 @@ body {
                 </p>
 
                 <p>
-                    1st: KSh 300
+                    1st: KSh 250
                 </p>
 
                 <p>
-                    2nd: KSh 180
+                    2nd: KSh 200
                 </p>
 
                 <p>
-                    3rd: KSh 120
+                    3rd: KSh 150
                 </p>
 
             </div>
@@ -1080,15 +1141,15 @@ body {
                 </p>
 
                 <p>
-                    1st: KSh 600
+                    1st: KSh 500
                 </p>
 
                 <p>
-                    2nd: KSh 360
+                    2nd: KSh 400
                 </p>
 
                 <p>
-                    3rd: KSh 240
+                    3rd: KSh 300
                 </p>
 
             </div>
@@ -1105,21 +1166,23 @@ body {
                 </p>
 
                 <p>
-                    1st: KSh 1,200
+                    1st: KSh 1,000
                 </p>
 
                 <p>
-                    2nd: KSh 720
+                    2nd: KSh 800
                 </p>
 
                 <p>
-                    3rd: KSh 480
+                    3rd: KSh 600
                 </p>
 
             </div>
 
 
         </div>
+
+        <p class="prize-note">Season awards are 5× / 4× / 3× the entry stake for 1st, 2nd and 3rd place.</p>
 
     </div>
 
@@ -1130,9 +1193,11 @@ body {
 
     <div class="section">
 
-        <h2>
-            RECENT GAME RECORDS
-        </h2>
+        <div class="history-toolbar">
+            <h2>RECENT GAME RECORDS</h2>
+            <button class="history-clear-button" id="clearMatchHistory" type="button">Clear match history</button>
+        </div>
+        <p class="history-feedback" id="matchHistoryFeedback" role="status" aria-live="polite">Clearing removes the entries below; match and settlement records stay securely stored.</p>
 
         <div class="table-wrapper">
 
@@ -1183,9 +1248,11 @@ body {
 
     <div class="section">
 
-        <h2>
-            WALLET TRANSACTIONS
-        </h2>
+        <div class="history-toolbar">
+            <h2>WALLET TRANSACTIONS</h2>
+            <button class="history-clear-button" id="clearTransactionHistory" type="button">Clear transaction history</button>
+        </div>
+        <p class="history-feedback" id="transactionHistoryFeedback" role="status" aria-live="polite">Clearing removes the entries below. Your balance and secure payment records stay unchanged.</p>
 
         <div id="transactions">
         </div>
@@ -1398,6 +1465,7 @@ body {
 
 
 <script src="../js/api.js"></script>
+<script src="../js/active-tournaments.js"></script>
 <script>
 
 /* =========================================
@@ -2165,6 +2233,67 @@ function renderTransactions() {
 
 }
 
+async function clearKonamiHistory(historyType, buttonId, feedbackId) {
+    const isTransactions = historyType === "transactions";
+    const label = isTransactions ? "transaction history" : "match history";
+    if (!window.confirm("Remove all current " + label + " items from this list? Wallet, match and settlement records remain securely stored.")) return;
+    const button = document.getElementById(buttonId);
+    const feedback = document.getElementById(feedbackId);
+    button.disabled = true;
+    feedback.textContent = "Clearing " + label + "…";
+    try {
+        const result = await GG.api("/api/history/clear", {
+            method: "POST",
+            body: { historyType: historyType }
+        });
+        if (!result.ok) {
+            feedback.textContent = (result.data && result.data.message) || ("Could not clear " + label + ".");
+            return;
+        }
+
+        if (isTransactions) {
+            localStorage.removeItem("goalGambitTransactions");
+            renderTransactions();
+            feedback.textContent = (result.data && result.data.message) || (label + " cleared from the list.");
+            const tx = await GG.api("/api/wallet/transactions?limit=50");
+            if (tx.ok && Array.isArray(tx.data.transactions)) {
+                const mapped = tx.data.transactions.slice().reverse().map(function (t) {
+                    const type = String(t.type || "");
+                    return {
+                        category: type === "deposit" ? "deposit" : (type === "withdrawal" || type === "withdraw") ? "withdraw" : "neutral",
+                        type: t.description || type.replace(/_/g, " "),
+                        amount: t.amount,
+                        status: t.status,
+                        date: t.createdAt || t.created_at
+                    };
+                });
+                localStorage.setItem("goalGambitTransactions", JSON.stringify(mapped));
+            }
+            renderTransactions();
+        } else {
+            localStorage.removeItem("goalGambitGameRecords");
+            updateDashboard();
+            feedback.textContent = (result.data && result.data.message) || (label + " cleared from the list.");
+            const history = await GG.api("/api/efootball/matches/history/mine");
+            if (history.ok && Array.isArray(history.data.matches)) {
+                localStorage.setItem("goalGambitGameRecords", JSON.stringify(history.data.matches.map(mapServerKonamiMatch)));
+            }
+            updateDashboard();
+        }
+    } catch (_) {
+        feedback.textContent = "The list was cleared, but it could not refresh from the server. Reload this page to sync it.";
+    } finally {
+        button.disabled = false;
+    }
+}
+
+document.getElementById("clearMatchHistory").addEventListener("click", function () {
+    clearKonamiHistory("matches", "clearMatchHistory", "matchHistoryFeedback");
+});
+document.getElementById("clearTransactionHistory").addEventListener("click", function () {
+    clearKonamiHistory("transactions", "clearTransactionHistory", "transactionHistoryFeedback");
+});
+
 
 /* =========================================
    ACTIVE MATCH
@@ -2285,13 +2414,18 @@ function updateDashboard() {
         getUsername();
 
 
-    document.getElementById(
-        "welcomeText"
-    ).textContent =
-
-        "Welcome back, " +
-        username +
-        ". Manage your matches, leagues, tournaments and wallet.";
+    const welcomeText = document.getElementById("welcomeText");
+    const welcomeGreeting = document.createElement("span");
+    welcomeGreeting.textContent = "Welcome back,";
+    const usernameLabel = document.createElement("strong");
+    usernameLabel.textContent = username;
+    const welcomeDetails = document.createElement("span");
+    welcomeDetails.textContent = "Manage your matches, leagues, tournaments and wallet.";
+    welcomeText.replaceChildren(
+        welcomeGreeting,
+        usernameLabel,
+        welcomeDetails
+    );
 
 
     updateBalanceDisplay();
@@ -2423,6 +2557,7 @@ async function loadKonamiData() {
             if (saved && saved.backendId) localStorage.removeItem("goalGambitCurrentMatch");
         } catch (e) {}
     }
+    await GGActiveTournaments.loadKonami("myActiveKonamiTournaments");
     if (typeof updateDashboard === "function") updateDashboard();
 }
 
@@ -2441,7 +2576,7 @@ async function loadLiveKonami() {
 }
 
 loadLiveKonami();
-setInterval(loadLiveKonami, 15000);loadLiveKonami();setInterval(loadLiveKonami,3000);
+setInterval(loadLiveKonami, 15000);
 </script>
 <script>
 (function () {

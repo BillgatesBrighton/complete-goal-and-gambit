@@ -10,8 +10,9 @@
 a{color:inherit}.navbar{min-height:68px;padding:12px max(18px,calc((100vw - 1120px)/2));display:flex;align-items:center;justify-content:space-between;gap:18px;background:#090909;border-bottom:1px solid #242424}.brand{font-weight:900;letter-spacing:.4px;text-decoration:none;color:var(--gold);white-space:nowrap}.nav-links{display:flex;gap:18px;flex-wrap:wrap}.nav-links a{color:#bbb;text-decoration:none;font-size:14px}.nav-links a:hover,.nav-links a.active{color:var(--gold)}
 main{width:min(1120px,calc(100% - 36px));margin:40px auto 80px}.back{display:inline-block;color:var(--gold);font-weight:800;text-decoration:none;margin-bottom:24px}.eyebrow{color:var(--gold);font-size:12px;font-weight:900;letter-spacing:1.6px;text-transform:uppercase;margin:0 0 8px}h1{font-size:clamp(30px,5vw,46px);margin:0 0 8px}.intro{color:var(--muted);line-height:1.6;margin:0 0 24px}.summary{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:#101113;margin:22px 0 26px}.summary strong{color:var(--gold)}.summary span{color:var(--muted);font-size:13px}.notice{padding:22px;border:1px dashed #41434a;border-radius:14px;color:var(--muted);text-align:center;line-height:1.6}.groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:18px}.group{border:1px solid var(--line);border-radius:16px;background:linear-gradient(155deg,#151619,#0f1011);overflow:hidden}.group-head{display:flex;justify-content:space-between;align-items:center;padding:17px 18px;border-bottom:1px solid var(--line)}.group-head h2{font-size:19px;margin:0}.group-head span{font-size:12px;color:var(--muted)}.section{padding:16px 18px}.section+.section{border-top:1px solid var(--line)}.section h3{color:var(--gold);font-size:12px;letter-spacing:.8px;text-transform:uppercase;margin:0 0 12px}.scroll{overflow-x:auto}.table{width:100%;border-collapse:collapse;font-size:13px;min-width:400px}.table th,.table td{text-align:left;padding:9px 7px;border-bottom:1px solid #25272b;white-space:nowrap}.table th{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#858993}.table td{color:#e4e5e8}.table td:last-child,.table th:last-child{text-align:right}.table .you td{color:var(--gold)}.empty{color:#858993;font-size:13px;padding:8px 0}.fixture{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #25272b;font-size:13px}.fixture:last-child{border-bottom:0}.fixture .home{text-align:right}.fixture .score{font-weight:900;white-space:nowrap;color:#fff}.fixture .status{grid-column:1/-1;text-align:center;color:#8f939b;font-size:11px;text-transform:capitalize}.fixture a{color:var(--gold);font-weight:800;text-decoration:none}.refresh{color:#848892;font-size:12px;margin-top:18px;text-align:right}
 .match-action{display:flex;justify-content:center;align-items:center;width:calc(100% - 36px);margin:14px 18px 18px;padding:12px 16px;border:0;border-radius:10px;background:var(--gold);color:#101010;font-weight:900;text-decoration:none;cursor:pointer}.match-action:hover{filter:brightness(1.08)}.match-action:disabled{opacity:.7;cursor:wait}.match-action-note{margin:0 18px 18px;color:var(--muted);font-size:13px;line-height:1.5}.cancel-action{padding:9px 12px;border:1px solid #8b4540;border-radius:9px;background:#21110f;color:#ffb0a9;font-weight:800;cursor:pointer}.cancel-action:hover{background:#331714}.countdown{font-variant-numeric:tabular-nums;font-size:18px!important;color:#fff!important;font-weight:900}
+.match-guidance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 22px}.match-guidance article{padding:15px 17px;border:1px solid #6d5718;border-left:4px solid var(--gold);border-radius:10px;background:#171307}.match-guidance h2{color:#f0cf55;font-size:13px;line-height:1.4;letter-spacing:.5px;margin:0 0 7px}.match-guidance p{color:#e2dfd6;font-size:13px;line-height:1.55;margin:0}.match-guidance a{color:#f0cf55;font-weight:800}
 .forfeit-action{padding:9px 12px;border:1px solid #8b4540;border-radius:9px;background:#21110f;color:#ffb0a9;font-weight:800;cursor:pointer}.forfeit-action:hover{background:#331714}
-@media(max-width:640px){.navbar{align-items:flex-start;flex-direction:column}.nav-links{gap:12px}.summary{align-items:flex-start;flex-direction:column}.group-head{padding:15px}.section{padding:14px 12px}.fixture{gap:6px;font-size:12px}}
+@media(max-width:640px){.navbar{align-items:flex-start;flex-direction:column}.nav-links{gap:12px}.summary{align-items:flex-start;flex-direction:column}.match-guidance{grid-template-columns:1fr}.group-head{padding:15px}.section{padding:14px 12px}.fixture{gap:6px;font-size:12px}}
 </style>
 </head>
 <body>
@@ -30,6 +31,16 @@ main{width:min(1120px,calc(100% - 36px));margin:40px auto 80px}.back{display:inl
     <p class="intro">Live group standings and fixtures update from the server as results are confirmed.</p>
   </section>
   <div id="summary" class="summary" style="display:none"></div>
+  <section class="match-guidance" aria-label="Before opening Match Hub">
+    <article>
+      <h2>SCREENSHOT REQUIRED IN MATCH SUBMISSION</h2>
+      <p>Keep a clear final-score screenshot ready. If selected for eFootball result verification, attach it with your score; it is required before your second score submission if the first reports differ.</p>
+    </article>
+    <article>
+      <h2>NOTIFICATION APPEARS FOR ROOM CODE</h2>
+      <p>When your opponent sends the room code, an alert appears on your device and in Match Hub. Open it to view and confirm the code. Enable <a href="notification-settings.html">match notifications</a> for device alerts.</p>
+    </article>
+  </section>
   <div id="notice" class="notice" role="status" aria-live="polite">Loading tournament groups…</div>
   <section id="groups" class="groups" aria-label="Tournament group tables and fixtures"></section>
   <div id="updated" class="refresh"></div>
@@ -119,7 +130,7 @@ async function cancelTournamentEntry(button) {
   location.href = "tournaments.html?refund=" + encodeURIComponent(Number(result.data.refunded || 0));
 }
 async function forfeitTournamentEntry(button) {
-  if (!confirm("Forfeit this tournament now? Your first opponent receives a 3–0 walkover. Your locked stake will not be refunded; it will be split equally between both admin wallets.")) return;
+  if (!confirm("Forfeit after your first completed match? Any remaining fixtures will be awarded as walkovers. Your locked entry fee will not be refunded; it will be split between both admin wallets.")) return;
   button.disabled = true;
   button.textContent = "Forfeiting…";
   const result = await GG.api("/api/tournaments/" + encodeURIComponent(tournamentId) + "/forfeit", { method:"POST", body:{}, noRedirect:true });
@@ -184,7 +195,7 @@ async function loadGroups() {
   const ownEntry = standings.find(row => String(row.username).toLowerCase() === username.toLowerCase());
   const fee = Number(tournament.entry_fee || 0);
   summary.innerHTML = '<div><strong>' + esc(String(tournament.tier || "Tournament")) + '</strong><br><span>' + Number(tournament.players || 0) + ' of ' + Number(tournament.max_players || 0) + ' places filled</span></div>' +
-    '<div><strong>' + (fee ? 'KSh ' + fee.toLocaleString("en-KE") : 'Free entry') + '</strong><br><span>' + (ownEntry ? 'You are in Group ' + esc(ownEntry.group_code) : (tournament.joined ? 'Your entry is confirmed' : 'Join from the tournament list to play')) + '</span></div>' +
+    '<div><strong>' + (fee ? 'KSh ' + fee.toLocaleString("en-KE") : 'Free entry') + '</strong><br><span>' + (ownEntry ? 'You are in Group ' + esc(ownEntry.group_code) : tournament.forfeited ? 'You forfeited this tournament' : (tournament.joined ? 'Your entry is confirmed' : 'Join from the tournament list to play')) + '</span></div>' +
     '<div><strong>Round ' + Number(roundInfo && roundInfo.number || 1) + '</strong><br><span id="roundCountdown" class="countdown"></span></div>' +
     (tournament.joined && tournament.can_cancel ? '<button id="cancelEntry" class="cancel-action" type="button">Cancel entry and refund stake</button>' :
       tournament.joined && tournament.can_forfeit ? '<button id="forfeitEntry" class="forfeit-action" type="button">Forfeit tournament · send stake to admins</button>' : '');

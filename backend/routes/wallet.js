@@ -10,7 +10,11 @@ const { randomUUID } = require("crypto");
 
 const MAX_AMOUNT = 1000000;
 
-const WITHDRAWAL_FEE_RATE = 0.05;
+function withdrawalFeeRate(amount) {
+    if (amount <= 100) return 0.05;
+    if (amount <= 200) return 0.10;
+    return 0.20;
+}
 
 const routerFactory = function(
     pool,
@@ -301,13 +305,20 @@ const routerFactory = function(
                 return res.status(400).json({ success: false, message: "Valid Kenyan M-Pesa number is required." });
             }
             if (!mpesaB2c || !mpesaB2c.isConfigured()) {
-                return res.status(503).json({ success: false, message: "M-Pesa withdrawals are temporarily unavailable." });
+                const issue = mpesaB2c && typeof mpesaB2c.configurationIssue === "function"
+                    ? mpesaB2c.configurationIssue()
+                    : null;
+                return res.status(503).json({
+                    success: false,
+                    message: issue || "M-Pesa withdrawals are temporarily unavailable."
+                });
             }
 
             const userId = Number(req.user.userId);
             const callback = mpesaB2c.createCallbackToken();
             const reference = "WD-" + userId + "-" + randomUUID();
-            const fee = Math.round(amount * WITHDRAWAL_FEE_RATE);
+            const feeRate = withdrawalFeeRate(amount);
+            const fee = Math.round(amount * feeRate);
             const payout = amount - fee;
             if (payout < 1) {
                 return res.status(400).json({ success: false, message: "Withdrawal amount is too small after the processing fee." });
@@ -448,6 +459,8 @@ const routerFactory = function(
                 success: status !== "failed",
                 message,
                 status,
+                fee,
+                feeRate,
                 payout,
                 wallet
             });
@@ -505,6 +518,11 @@ const routerFactory = function(
                             created_at
                         FROM transactions
                         WHERE user_id = $1
+                          AND created_at > COALESCE(
+                              (SELECT cleared_at FROM user_history_clears
+                               WHERE user_id = $1 AND history_type = 'transactions'),
+                              '-infinity'::timestamptz
+                          )
                         ORDER BY created_at DESC
                         LIMIT $2
                         `,

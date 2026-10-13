@@ -915,4 +915,3 @@ body {
 .move-row:nth-child(even) { background: #ffffff08; }
 .move-white,.move-black { padding-left: 6px; }
 @keyframes clockPulse { to { background:#301313; box-shadow:0 0 18px #ff3d3d44; } }
-

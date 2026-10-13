@@ -308,7 +308,6 @@ body{
 
                 </div>
 
-
                 <div class="detail-row">
 
                     <span>
@@ -320,7 +319,6 @@ body{
                     </span>
 
                 </div>
-
 
                 <div class="detail-row">
 
@@ -334,7 +332,6 @@ body{
 
                 </div>
 
-
                 <div class="detail-row">
 
                     <span>
@@ -347,12 +344,17 @@ body{
 
                 </div>
 
+                <div class="detail-row">
+                    <span>Season prizes (1st / 2nd / 3rd)</span>
+                    <span>KSh 100 / 80 / 60</span>
+                </div>
+
             </div>
 
 
             <button
                 class="view-btn"
-                onclick="openFixtures('Bronze')">
+                onclick="openLeague('Bronze')">
 
                 ENTER BRONZE
 
@@ -433,12 +435,17 @@ body{
 
                 </div>
 
+                <div class="detail-row">
+                    <span>Season prizes (1st / 2nd / 3rd)</span>
+                    <span>KSh 250 / 200 / 150</span>
+                </div>
+
             </div>
 
 
             <button
                 class="view-btn"
-                onclick="openFixtures('Silver')">
+                onclick="openLeague('Silver')">
 
                 ENTER SILVER
 
@@ -519,12 +526,17 @@ body{
 
                 </div>
 
+                <div class="detail-row">
+                    <span>Season prizes (1st / 2nd / 3rd)</span>
+                    <span>KSh 500 / 400 / 300</span>
+                </div>
+
             </div>
 
 
             <button
                 class="view-btn"
-                onclick="openFixtures('Gold')">
+                onclick="openLeague('Gold')">
 
                 ENTER GOLD
 
@@ -554,18 +566,32 @@ body{
 
 
 
+<script src="../js/api.js"></script>
 <script>
 
 /* =========================================
    OPEN SELECTED LEAGUE FIXTURES
 ========================================= */
 
-function openFixtures(league){
-
-    window.location.href =
-        "fixtures.html?league="
-        + encodeURIComponent(league);
-
+async function openLeague(league){
+    if (!GG.requireLogin()) return;
+    const results = await Promise.all([
+        GG.api("/api/me", { noRedirect:true }),
+        GG.api("/api/leagues/" + encodeURIComponent(league), { noRedirect:true })
+    ]);
+    if (!results[0].ok || !results[0].data.user || !results[1].ok) {
+        alert((results[0].data && results[0].data.message) || (results[1].data && results[1].data.message) || "Could not check your league entry.");
+        return;
+    }
+    const username = String(results[0].data.user.username || "").toLowerCase();
+    const userId = Number(results[0].data.user.id || 0);
+    const standings = results[1].data.standings || [];
+    const joined = standings.some(function(row) {
+        return (userId && Number(row.user_id) === userId) || String(row.username || "").toLowerCase() === username;
+    });
+    window.location.href = joined
+        ? "fixtures.html?league=" + encodeURIComponent(league)
+        : league.toLowerCase() + ".html";
 }
 
 </script>

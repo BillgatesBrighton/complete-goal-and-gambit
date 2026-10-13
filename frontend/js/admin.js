@@ -3,9 +3,42 @@
 if (!GG.requireLogin()) return;
 var $ = function (id) { return document.getElementById(id); };
 var esc = GG.escapeHTML;
-var adminId = null, selectedUser = null, selectedName = "", messageSig = "", urls = [], complaintUrls = [], busy = false, timer = null, users = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
+var adminId = null, selectedUser = null, selectedName = "", messageSig = null, urls = [], complaintUrls = [], busy = false, timer = null, walletAdjustTimer = null, users = [], walletAdjustmentUsers = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, includeClearedMatches = false, includeInactiveAnnouncements = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
+async function clearAdminItems(button, path, promptText, afterClear, legacyClear) {
+    if (!confirm(promptText)) return;
+    button.disabled = true;
+    try {
+        var response = await GG.api(path, { method: "POST", body: {} });
+        if (!response.ok && response.status === 404 && legacyClear) {
+            var legacyResult = await legacyClear();
+            say(legacyResult.message, legacyResult.ok ? "ok" : "error");
+            try { await afterClear(); }
+            catch (_) { say("The clear action completed, but this list could not refresh. Use Refresh to reload it.", "error"); }
+            return;
+        }
+        if (!response.ok) { say(response.data.message || "Could not clear these admin records.", "error"); return; }
+        say(response.data.message || "Admin records cleared.", "ok");
+        try { await afterClear(); }
+        catch (_) { say("The clear action completed, but this list could not refresh. Use Refresh to reload it.", "error"); }
+    } catch (_) {
+        say("Could not clear these admin records. Check the connection and try again.", "error");
+    } finally {
+        button.disabled = false;
+    }
+}
+async function clearByLegacyRoutes(records, pathFor, label) {
+    var success=0,failed=0,unique=[],seen=new Set();
+    records.forEach(function(record){var path=pathFor(record);if(!seen.has(path)){seen.add(path);unique.push(path);}});
+    for(var start=0;start<unique.length;start+=8){
+        var batch=unique.slice(start,start+8);
+        var results=await Promise.all(batch.map(function(path){return GG.api(path,{method:"POST",body:{}});}));
+        results.forEach(function(result){if(result.ok)success++;else failed++;});
+    }
+    if(!unique.length)return {ok:true,message:"There are no "+label+" to clear."};
+    return {ok:failed===0,message:success+" "+label+" cleared."+(failed?" "+failed+" could not be cleared; refresh and retry for the remaining items.":"")};
+}
 function concealDashboard(message, clearData) {
     adminAuthorized = false;
     var app = $("app"), gate = $("gate");
@@ -15,8 +48,8 @@ function concealDashboard(message, clearData) {
     if (accessTimer) { clearInterval(accessTimer); accessTimer = null; }
     ["accountDialog", "complaintDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
     urls.concat(complaintUrls).forEach(function(url) { URL.revokeObjectURL(url); });
-    urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = ""; users = [];
-    ["resultList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
+    urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = null; users = [];
+    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
         var node = $(id); if (node) node.replaceChildren();
     });
     if ($("adminName")) $("adminName").textContent = "Admin";
@@ -24,7 +57,10 @@ function concealDashboard(message, clearData) {
 }
 function date(value) { var d = new Date(value); return value && !isNaN(d.getTime()) ? d.toLocaleString() : "Time unavailable"; }
 function pair(a,b) { return a == null || b == null ? "Not submitted" : String(a) + " – " + String(b); }
-function namedScoreReport(firstName,firstScore,secondName,secondScore) { return firstScore==null||secondScore==null ? "Not reported" : String(firstName)+": "+String(firstScore)+" · "+String(secondName)+": "+String(secondScore); }
+function namedScoreReport(firstName, firstScore, secondName, secondScore) {
+    if(firstScore==null||secondScore==null)return "Not reported";
+    return String(firstName)+": "+String(firstScore)+" · "+String(secondName)+": "+String(secondScore);
+}
 function agree(c) {
     var a=c.creator_submitted_score,b=c.creator_submitted_opponent_score,x=c.opponent_submitted_score,y=c.opponent_submitted_opponent_score;
     if(a==null||b==null||x==null||y==null)return {text:"Waiting for both score reports",kind:"wait",bad:false};
@@ -53,11 +89,11 @@ function renderResult(c) {
     if(history.length){
         h+='<div class="reports round-history">'+history.map(function(report){var other=report.username===creatorName?opponentName:creatorName;return '<div class="report"><span>Round '+esc(report.roundNo)+' · '+esc(report.username)+' reported</span><strong>'+esc(namedScoreReport(report.username,report.scoreFor,other,report.scoreAgainst))+'</strong></div>';}).join("")+'</div>';
     } else {
-        h+='<div class="reports"><div class="report"><span>'+esc(creatorName)+' reported</span><strong>'+esc(namedScoreReport(c.creator_username||"Creator",c.creator_submitted_score,c.opponent_username||"Opponent",c.creator_submitted_opponent_score))+'</strong></div><div class="report"><span>'+esc(opponentName)+' reported</span><strong>'+esc(namedScoreReport(c.opponent_username||"Opponent",c.opponent_submitted_score,c.creator_username||"Creator",c.opponent_submitted_opponent_score))+'</strong></div></div>';
+        h+='<div class="reports"><div class="report"><span>'+esc(creatorName)+' reported</span><strong>'+esc(creatorName)+': '+esc(c.creator_submitted_score==null?"—":String(c.creator_submitted_score))+' · '+esc(opponentName)+': '+esc(c.creator_submitted_opponent_score==null?"—":String(c.creator_submitted_opponent_score))+'</strong></div><div class="report"><span>'+esc(opponentName)+' reported</span><strong>'+esc(opponentName)+': '+esc(c.opponent_submitted_score==null?"—":String(c.opponent_submitted_score))+' · '+esc(creatorName)+': '+esc(c.opponent_submitted_opponent_score==null?"—":String(c.opponent_submitted_opponent_score))+'</strong></div></div>';
     }
-    h+='<div class="evidence"><div class="shotbox">'+(c.screenshot_available?'<img class="shot" data-id="'+id+'" alt="Private game screenshot loading">':'No screenshot uploaded yet')+'</div><div><strong>Text read from screenshot</strong><pre class="ocr">'+esc(c.screenshot_ocr_text||"No readable text detected.")+'</pre><div class="meta"><strong>Score candidates:</strong> '+esc(JSON.stringify(c.detected_score_candidates||[]))+'<br><strong>Image check:</strong> '+esc(c.score_check||"not available")+'</div></div></div>';
+    h+='<div class="evidence"><div class="shotbox">'+(c.screenshot_available?'<img class="shot" data-id="'+id+'" alt="Private game screenshot loading">':'No screenshot uploaded yet')+'</div><div class="meta">'+(c.screenshot_available?'Screenshot evidence is attached for manual admin review.':'Waiting for the selected player to upload screenshot evidence.')+'</div></div>';
     if(status&&c.screenshot_available){
-        h+='<div class="form"><label>'+esc(creatorName)+' verified goals<input class="score" data-creator type="number" min="0" max="99" step="1" inputmode="numeric"></label><label>'+esc(opponentName)+' verified goals<input class="score" data-opponent type="number" min="0" max="99" step="1" inputmode="numeric"></label><label class="wide">Optional admin note<textarea class="note" data-review-note maxlength="1000" placeholder="Note name differences, team orientation, or OCR issues (optional)."></textarea></label></div>';
+        h+='<div class="form"><label>'+esc(creatorName)+' verified goals<input class="score" data-creator type="number" min="0" max="99" step="1" inputmode="numeric"></label><label>'+esc(opponentName)+' verified goals<input class="score" data-opponent type="number" min="0" max="99" step="1" inputmode="numeric"></label><label class="wide">Optional admin note<textarea class="note" data-review-note maxlength="1000" placeholder="Record what the screenshot shows, including player-name or side differences."></textarea></label></div>';
         h+='<div class="actions"><button class="btn gold" data-review="resolve" data-id="'+id+'" type="button">Resolve result and settle</button><button class="btn red" data-review="reject" data-id="'+id+'" type="button">Reject evidence · keep funds held</button></div><div class="foot">Resolving updates the match, wallet settlement, standings, and player notices.</div>';
     } else if(status) h+='<div class="warn">Waiting for screenshot evidence. Keep this case open until the image is available.</div>';
     else if(c.review_note) h+='<div class="meta">Admin note: '+esc(c.review_note)+'</div>';
@@ -76,10 +112,11 @@ function renderComplaint(c) {
     var id=Number(c.id), s=String(c.status||"open"), closed=s==="resolved"||s==="dismissed", cleared=!!c.admin_cleared_at;
     var reporter=esc(c.reporter_username||"Player")+" · "+esc(c.reporter_phone||"No phone on file");
     var reported=c.reported_username?esc(c.reported_username)+" · "+esc(c.reported_phone||"No phone on file"):"No other player linked";
-    var scoreText=c.creator_submitted?namedScoreReport(c.creator_username||"Creator",c.creator_submitted_score,c.opponent_username||"Opponent",c.creator_submitted_opponent_score):"Not reported";
-    var opponentText=c.opponent_submitted?namedScoreReport(c.opponent_username||"Opponent",c.opponent_submitted_score,c.creator_username||"Creator",c.opponent_submitted_opponent_score):"Not reported";
+    var creatorName=c.creator_username||"Creator", opponentName=c.opponent_username||"Opponent";
+    var scoreText=c.creator_submitted?namedScoreReport(creatorName,c.creator_submitted_score,opponentName,c.creator_submitted_opponent_score):"Not reported";
+    var opponentText=c.opponent_submitted?namedScoreReport(opponentName,c.opponent_submitted_score,creatorName,c.opponent_submitted_opponent_score):"Not reported";
     var h='<article class="card complaint'+(closed?" closed":"")+'" data-complaint-id="'+id+'"><div class="card-top"><div><h3>'+esc(c.complaint_ref||("#"+id))+" · "+esc(c.subject||"Player complaint")+'</h3><div class="meta">Reporter: '+reporter+'<br>Other player: '+reported+'<br>'+esc(c.category||"support")+' · '+esc(date(c.created_at))+'</div></div><span class="badge '+(closed?"good":"wait")+'">'+esc(s.replace(/_/g," "))+'</span></div>';
-    h+='<div class="meta">'+(c.match_id?'Match #'+esc(c.match_id)+' · '+esc(c.match_mode||"eFootball")+' · '+esc(c.match_status||"unknown")+(c.league_name?' · '+esc(c.league_name):"")+(c.tournament_name?' · '+esc(c.tournament_name):"")+'<br>Creator report: '+esc(scoreText)+' · opponent report: '+esc(opponentText):"Not linked to a match")+' · Evidence: '+Number(c.evidence_count||0)+(c.result_screenshot_available?" + result screenshot":"")+'</div>';
+    h+='<div class="meta">'+(c.match_id?'Match #'+esc(c.match_id)+' · '+esc(c.match_mode||"eFootball")+' · '+esc(c.match_status||"unknown")+(c.league_name?' · '+esc(c.league_name):"")+(c.tournament_name?' · '+esc(c.tournament_name):"")+'<br>Submitted scores: '+esc(c.creator_username||"Creator")+' '+esc(scoreText)+' · '+esc(c.opponent_username||"Opponent")+' '+esc(opponentText):"Not linked to a match")+' · Evidence: '+Number(c.evidence_count||0)+(c.result_screenshot_available?" + result screenshot":"")+'</div>';
     h+='<div class="actions"><button class="btn gold" type="button" data-open-complaint="'+id+'">Open investigation</button>';
     if(closed)h+='<button class="btn '+(cleared?'':'gold')+'" type="button" data-complaint-visibility="'+(cleared?'restore':'clear')+'" data-id="'+id+'">'+(cleared?'Restore to list':'Clear from list')+'</button>';
     return h+'</div></article>';
@@ -126,7 +163,7 @@ function renderComplaintCase(c){
     if(c.evidence&&c.evidence.length){h+=c.evidence.map(function(ev){return '<div class="shotbox"><a class="evidence-link" target="_blank" rel="noopener" aria-label="Open complaint evidence at full size"><img class="shot" data-case-evidence="'+Number(ev.id)+'" alt="Private complaint evidence loading"></a><div class="meta">Uploaded by '+esc(ev.uploader_username||"Player")+' · '+esc(ev.uploader_phone||"No phone")+' · '+esc(ev.purpose||"evidence")+' · '+esc(date(ev.created_at))+' · '+esc(String(ev.byte_size||0))+' bytes</div></div>';}).join("");}
     else if(!c.result_screenshot_available)h+='<div class="shotbox">No additional complaint evidence has been submitted.</div>';
     h+='</div>';
-    if(c.screenshot_ocr_text||c.score_check)h+='<div class="meta">Screenshot check: '+esc(c.score_check||"pending")+' · Selected uploader: '+esc(c.selected_username||"Unknown")+'</div><pre class="ocr">'+esc(c.screenshot_ocr_text||"No readable text detected.")+'</pre>';
+    if(c.result_screenshot_available)h+='<div class="meta">Selected screenshot uploader: '+esc(c.selected_username||"Unknown")+' · '+esc(date(c.screenshot_submitted_at))+'</div>';
     h+='<h3>Case history</h3>';
     h+=(c.events&&c.events.length)?'<div class="activity-block">'+c.events.map(function(ev){return '<div class="activity-item"><strong>'+esc(String(ev.event_type||"event").replace(/_/g," "))+'</strong> · '+esc(date(ev.created_at))+' · '+esc(ev.actor_username||ev.actor_role||"System")+(ev.from_status||ev.to_status?' · '+esc(ev.from_status||"")+' → '+esc(ev.to_status||""):"")+(ev.message?' <br>'+esc(ev.message):"")+'</div>';}).join("")+'</div>':'<p class="help">No case history is available yet.</p>';
     h+='<h3>Private administrator notes</h3>';
@@ -139,8 +176,8 @@ function renderComplaintCase(c){
             h+='<h3>Result decision</h3><div class="warn">Enter the scores you verified from the screenshot. Resolving this result credits the winner or refunds both players on a draw, updates standings, and moves the complaint to Resolved.</div><form data-case-decision-form="'+Number(c.id)+'" class="form"><label>'+esc(creatorName)+' verified goals<input class="score" name="creatorScore" type="number" min="0" max="99" step="1" value="'+(c.creator_score==null?"":Number(c.creator_score))+'"></label><label>'+esc(opponentName)+' verified goals<input class="score" name="opponentScore" type="number" min="0" max="99" step="1" value="'+(c.opponent_score==null?"":Number(c.opponent_score))+'"></label><label class="wide">Decision reason<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Document the evidence and platform rule used."></textarea></label><div class="actions wide"><button class="btn gold" type="button" data-case-decision="correct">Settle score & mark complaint Resolved</button></div></form>';
         }
         if(c.source==="efootball_result_dispute"&&c.match_status==="disputed"&&Number(c.stake_amount)>0){
-            var transferTotal=(Number(c.stake_amount)*2).toFixed(2);
-            h+='<h3>Final disputed-stake outcome</h3><div class="warn">If this complaint cannot be settled from the reports, you can close the match and transfer both locked stakes (KSh '+esc(transferTotal)+') to your administrator withdrawal wallet. This is final: players are not refunded and no winner is recorded.</div><form data-case-forfeit-form="'+Number(c.id)+'" class="form"><label class="wide">Reason for transferring the stakes<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Record why the dispute cannot be resolved from the evidence."></textarea></label><div class="actions wide"><button class="btn red" type="button" data-case-forfeit="'+Number(c.id)+'">Transfer both stakes to my admin wallet & resolve</button></div></form>';
+            var refundTotal=(Number(c.stake_amount)*2).toFixed(2);
+            h+='<h3>Refund disputed stakes</h3><div class="warn">If the screenshots and reports do not establish a fair result, cancel the match and return both locked stakes (KSh '+esc(refundTotal)+') directly to the players. No money goes to the administrator wallet.</div><form data-case-forfeit-form="'+Number(c.id)+'" class="form"><label class="wide">Reason for refunding the stakes<textarea class="note" name="reason" maxlength="2000" minlength="10" required placeholder="Record why the dispute cannot be resolved from the evidence."></textarea></label><div class="actions wide"><button class="btn red" type="button" data-case-forfeit="'+Number(c.id)+'">Refund both players &amp; resolve</button></div></form>';
         }
     }else h+='<div class="warn">'+esc(c.status)+': '+esc(c.resolution_reason||"No public resolution reason was recorded.")+'</div>';
     h+='</section>';
@@ -194,32 +231,34 @@ async function complaintDecision(button){
 }
 async function forfeitDisputedStakes(button){
     var form=button.closest("[data-case-forfeit-form]"),id=form&&form.dataset.caseForfeitForm,reason=form&&form.elements.reason.value.trim();
-    if(!id||!reason||reason.length<10){say("Enter a reason of at least 10 characters before transferring the stakes.","error");return;}
-    if(!confirm("Final resolution: transfer both players’ locked stakes to your administrator withdrawal wallet, cancel the match, record no winner, and resolve the complaint? Players will not be refunded."))return;
+    if(!id||!reason||reason.length<10){say("Enter a reason of at least 10 characters before refunding the stakes.","error");return;}
+    if(!confirm("Resolve this disputed match as cancelled and return each locked stake to its player? No funds will be transferred to the administrator wallet."))return;
     button.disabled=true;
-    var r=await GG.api("/api/admin/complaint-cases/"+encodeURIComponent(id)+"/forfeit-stakes",{method:"POST",body:{confirm:true,reason:reason}});
-    if(!r.ok){button.disabled=false;say(r.data.message||"Could not transfer the disputed stakes.","error");return;}
-    say(r.data.message+" Amount: "+GG.formatMoney(r.data.amount)+".","ok");
-    await loadAdminWallet();await refresh(true);await openComplaint(id);
+    var r=await GG.api("/api/admin/complaint-cases/"+encodeURIComponent(id)+"/refund-stakes",{method:"POST",body:{confirm:true,reason:reason}});
+    if(!r.ok){button.disabled=false;say(r.data.message||"Could not refund the disputed stakes.","error");return;}
+    say(r.data.message+" Total returned: "+GG.formatMoney(r.data.amount)+".","ok");
+    await refresh(true);await openComplaint(id);
 }
 async function loadThreads() {
     var r=await GG.api("/api/admin/support"+(includeCleared?"?includeCleared=true":""));
     if(!r.ok){$("threads").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load inbox.")+'</div>';return;}
     var list=r.data.threads||[], unread=list.reduce(function(n,t){return n+(Number(t.unread)||0);},0);
     $("statUnread").textContent=unread; $("navUnread").textContent=unread;
-    $("threads").innerHTML=list.length?list.map(function(t){var id=Number(t.user_id),cleared=!!t.admin_cleared_at;return '<div class="thread-row"><button class="thread'+(id===Number(selectedUser)?" active":"")+'" data-thread="'+id+'" data-name="'+esc(t.username||"Player")+'"><span class="thread-name">'+esc(t.username||"Player")+(Number(t.unread)?' <span class="unread">'+Number(t.unread)+'</span>':"")+(cleared?' <span class="badge">Cleared</span>':"")+'</span><span class="last">'+esc(t.last_message||"No messages yet")+'</span></button><button class="btn" type="button" data-thread-clear="'+id+'">'+(cleared?"Restore":"Clear")+'</button></div>';}).join(""):'<div class="empty">No player support messages in this view.</div>';
+    $("threads").innerHTML=list.length?list.map(function(t){var id=Number(t.user_id),name=t.username||"Player",cleared=!!t.admin_cleared_at,label=cleared?"Restore chat":"Clear chat",action=cleared?"restore":"clear";return '<div class="thread-row"><button class="thread'+(id===Number(selectedUser)?" active":"")+'" data-thread="'+id+'" data-name="'+esc(name)+'"><span class="thread-name">'+esc(name)+(Number(t.unread)?' <span class="unread">'+Number(t.unread)+'</span>':"")+(cleared?' <span class="badge">Cleared</span>':"")+'</span><span class="last">'+esc(t.last_message||"No messages yet")+'</span></button><button class="btn thread-clear" type="button" data-thread-clear="'+id+'" data-thread-action="'+action+'" aria-label="'+label+' for '+esc(name)+'" title="'+label+' for '+esc(name)+'">'+label+'</button></div>';}).join(""):'<div class="empty">No player support messages in this view.</div>';
+    var selected=list.find(function(t){return Number(t.user_id)===Number(selectedUser)}), currentClear=$("clearSelectedSupport");
+    if(currentClear){var restore=!!(selected&&selected.admin_cleared_at);currentClear.disabled=!selected;currentClear.dataset.threadClear=selected?String(selectedUser):"";currentClear.dataset.threadAction=restore?"restore":"clear";currentClear.textContent=restore?"Restore chat to inbox":"Clear chat from inbox";currentClear.setAttribute("aria-label",currentClear.textContent);currentClear.title=currentClear.textContent;}
 }
 async function loadMessages(force) {
     if(selectedUser==null)return;
     if(!force&&document.activeElement===$("reply"))return;
     var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser));
-    if(!r.ok){$("convhead").textContent=r.data.message||"Could not load conversation.";return;}
+    if(!r.ok){$("convheadLabel").textContent=r.data.message||"Could not load conversation.";return;}
     var list=r.data.messages||[], sig=list.map(function(m){return m.id+":"+m.message+":"+(m.read_at||"");}).join("|");
     if(sig===messageSig)return; messageSig=sig;
     var pane=$("messages"), bottom=pane.scrollHeight-pane.scrollTop-pane.clientHeight<70;
     pane.innerHTML=list.length?list.map(function(m){var mine=Number(m.sender_id)===Number(adminId),receipt=mine?(m.read_at?" · Seen by player":" · Sent"):"";return '<div class="bubble'+(mine?" mine":"")+'">'+esc(m.message)+'<small>'+esc(mine?"You":m.username||selectedName)+" · "+esc(date(m.created_at))+esc(receipt)+'</small></div>';}).join(""):'<div class="empty">No messages in this conversation.</div>';
     if(bottom)pane.scrollTop=pane.scrollHeight;
-    $("convhead").textContent=selectedName+" · "+list.length+" message"+(list.length===1?"":"s");
+    $("convheadLabel").textContent=selectedName+" · "+list.length+" message"+(list.length===1?"":"s");
 }
 async function loadUsers() {
     var query=$("userSearch").value.trim(), r=await GG.api("/api/admin/users?search="+encodeURIComponent(query));
@@ -229,26 +268,73 @@ async function loadUsers() {
 
     $("userList").innerHTML=users.length?users.map(function(u){
         var id=Number(u.id), self=id===Number(adminId), status=String(u.account_status||"active"), cls=status==="active"?"active-status":status==="suspended"?"suspended-status":"closed-status";
-        var h='<article class="userrow" data-user="'+id+'"><div><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
+        var h='<article class="userrow" data-user="'+id+'"><div><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
         h+='<label class="sr-only" for="un'+id+'">Optional action note</label><input id="un'+id+'" class="note" data-user-note maxlength="1000" placeholder="Optional note">';
         h+='<button class="btn" type="button" data-view-dashboard="'+id+'">View dashboard</button>';
         if(self)h+='<span class="foot">Your admin access is protected.</span>';
         else {
             if(status!=="active")h+='<button class="btn" data-status="active" data-id="'+id+'">Reactivate</button>';
             if(status!=="suspended")h+='<button class="btn" data-status="suspended" data-id="'+id+'">Suspend</button>';
-            if(status!=="closed")h+='<button class="btn red" data-status="closed" data-id="'+id+'">Clear account</button>';
+            if(status!=="closed")h+='<button class="btn red" data-status="closed" data-id="'+id+'">Close account</button>';
             if(u.role!=="admin")h+='<button class="btn red" type="button" data-delete-account="'+id+'">Delete permanently</button>';
         }
         return h+'</div></article>';
     }).join(""):'<div class="empty">No accounts match that search.</div>';
 }
+async function loadWalletAdjustmentUsers() {
+    var query=$("walletAdjustmentSearch").value.trim();
+    if(!query){walletAdjustmentUsers=[];$("walletAdjustmentList").innerHTML='<div class="empty">Search for a username or phone to adjust an available wallet balance.</div>';return;}
+    var r=await GG.api("/api/admin/users?search="+encodeURIComponent(query));
+    if(!r.ok){$("walletAdjustmentList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not find player accounts.")+'</div>';return;}
+    walletAdjustmentUsers=r.data.users||[];
+    $("walletAdjustmentList").innerHTML=walletAdjustmentUsers.length?walletAdjustmentUsers.map(function(u){
+        var id=Number(u.id),self=id===Number(adminId);
+        return '<article class="userrow" data-wallet-user="'+id+'"><div><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><div class="user-actions"><label>Adjustment amount<input class="wallet-adjust" data-wallet-delta type="number" step="0.01" min="-1000000" max="1000000" placeholder="± KSh"></label><label>Reason<input class="note" data-wallet-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><button class="btn gold" type="button" data-wallet-adjust="'+id+'">Adjust available balance</button></div></article>';
+    }).join(""):'<div class="empty">No accounts match that search.</div>';
+}
 async function loadAnnouncements() {
     var r=await GG.api("/api/admin/announcements");
     if(!r.ok){$("announcementList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load announcements.")+'</div>';return;}
-    var list=r.data.announcements||[];
+    var all=r.data.announcements||[],list=includeInactiveAnnouncements?all:all.filter(function(a){return !!a.active;});
     $("announcementList").innerHTML=list.length?list.map(function(a){
-        return '<article class="announcement-row"><div><div class="announcement-message">'+esc(a.message)+'</div><div class="meta">'+esc(date(a.created_at))+' · '+(a.active?'Visible to players':'Hidden')+'</div></div>'+(a.active?'<button class="btn" type="button" data-deactivate-announcement="'+Number(a.id)+'">Hide</button>':'<span class="badge">Inactive</span>')+'</article>';
-    }).join(""):'<div class="empty">No announcements yet.</div>';
+        var h='<article class="announcement-row"><div><div class="announcement-message">'+esc(a.message)+'</div><div class="meta">'+esc(date(a.created_at))+' · '+(a.active?'Visible to players':'Hidden')+'</div></div><div class="actions">';
+        h+=a.active?'<button class="btn" type="button" data-deactivate-announcement="'+Number(a.id)+'">Hide</button>':'<span class="badge">Inactive</span>';
+        h+='<button class="btn red" type="button" data-delete-announcement="'+Number(a.id)+'">Delete</button></div></article>';
+        return h;
+    }).join(""):'<div class="empty">'+(includeInactiveAnnouncements?"No announcements in the archive.":"No active announcements.")+'</div>';
+}
+async function loadCompetitionList() {
+    var response=await GG.api("/api/admin/competitions");
+    if(!response.ok){$("competitionTable").innerHTML='<div class="empty">'+esc(response.data.message||"Could not load competition tables.")+'</div>';return;}
+    var items=response.data.competitions||[],select=$("competitionSelect"),previous=select.value;
+    select.innerHTML='<option value="">Select a league or tournament</option>'+items.map(function(item){
+        return '<option value="'+esc(item.type+":"+item.id)+'">'+esc(item.name)+" · "+esc(item.type)+" · "+esc(String(item.status||"open").replace(/_/g," "))+'</option>';
+    }).join("");
+    if(items.some(function(item){return item.type+":"+item.id===previous;}))select.value=previous;
+    if(select.value)await loadCompetitionTable();
+}
+async function loadCompetitionTable() {
+    var selected=$("competitionSelect").value.split(":"),type=selected[0],id=Number(selected[1]);
+    if(!type||!Number.isSafeInteger(id)){ $("competitionTable").innerHTML='<div class="empty">Choose a competition to load its table.</div>';return; }
+    var response=await GG.api("/api/admin/competitions/"+encodeURIComponent(type)+"/"+encodeURIComponent(id));
+    if(!response.ok){$("competitionTable").innerHTML='<div class="empty">'+esc(response.data.message||"Could not load this table.")+'</div>';return;}
+    var rows=response.data.standings||[],competition=response.data.competition;
+    $("competitionMessage").textContent=competition.name+" · "+String(competition.status||"open").replace(/_/g," ")+" · Entry KSh "+Number(competition.entry_fee||0)+" · "+rows.length+" player(s)";
+    $("competitionTable").innerHTML=rows.length?rows.map(function(row,index){
+        var forfeited=!!row.forfeited_at;
+        return '<article class="competition-row" data-competition-user="'+Number(row.user_id)+'"><div><strong>#'+(index+1)+" · "+esc(row.username)+"</strong><span class=\"badge\">"+(forfeited?"Forfeited":"KSh "+Number(row.fee_paid||0)+" entry")+"</span> <span class=\"meta\">Played "+Number(row.played||0)+" · W "+Number(row.wins||0)+" D "+Number(row.draws||0)+" L "+Number(row.losses||0)+" · Pts "+Number(row.points||0)+" · GD "+Number(row.goal_difference||0)+"</span></div>"+
+          '<form class="competition-edit" data-competition-type="'+esc(type)+'" data-competition-id="'+id+'" data-user-id="'+Number(row.user_id)+'">'+
+          '<label>Wins<input name="wins" type="number" min="0" max="10000" step="1" value="'+Number(row.wins||0)+'" '+(forfeited?"disabled":"")+'></label><label>Draws<input name="draws" type="number" min="0" max="10000" step="1" value="'+Number(row.draws||0)+'" '+(forfeited?"disabled":"")+'></label><label>Losses<input name="losses" type="number" min="0" max="10000" step="1" value="'+Number(row.losses||0)+'" '+(forfeited?"disabled":"")+'></label><label>Goals for<input name="goalsFor" type="number" min="0" max="10000" step="1" value="'+Number(row.goals_for||0)+'" '+(forfeited?"disabled":"")+'></label><label>Goals against<input name="goalsAgainst" type="number" min="0" max="10000" step="1" value="'+Number(row.goals_against||0)+'" '+(forfeited?"disabled":"")+'></label><label>Reason<input name="reason" maxlength="1000" placeholder="Required · at least 10 characters" '+(forfeited?"disabled":"")+'></label><button class="btn gold" type="submit" '+(forfeited?"disabled":"")+'>Save table edit</button></form></article>';
+    }).join(""):'<div class="empty">No entries in this competition yet.</div>';
+}
+async function saveCompetitionEdit(form) {
+    var body={wins:Number(form.elements.wins.value),draws:Number(form.elements.draws.value),losses:Number(form.elements.losses.value),goalsFor:Number(form.elements.goalsFor.value),goalsAgainst:Number(form.elements.goalsAgainst.value),reason:form.elements.reason.value.trim()};
+    if(body.reason.length<10){say("Add a reason of at least 10 characters for the table edit.","error");return;}
+    var button=form.querySelector("button[type=submit]");button.disabled=true;
+    var url="/api/admin/competitions/"+encodeURIComponent(form.dataset.competitionType)+"/"+encodeURIComponent(form.dataset.competitionId)+"/standings/"+encodeURIComponent(form.dataset.userId);
+    var response=await GG.api(url,{method:"POST",body:body});button.disabled=false;
+    if(!response.ok){say(response.data.message||"Could not update the table.","error");return;}
+    say(response.data.message||"Competition table updated.","ok");await loadCompetitionTable();
 }
 async function loadOverview() {
     var r=await GG.api("/api/admin/overview"); if(!r.ok)return;
@@ -261,7 +347,118 @@ async function loadAdminWallet() {
     $("adminWalletBalance").textContent=GG.formatMoney(wallet.balance||0);
     $("adminWalletTransactions").innerHTML=items.length?items.map(function(t){
         return '<article class="activity-item"><strong>'+esc(String(t.transaction_type||"wallet activity").replace(/_/g," "))+' · '+esc(GG.formatMoney(t.amount))+'</strong><br>'+esc(t.status||"completed")+' · '+esc(date(t.created_at))+(t.reference?'<br>Ref: '+esc(t.reference):"")+(t.description?'<br>'+esc(t.description):"")+'</article>';
-    }).join(""):'<div class="empty">No administrator wallet activity yet. Resolved dispute transfers appear here.</div>';
+    }).join(""):'<div class="empty">No administrator wallet activity is visible.</div>';
+}
+async function clearAdminWalletHistory() {
+    if(!confirm("Clear the administrator wallet activity from this view? Financial ledger entries will stay saved for reconciliation."))return;
+    var button=$("clearAdminWalletHistory");button.disabled=true;
+    var r=await GG.api("/api/admin/wallet/history/clear",{method:"POST",body:{}});button.disabled=false;
+    if(!r.ok){say(r.data.message||"Could not clear administrator wallet activity.","error");return;}
+    say(r.data.message||"Administrator wallet activity cleared.","ok");await loadAdminWallet();
+}
+function renderManagedMatch(m) {
+    var id=Number(m.id), game=m.game==="chess"?"Chess":"Konami", cleared=!!m.admin_cleared_at;
+    var creator=m.creator_username||"Player", opponent=m.opponent_username||"Waiting for opponent";
+    var matchType=String(m.match_type||"match").replace(/_/g," ");
+    var mode=m.game==="konami"?(m.league?(m.league+" league"):m.mode||matchType):(m.time_control||matchType);
+    var result=m.game==="konami"&&m.creator_score!=null&&m.opponent_score!=null
+        ? "Score "+m.creator_score+"–"+m.opponent_score
+        : String(m.result_status||"No result").replace(/_/g," ");
+    var h='<article class="card" data-managed-match="'+id+'" data-game="'+esc(m.game)+'"><div class="card-top"><div><h3>'+esc(game)+' match #'+id+' · '+esc(matchType)+'</h3><div class="meta">'+esc(creator)+' vs '+esc(opponent)+' · '+esc(mode)+' · '+esc(date(m.created_at))+'</div></div><span class="badge '+(m.is_terminal?"good":"wait")+'">'+esc(String(m.status||"unknown").replace(/_/g," "))+'</span></div>';
+    h+='<div class="meta">'+esc(result)+' · Stake per player: '+esc(GG.formatMoney(m.stake_amount||0))+(m.finished_at?' · Finished '+esc(date(m.finished_at)):"")+(m.cleared_by_username?' · Cleared by '+esc(m.cleared_by_username):"")+'</div>';
+    h+='<div class="actions">';
+    if(m.creator_id)h+='<button class="btn" type="button" data-match-wallet="'+Number(m.creator_id)+'" data-match-username="'+esc(creator)+'">Adjust '+esc(creator)+' wallet</button>';
+    if(m.opponent_id)h+='<button class="btn" type="button" data-match-wallet="'+Number(m.opponent_id)+'" data-match-username="'+esc(opponent)+'">Adjust '+esc(opponent)+' wallet</button>';
+    h+='</div>';
+    if(m.can_cancel_refund){
+        h+='<div class="form"><label class="wide">Admin reason<input class="note" data-match-action-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn red" type="button" data-match-cancel-refund="'+id+'">'+(Number(m.stake_amount)>0?'Cancel match · refund locked stake':'Cancel match')+'</button></div></div>';
+    } else if(m.game==="chess"&&m.match_type==="tournament"&&!m.is_terminal){
+        h+='<div class="foot">Chess tournament stakes are handled by competition settlement.</div>';
+    }
+    if(m.can_edit_score&&m.game==="chess"){
+        h+='<form class="form" data-chess-result-form data-match-id="'+id+'"><strong class="wide">Set verified Chess result</strong><label class="wide">Game result<select class="select" data-chess-result required><option value="">Choose a result</option><option value="white_win">White wins</option><option value="black_win">Black wins</option><option value="draw">Draw</option></select></label><label class="wide">Admin reason<input class="note" data-chess-result-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn gold" type="submit">Save result and settle</button></div><p class="foot wide">This settles the match and updates the wallet and ranked rating where applicable.</p></form>';
+    } else if(m.can_edit_score){
+        h+='<form class="form" data-match-score-form data-match-id="'+id+'"><strong class="wide">Set verified Konami score</strong><label>Creator · '+esc(creator)+'<input class="score" data-score-creator type="number" min="0" max="99" step="1" required></label><label>Opponent · '+esc(opponent)+'<input class="score" data-score-opponent type="number" min="0" max="99" step="1" required></label><label class="wide">Admin reason<input class="note" data-score-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn gold" type="submit">Save score and settle</button></div><p class="foot wide">This settles the match and updates the wallet, league/tournament standings, and player notices.</p></form>';
+    }
+    if(m.is_terminal){
+        h+='<div class="actions"><button class="btn '+(cleared?'':'gold')+'" type="button" data-match-visibility="'+(cleared?'restore':'clear')+'" data-id="'+id+'" data-game="'+esc(m.game)+'">'+(cleared?'Restore to list':'Clear from list')+'</button></div>';
+    }
+    return h+'</article>';
+}
+async function loadMatchManagement() {
+    var params=new URLSearchParams({game:$('matchGameFilter').value,type:$('matchTypeFilter').value});
+    if(includeClearedMatches)params.set('includeCleared','true');
+    var r=await GG.api('/api/admin/matches?'+params.toString());
+    if(!r.ok){$('matchManagementList').innerHTML='<div class="empty">'+esc(r.data.message||'Could not load matches.')+'</div>';return;}
+    var list=r.data.matches||[];
+    $('matchManagementList').innerHTML=list.length?list.map(renderManagedMatch).join(''):'<div class="empty">No matches in this view.</div>';
+}
+async function clearAllMatches() {
+    await clearAdminItems($('clearAllMatches'),'/api/admin/matches/clear-terminal','Clear all completed or cancelled matches from both Chess and Konami? Active matches will stay visible. Match, wallet, and audit history will be preserved and cleared matches can be restored.',async function(){
+        includeClearedMatches=false;$('toggleClearedMatches').setAttribute('aria-pressed','false');$('toggleClearedMatches').textContent='Show cleared';await loadMatchManagement();
+    },legacyClearMatches);
+}
+async function legacyClearMatches() {
+    var records=[],seen=new Set(),games=['chess','konami'],types=['casual','ranked','league','tournament'];
+    for(var g=0;g<games.length;g++)for(var t=0;t<types.length;t++){
+        var params=new URLSearchParams({game:games[g],type:types[t]}),response=await GG.api('/api/admin/matches?'+params.toString());
+        if(!response.ok)return {ok:false,message:response.data.message||'Could not load matches for the compatibility clear.'};
+        (response.data.matches||[]).forEach(function(match){
+            var key=match.game+':'+match.id;
+            if(match.is_terminal&&!match.admin_cleared_at&&!seen.has(key)){seen.add(key);records.push({game:match.game,id:match.id});}
+        });
+    }
+    return clearByLegacyRoutes(records,function(match){return '/api/admin/matches/'+encodeURIComponent(match.game)+'/'+encodeURIComponent(match.id)+'/clear';},'settled matches');
+}
+async function matchVisibilityAction(btn) {
+    var action=btn.dataset.matchVisibility, clear=action==='clear';
+    if(clear&&!confirm('Clear this settled match from the default admin list? The match, wallet and audit records will remain saved; it can be restored later.'))return;
+    btn.disabled=true;
+    var r=await GG.api('/api/admin/matches/'+encodeURIComponent(btn.dataset.game)+'/'+encodeURIComponent(btn.dataset.id)+'/'+action,{method:'POST'});
+    if(!r.ok){btn.disabled=false;say(r.data.message||'Could not update this match list.','error');return;}
+    say(r.data.message||'Match list updated.','ok');await loadMatchManagement();
+}
+async function cancelManagedMatch(btn) {
+    var card=btn.closest('[data-managed-match]'), reason=card.querySelector('[data-match-action-reason]').value.trim();
+    if(reason.length<10){say('Enter an admin reason of at least 10 characters.','error');return;}
+    var game=card.dataset.game, id=btn.dataset.matchCancelRefund;
+    if(!confirm('Cancel this '+(game==='chess'?'Chess':'Konami')+' match? Any still-locked match stakes will be returned to the players. This action is recorded in the admin audit history.'))return;
+    btn.disabled=true;
+    var r=await GG.api('/api/admin/matches/'+encodeURIComponent(game)+'/'+encodeURIComponent(id)+'/cancel-refund',{method:'POST',body:{reason:reason}});
+    if(!r.ok){btn.disabled=false;say(r.data.message||'Could not cancel and refund this match.','error');return;}
+    say(r.data.message||'Match cancelled.','ok');await refresh(true);
+}
+async function saveManagedScore(form) {
+    var creatorScore=Number(form.querySelector('[data-score-creator]').value), opponentScore=Number(form.querySelector('[data-score-opponent]').value), reason=form.querySelector('[data-score-reason]').value.trim();
+    if(!Number.isInteger(creatorScore)||!Number.isInteger(opponentScore)||creatorScore<0||opponentScore<0||creatorScore>99||opponentScore>99){say('Scores must be whole numbers from 0 to 99.','error');return;}
+    if(reason.length<10){say('Enter an admin reason of at least 10 characters.','error');return;}
+    if(!confirm('Record '+creatorScore+'–'+opponentScore+' as the verified score? This will settle the match, wallet and competition standings.'))return;
+    var button=form.querySelector('button[type=submit]');button.disabled=true;
+    var r=await GG.api('/api/admin/matches/konami/'+encodeURIComponent(form.dataset.matchId)+'/scores',{method:'POST',body:{creatorScore:creatorScore,opponentScore:opponentScore,reason:reason}});
+    if(!r.ok){button.disabled=false;say(r.data.message||'Could not save this score.','error');return;}
+    say(r.data.message||'Score saved and settled.','ok');await refresh(true);
+}
+async function saveManagedChessResult(form) {
+    var result=form.querySelector('[data-chess-result]').value, reason=form.querySelector('[data-chess-result-reason]').value.trim();
+    if(!['white_win','black_win','draw'].includes(result)){say('Choose the Chess result.','error');return;}
+    if(reason.length<10){say('Enter an admin reason of at least 10 characters.','error');return;}
+    if(!confirm('Record '+result.replace('_',' ')+' as the Chess result? This will settle the wallet and update ranked ratings where applicable.'))return;
+    var button=form.querySelector('button[type=submit]');button.disabled=true;
+    var r=await GG.api('/api/admin/matches/chess/'+encodeURIComponent(form.dataset.matchId)+'/result',{method:'POST',body:{result:result,reason:reason}});
+    if(!r.ok){button.disabled=false;say(r.data.message||'Could not save this Chess result.','error');return;}
+    say(r.data.message||'Chess result saved and settled.','ok');await refresh(true);
+}
+function updateMatchTypeOptions() {
+    var game=$('matchGameFilter').value, select=$('matchTypeFilter'), previous=select.value;
+    var options=game==='chess'?['all','casual','ranked','tournament']:game==='konami'?['all','ranked','league','tournament']:['all','ranked','league','tournament'];
+    var labels={all:'All match types',casual:'Casual',ranked:'Ranked',league:'League',tournament:'Tournament'};
+    select.innerHTML=options.map(function(value){return '<option value="'+value+'">'+labels[value]+'</option>';}).join('');
+    select.value=options.indexOf(previous)>=0?previous:'all';
+}
+function focusMatchPlayerWallet(btn) {
+    location.hash='#adminWallet';
+    $('walletAdjustmentSearch').value=btn.dataset.matchUsername||'';
+    loadWalletAdjustmentUsers();
 }
 function editing(id) { var r=$(id),a=document.activeElement;return !!(r&&a&&r.contains(a)&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT")); }
 async function refresh(force) {
@@ -269,9 +466,12 @@ async function refresh(force) {
     try {
         var tasks=[loadOverview()];
         if(force||!editing("resultList"))tasks.push(loadResults());
+        if(force||!editing("matchManagement"))tasks.push(loadMatchManagement());
         if(force||!editing("complaintSearch"))tasks.push(loadComplaints());
         if(force||!editing("adminWalletWithdrawForm"))tasks.push(loadAdminWallet());
         if(force||!editing("accounts"))tasks.push(loadUsers());
+        if(force||!editing("adminWallet")){if($("walletAdjustmentSearch").value.trim())tasks.push(loadWalletAdjustmentUsers());}
+        if(force||!editing("competitionSelect"))tasks.push(loadCompetitionList());
         if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
         tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
         $("live").textContent="Live · "+new Date().toLocaleTimeString();
@@ -289,7 +489,7 @@ async function complaintVisibilityAction(btn) {
     btn.disabled=true;
     var r=await GG.api("/api/admin/complaint-cases/"+encodeURIComponent(id)+"/"+action,{method:"POST"});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not update the complaint list.","error");return;}
-    say(r.data.message||"Complaint list updated.","ok");await refresh(true);
+    say(r.data.message||"Complaint list updated.","ok");await loadComplaints();
 }
 async function resultAction(btn) {
     var card=btn.closest("[data-case]"), decision=btn.dataset.review, body={decision:decision,note:card.querySelector("[data-review-note]")?.value.trim()||""};
@@ -310,7 +510,33 @@ async function resultVisibilityAction(btn) {
     btn.disabled=true;
     var r=await GG.api("/api/admin/result-verifications/"+encodeURIComponent(btn.dataset.id)+"/"+action,{method:"POST"});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not update the result dispute list.","error");return;}
-    say(r.data.message||"Result dispute list updated.","ok");await refresh(true);
+    say(r.data.message||"Result dispute list updated.","ok");await loadResults();
+}
+async function clearAllResults() {
+    await clearAdminItems($('clearAllResults'),'/api/admin/result-verifications/clear-resolved','Clear all resolved result disputes from the default admin list? Open disputes stay visible, and match and audit history will be preserved.',async function(){
+        includeClearedResults=false;$('toggleClearedResults').setAttribute('aria-pressed','false');$('toggleClearedResults').textContent='Show cleared';await loadResults();
+    },legacyClearResults);
+}
+async function legacyClearResults() {
+    var response=await GG.api('/api/admin/result-verifications');
+    if(!response.ok)return {ok:false,message:response.data.message||'Could not load result disputes for the compatibility clear.'};
+    var records=(response.data.verifications||[]).filter(function(item){return !item.admin_cleared_at&&item.settled_at&&['completed','cancelled'].includes(item.match_status);});
+    return clearByLegacyRoutes(records,function(item){return '/api/admin/result-verifications/'+encodeURIComponent(item.id)+'/clear';},'resolved result disputes');
+}
+async function clearResolvedComplaints() {
+    await clearAdminItems($('clearResolvedComplaints'),'/api/admin/complaint-cases/clear-resolved','Clear all resolved or dismissed complaints from the admin list? Open complaints stay visible, and case history will be preserved.',async function(){
+        includeClearedComplaints=false;$('toggleClearedComplaints').setAttribute('aria-pressed','false');$('toggleClearedComplaints').textContent='Show cleared';complaintPage=1;await loadComplaints();
+    },legacyClearComplaints);
+}
+async function legacyClearComplaints() {
+    var records=[],page=1,pages=1;
+    while(page<=pages){
+        var params=new URLSearchParams({status:'closed',page:String(page),limit:'50',q:''}),response=await GG.api('/api/admin/complaint-cases?'+params.toString());
+        if(!response.ok)return {ok:false,message:response.data.message||'Could not load resolved complaints for the compatibility clear.'};
+        records=records.concat((response.data.complaints||[]).filter(function(item){return !item.admin_cleared_at&&(item.status==='resolved'||item.status==='dismissed');}));
+        pages=Math.max(1,Number(response.data.pages)||1);page++;
+    }
+    return clearByLegacyRoutes(records,function(item){return '/api/admin/complaint-cases/'+encodeURIComponent(item.id)+'/clear';},'resolved complaints');
 }
 async function statusAction(btn) {
     var id=Number(btn.dataset.id), status=btn.dataset.status, u=users.find(function(x){return Number(x.id)===id;}), row=btn.closest("[data-user]");
@@ -321,6 +547,18 @@ async function statusAction(btn) {
     var r=await GG.api("/api/admin/users/"+id+"/status",{method:"POST",body:{status:status,reason:reason}});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Account action failed.","error");return;}
     say(u.username+" is now "+status+". "+(reason?"Admin note saved.":"No reason was required."),"ok");await refresh(true);
+}
+async function walletAdjustment(btn) {
+    var id=Number(btn.dataset.walletAdjust),row=btn.closest("[data-wallet-user]"),user=walletAdjustmentUsers.find(function(item){return Number(item.id)===id;});
+    if(!user||!row)return;
+    var amount=Number(row.querySelector("[data-wallet-delta]").value),reason=row.querySelector("[data-wallet-reason]").value.trim();
+    if(!Number.isFinite(amount)||amount===0||Math.abs(amount)>1000000||Math.round(amount*100)!==amount*100||reason.length<10){say("Enter a non-zero amount up to KSh 1,000,000 and a reason of at least 10 characters.","error");return;}
+    var action=amount>0?"add KSh "+amount:"deduct KSh "+Math.abs(amount);
+    if(!confirm(action+" from "+user.username+"’s available wallet balance? Locked stakes will not change."))return;
+    btn.disabled=true;
+    var response=await GG.api("/api/admin/users/"+id+"/wallet-adjustment",{method:"POST",body:{amount:amount,reason:reason}});btn.disabled=false;
+    if(!response.ok){say(response.data.message||"Could not adjust wallet balance.","error");return;}
+    say(response.data.message||"Wallet adjusted.","ok");await loadWalletAdjustmentUsers();
 }
 
 function tile(label,value) { return '<div class="account-tile"><span>'+esc(label)+'</span><strong>'+esc(value==null||value===""?"—":value)+'</strong></div>'; }
@@ -360,30 +598,81 @@ async function deactivateAnnouncement(btn) {
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not hide announcement.","error");return;}
     say(r.data.message||"Announcement hidden.","ok");await loadAnnouncements();
 }
+async function deleteAnnouncement(btn) {
+    var id=Number(btn.dataset.deleteAnnouncement);
+    if(!confirm("Permanently delete this announcement and remove it from player announcement history?"))return;
+    btn.disabled=true;
+    var r=await GG.api("/api/admin/announcements/"+encodeURIComponent(id),{method:"DELETE"});
+    if(!r.ok){btn.disabled=false;say(r.data.message||"Could not delete the announcement.","error");return;}
+    say(r.data.message||"Announcement deleted.","ok");await loadAnnouncements();
+}
+
+async function clearAllAnnouncements() {
+    await clearAdminItems($('clearAllAnnouncements'),'/api/admin/announcements/deactivate-all','Hide all currently active announcements from players? They will remain in the admin archive and can still be reviewed or deleted there.',async function(){
+        includeInactiveAnnouncements=false;$('toggleHiddenAnnouncements').setAttribute('aria-pressed','false');$('toggleHiddenAnnouncements').textContent='Show hidden';await loadAnnouncements();
+    },legacyClearAnnouncements);
+}
+async function legacyClearAnnouncements() {
+    var response=await GG.api('/api/admin/announcements');
+    if(!response.ok)return {ok:false,message:response.data.message||'Could not load announcements for the compatibility clear.'};
+    var records=(response.data.announcements||[]).filter(function(item){return !!item.active;});
+    return clearByLegacyRoutes(records,function(item){return '/api/admin/announcements/'+encodeURIComponent(item.id)+'/deactivate';},'active announcements hidden');
+}
 
 async function clearThreadAction(btn) {
-    var id=Number(btn.dataset.threadClear), restore=btn.textContent.trim()==="Restore";
-    var target=users.find(function(u){return Number(u.id)===id;});
-    var name=target?target.username:(btn.closest(".thread-row").querySelector("[data-thread]").dataset.name||"this player");
+    var id=Number(btn.dataset.threadClear), restore=btn.dataset.threadAction==="restore";
+    var target=users.find(function(u){return Number(u.id)===id;}),row=btn.closest(".thread-row"),threadButton=row&&row.querySelector("[data-thread]");
+    var name=target?target.username:(threadButton?threadButton.dataset.name:(selectedName||"this player"));
     if(!restore&&!confirm("Clear "+name+"’s conversation from the admin inbox? The message history stays saved, and a new player message will reopen it."))return;
     btn.disabled=true;
     var r=await GG.api("/api/admin/support/"+id+(restore?"/restore":"/clear"),{method:"POST"});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not update the conversation.","error");return;}
-    if(selectedUser===id&&!restore){selectedUser=null;selectedName="";messageSig="";$("messages").innerHTML='<div class="empty">Choose a player to read their messages.</div>';$("convhead").textContent="Select a conversation";$("reply").disabled=true;$("sendReply").disabled=true;}
-    say(r.data.message||"Conversation updated.","ok");await refresh(true);
+    if(selectedUser===id&&!restore){selectedUser=null;selectedName="";messageSig=null;$("messages").innerHTML='<div class="empty">Choose a player to read their messages.</div>';$("convheadLabel").textContent="Select a conversation";$("clearSelectedSupport").disabled=true;$("clearSelectedSupport").dataset.threadClear="";$("reply").disabled=true;$("sendReply").disabled=true;}
+    say(r.data.message||"Conversation updated.","ok");await loadThreads();
+}
+async function clearAllSupport() {
+    await clearAdminItems($('clearAllSupport'),'/api/admin/support/clear-all','Clear all player conversations from the admin inbox? Message history is preserved, and a new player message can reopen a conversation.',async function(){
+        includeCleared=false;$('toggleCleared').setAttribute('aria-pressed','false');$('toggleCleared').textContent='Show cleared';
+        if(selectedUser!=null){selectedUser=null;selectedName='';messageSig=null;$('messages').innerHTML='<div class="empty">Choose a player to read their messages.</div>';$('convheadLabel').textContent='Select a conversation';$('clearSelectedSupport').disabled=true;$('clearSelectedSupport').dataset.threadClear='';$('reply').disabled=true;$('sendReply').disabled=true;}
+        await loadThreads();
+    },legacyClearSupport);
+}
+async function legacyClearSupport() {
+    var response=await GG.api('/api/admin/support');
+    if(!response.ok)return {ok:false,message:response.data.message||'Could not load support conversations for the compatibility clear.'};
+    var records=(response.data.threads||[]).filter(function(thread){return !thread.admin_cleared_at;});
+    return clearByLegacyRoutes(records,function(thread){return '/api/admin/support/'+encodeURIComponent(thread.user_id)+'/clear';},'inbox conversations');
 }
 
 $("resultFilter").addEventListener("change",function(){loadResults();});
 $("toggleClearedResults").addEventListener("click",function(){includeClearedResults=!includeClearedResults;this.setAttribute("aria-pressed",String(includeClearedResults));this.textContent=includeClearedResults?"Hide cleared":"Show cleared";loadResults();});
+$("clearAllResults").addEventListener("click",clearAllResults);
+$("matchGameFilter").addEventListener("change",function(){updateMatchTypeOptions();loadMatchManagement();});
+$("matchTypeFilter").addEventListener("change",loadMatchManagement);
+$("toggleClearedMatches").addEventListener("click",function(){includeClearedMatches=!includeClearedMatches;this.setAttribute("aria-pressed",String(includeClearedMatches));this.textContent=includeClearedMatches?"Hide cleared":"Show cleared";loadMatchManagement();});
+$("clearAllMatches").addEventListener("click",clearAllMatches);
+
 $("refresh").addEventListener("click",function(){refresh(true);});
 $("logout").addEventListener("click",function(){GG.logout();});
 $("searchUsers").addEventListener("click",loadUsers);
 $("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadUsers();}});
 $("userSearch").addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(loadUsers,250);});
 $("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b){resultAction(b);return;}b=e.target.closest("[data-result-visibility]");if(b)resultVisibilityAction(b);});
+$("matchManagementList").addEventListener("click",function(e){var b=e.target.closest("[data-match-cancel-refund]");if(b){cancelManagedMatch(b);return;}b=e.target.closest("[data-match-visibility]");if(b){matchVisibilityAction(b);return;}b=e.target.closest("[data-match-wallet]");if(b)focusMatchPlayerWallet(b);});
+$("matchManagementList").addEventListener("submit",function(e){var chess=e.target.closest("[data-chess-result-form]");if(chess){e.preventDefault();saveManagedChessResult(chess);return;}var form=e.target.closest("[data-match-score-form]");if(!form)return;e.preventDefault();saveManagedScore(form);});
 $("complaints").addEventListener("click",function(e){var open=e.target.closest("[data-open-complaint]");if(open){openComplaint(open.dataset.openComplaint);return;}var b=e.target.closest("[data-complaint-visibility]");if(b)complaintVisibilityAction(b);});
 $("userList").addEventListener("click",function(e){var view=e.target.closest("[data-view-dashboard]");if(view){viewUserDashboard(view);return;}var del=e.target.closest("[data-delete-account]");if(del){deleteAccount(del);return;}var b=e.target.closest("[data-status]");if(b)statusAction(b);});
+$("walletAdjustmentList").addEventListener("click",function(e){var adjust=e.target.closest("[data-wallet-adjust]");if(adjust)walletAdjustment(adjust);});
+$("walletAdjustmentSearchButton").addEventListener("click",loadWalletAdjustmentUsers);
+$("walletAdjustmentSearch").addEventListener("input",function(){clearTimeout(walletAdjustTimer);walletAdjustTimer=setTimeout(loadWalletAdjustmentUsers,250);});
+$("walletAdjustmentSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadWalletAdjustmentUsers();}});
+$("clearAdminWalletHistory").addEventListener("click",clearAdminWalletHistory);
+$("competitionSelect").addEventListener("change",loadCompetitionTable);
+$("competitionTable").addEventListener("submit",function(e){var form=e.target.closest("[data-competition-type]");if(!form)return;e.preventDefault();saveCompetitionEdit(form);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});
+$("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-delete-announcement]");if(b)deleteAnnouncement(b);});
+$("clearAllAnnouncements").addEventListener("click",clearAllAnnouncements);
+$("toggleHiddenAnnouncements").addEventListener("click",function(){includeInactiveAnnouncements=!includeInactiveAnnouncements;this.setAttribute("aria-pressed",String(includeInactiveAnnouncements));this.textContent=includeInactiveAnnouncements?"Hide hidden":"Show hidden";loadAnnouncements();});
 $("announcementForm").addEventListener("submit",async function(e){e.preventDefault();var input=$("announcementMessage"),message=input.value.trim();if(!message)return;$("sendAnnouncement").disabled=true;var r=await GG.api("/api/admin/announcements",{method:"POST",body:{message:message}});$("sendAnnouncement").disabled=false;if(!r.ok){say(r.data.message||"Announcement was not published.","error");return;}input.value="";say(r.data.message||"Announcement published.","ok");await loadAnnouncements();});
 $("adminWalletWithdrawForm").addEventListener("submit",async function(e){e.preventDefault();var form=this,amount=Number(form.elements.amount.value),phone=form.elements.phone.value.trim();if(!Number.isSafeInteger(amount)||amount<1||amount>1000000||!phone){$("adminWalletMessage").textContent="Enter a whole KSh amount and valid M-Pesa number.";return;}var fee=Math.round(amount*0.05),payout=amount-fee;if(payout<1){$("adminWalletMessage").textContent="Withdrawal amount is too small after the 5% fee.";return;}if(!confirm("Withdraw KSh "+amount+" from your administrator wallet to "+phone+"? The 5% fee is KSh "+fee+"; estimated payout is KSh "+payout+"."))return;var button=$("adminWalletWithdrawButton");button.disabled=true;$("adminWalletMessage").textContent="Submitting withdrawal to Daraja…";var r=await GG.api("/api/admin/wallet/withdraw",{method:"POST",body:{amount:amount,phone:phone}});button.disabled=false;$("adminWalletMessage").textContent=r.data.message||(r.ok?"Withdrawal submitted.":"Withdrawal was not submitted.");$("adminWalletMessage").className="notice "+(r.ok?"ok":"error");if(r.ok){form.elements.amount.value="";await loadAdminWallet();}});
 $("accountDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-account]"))this.close();});
@@ -396,18 +685,22 @@ $("complaintSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){
 $("complaintsPrev").addEventListener("click",function(){if(complaintPage>1){complaintPage--;loadComplaints();}});
 $("complaintsNext").addEventListener("click",function(){if(complaintPage<complaintPages){complaintPage++;loadComplaints();}});
 $("toggleClearedComplaints").addEventListener("click",function(){includeClearedComplaints=!includeClearedComplaints;this.setAttribute("aria-pressed",String(includeClearedComplaints));this.textContent=includeClearedComplaints?"Hide cleared":"Show cleared";loadComplaints();});
-$("threads").addEventListener("click",function(e){var action=e.target.closest("[data-thread-clear]");if(action){clearThreadAction(action);return;}var b=e.target.closest("[data-thread]");if(!b)return;selectedUser=Number(b.dataset.thread);selectedName=b.dataset.name||"Player";messageSig="";$("reply").disabled=false;$("sendReply").disabled=false;$("convhead").textContent=selectedName+" · loading";loadThreads().then(function(){return loadMessages(true);});});
+$("clearResolvedComplaints").addEventListener("click",clearResolvedComplaints);
+    $("threads").addEventListener("click",function(e){var action=e.target.closest("[data-thread-clear]");if(action){clearThreadAction(action);return;}var b=e.target.closest("[data-thread]");if(!b)return;selectedUser=Number(b.dataset.thread);selectedName=b.dataset.name||"Player";messageSig=null;$("reply").disabled=false;$("sendReply").disabled=false;$("convheadLabel").textContent=selectedName+" · loading";loadThreads().then(function(){return loadMessages(true);});});
 $("toggleCleared").addEventListener("click",function(){includeCleared=!includeCleared;this.setAttribute("aria-pressed",String(includeCleared));this.textContent=includeCleared?"Hide cleared":"Show cleared";loadThreads();});
-$("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convhead").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convhead").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig="";$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
+$("clearAllSupport").addEventListener("click",clearAllSupport);
+$("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=null)clearThreadAction(this);});
+$("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 function updateAdminPage() {
-    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts and account activity."],adminWallet:["Admin withdrawal wallet","Review the administrator wallet and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and Konami matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
     if(!titles[page])page="overview";
-    ["results","complaints","support","accounts","adminWallet","announcements"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
+    ["results","matchManagement","complaints","support","accounts","competitions","adminWallet","announcements"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
     $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];
     Array.from(document.querySelectorAll("[data-admin-page]")).forEach(function(link){if(link.dataset.adminPage===page)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
 }
-window.addEventListener("hashchange",updateAdminPage);updateAdminPage();
+window.addEventListener("hashchange",updateAdminPage);
+updateAdminPage();
 
 async function verifyAdminAccess() {
     var r=await GG.api("/api/me");

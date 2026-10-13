@@ -23,8 +23,15 @@
     button{cursor:pointer;font-weight:800}button.active{background:var(--gold);border-color:var(--gold);color:#111}
     select{min-width:145px}.play{background:var(--gold);border-color:var(--gold);color:#111;font-weight:900;text-decoration:none;white-space:nowrap}
     .status{color:#888;font-size:12px}
-    .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px}
     .panel{min-width:0;padding:20px;border:1px solid var(--line);border-radius:15px;background:var(--panel)}
+    .entry-actions{margin-top:14px;padding:13px;border:1px solid #333;border-radius:10px;background:#0b0b0b}
+    .entry-actions[hidden],.entry-action-notice:empty{display:none}
+    .entry-actions p{margin:0 0 8px;color:#aaa;font-size:13px}
+    .entry-actions button{margin:5px 8px 0 0}
+    .cancel-action{border-color:#4b5732;color:#d8efad}
+    .forfeit-action{border-color:#70352b;background:#351b18;color:#ffd4ca}
+    .entry-action-notice{margin:8px 0 0;color:#f4bd20;font-size:13px}
     h2{margin:0 0 13px;color:var(--gold);font-size:15px}
     .table-scroll{overflow-x:auto}
     table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:12px}
@@ -54,7 +61,7 @@
       <label>Entry stake
         <select id="stakeSelect"><option value="20">KSh 20</option><option value="50">KSh 50</option><option value="100">KSh 100</option></select>
       </label>
-      <a id="playLink" class="play" href="rapid.html">Play this clock</a>
+      <span class="status">Awards by entry: KSh 20 → 100 / 80 / 60 · KSh 50 → 250 / 200 / 150 · KSh 100 → 500 / 400 / 300 (1st / 2nd / 3rd).</span>
     </div>
     <div class="toolbar"><span class="status" id="tableStatus" role="status">Connecting to live chess data…</span><span class="status">Refreshes every 10 seconds while this page is open</span></div>
     <div class="grid">
@@ -63,20 +70,37 @@
         <div class="table-scroll"><table><thead><tr><th>#</th><th>Player</th><th>Rating</th><th>P</th><th>W</th><th>D</th><th>L</th><th>Pts</th></tr></thead><tbody id="standingsBody"><tr><td class="empty" colspan="8">Loading standings…</td></tr></tbody></table></div>
       </section>
       <section class="panel" aria-labelledby="fixturesTitle">
-        <h2 id="fixturesTitle">Recent and live fixtures</h2>
+        <h2 id="fixturesTitle">Pairings and recent results</h2>
         <div class="table-scroll"><table><thead><tr><th>White</th><th>Black</th><th>Result</th><th>Status</th></tr></thead><tbody id="fixturesBody"><tr><td class="empty" colspan="4">Loading fixtures…</td></tr></tbody></table></div>
+        <p class="footnote">Live pairings appear when players search at the same clock and stake. Completed games update the standings above.</p>
+        <button id="joinNextMatch" class="play" type="button">Join next tournament match</button>
+        <section id="entryActions" class="entry-actions" aria-label="Tournament entry actions" hidden>
+          <p id="entryActionStatus"></p>
+          <button id="cancelTournamentEntry" class="cancel-action" type="button" hidden>Cancel entry and refund stake</button>
+          <button id="forfeitTournamentEntry" class="forfeit-action" type="button" hidden>Forfeit tournament · transfer stake to admins</button>
+        </section>
+        <p id="entryActionNotice" class="entry-action-notice" role="status" aria-live="polite"></p>
       </section>
     </div>
-    <p class="footnote">These standings group tournament-mode games by clock, stake, and calendar month. Fixtures and verified results come directly from the chess server; the page does not create or fabricate scheduled rounds.</p>
+    <p class="footnote">These standings group tournament-mode games by clock, stake, and calendar month. Fixtures and verified results come directly from the chess server.</p>
   </main>
   <script src="../js/api.js"></script>
   <script>
   "use strict";
-  let selectedClock = "10+5";
+  const initialParams = new URLSearchParams(location.search);
+  let savedTournamentSelection = {};
+  try { savedTournamentSelection = JSON.parse(localStorage.getItem("goalGambitChessTournamentSelection") || "{}"); } catch (_) {}
+  let selectedClock = ["10+5","3+2","1+1"].includes(initialParams.get("timeControl"))
+    ? initialParams.get("timeControl")
+    : (["10+5","3+2","1+1"].includes(savedTournamentSelection.timeControl) ? savedTournamentSelection.timeControl : "10+5");
   let refreshPending = false;
+  let entryRefreshPending = false;
+  let entryActionPending = false;
   const clockButtons = Array.from(document.querySelectorAll("[data-clock]"));
   const stakeSelect = document.getElementById("stakeSelect");
-  const clockPages = {"10+5":"rapid.html","3+2":"blitz.html","1+1":"bullet.html"};
+  const clockModes = {"10+5":"rapid-tournament","3+2":"blitz-tournament","1+1":"bullet-tournament"};
+  if (["20","50","100"].includes(initialParams.get("stake"))) stakeSelect.value=initialParams.get("stake");
+  else if (["20","50","100"].includes(String(savedTournamentSelection.stake))) stakeSelect.value=String(savedTournamentSelection.stake);
 
   function escape(value) { return GG.escapeHTML(value == null ? "" : value); }
   function resultLabel(row) {
@@ -87,11 +111,74 @@
     return "Completed";
   }
   function updateControls() {
+    clockButtons.forEach(button=>button.classList.toggle("active",button.dataset.clock===selectedClock));
     const label = clockButtons.find(button => button.dataset.clock === selectedClock);
     const name = label ? label.textContent.split("·")[0].trim() : "Tournament";
     document.getElementById("standingsTitle").textContent = name + " standings · KSh " + stakeSelect.value;
-    document.getElementById("playLink").href = clockPages[selectedClock];
-    document.getElementById("playLink").textContent = "Play " + name.toLowerCase();
+    document.getElementById("joinNextMatch").textContent = "Join next " + name.toLowerCase() + " tournament match · KSh " + stakeSelect.value;
+    localStorage.setItem("goalGambitChessTournamentSelection", JSON.stringify({timeControl:selectedClock,stake:Number(stakeSelect.value)}));
+  }
+  async function refreshEntryActions() {
+    if (entryRefreshPending || !GG.getToken()) {
+      if (!GG.getToken()) document.getElementById("entryActions").hidden = true;
+      return;
+    }
+    entryRefreshPending = true;
+    const response = await GG.api("/api/chess/competitions/tournament/entry?timeControl=" + encodeURIComponent(selectedClock) + "&stake=" + encodeURIComponent(stakeSelect.value), {noRedirect:true});
+    entryRefreshPending = false;
+    const box = document.getElementById("entryActions");
+    const status = document.getElementById("entryActionStatus");
+    const cancelButton = document.getElementById("cancelTournamentEntry");
+    const forfeitButton = document.getElementById("forfeitTournamentEntry");
+    if (!response.ok) {
+      box.hidden = false;
+      status.textContent = response.data.message || "Could not load your tournament entry actions.";
+      cancelButton.hidden = true;
+      forfeitButton.hidden = true;
+      return;
+    }
+    const entry = response.data || {};
+    if (entry.forfeited) {
+      box.hidden = false;
+      status.textContent = "You forfeited this clock and stake for the current month. The transferred stake will not be returned.";
+      cancelButton.hidden = true;
+      forfeitButton.hidden = true;
+      return;
+    }
+    if (!entry.joined) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    status.textContent = entry.canForfeit
+      ? "Your first match is complete. You can forfeit now; your locked tournament stake for this clock and stake will go to the admin wallets."
+      : entry.canCancel
+        ? "You can cancel before your first match. Any stake locked by an unstarted tournament search will be refunded."
+        : "Finish or resolve your current match before forfeiting the tournament.";
+    cancelButton.hidden = !entry.canCancel;
+    forfeitButton.hidden = !entry.canForfeit;
+    cancelButton.disabled = entryActionPending;
+    forfeitButton.disabled = entryActionPending;
+  }
+  async function submitEntryAction(action, button) {
+    const message = action === "cancel"
+      ? "Cancel this tournament entry before your first match? Any stake locked for an unstarted tournament search will be returned to your available wallet balance."
+      : "Forfeit after your first completed match? Your locked Chess tournament stake for this clock and stake will be transferred to the admin wallets, not returned to you. Finish any match in progress before forfeiting.";
+    if (!confirm(message)) return;
+    entryActionPending = true;
+    button.disabled = true;
+    const notice = document.getElementById("entryActionNotice");
+    notice.textContent = "Processing tournament action…";
+    const response = await GG.api("/api/chess/competitions/tournament/entry/" + action, {
+      method: "POST",
+      body: { timeControl: selectedClock, stake: Number(stakeSelect.value) },
+      noRedirect: true
+    });
+    entryActionPending = false;
+    button.disabled = false;
+    notice.textContent = response.data.message || (response.ok ? "Tournament updated." : "Could not update this tournament entry.");
+    await refreshEntryActions();
+    await refreshTables();
   }
   async function refreshTables() {
     if (refreshPending || document.hidden) return;
@@ -108,24 +195,39 @@
     const standings = Array.isArray(response.data.standings) ? response.data.standings : [];
     document.getElementById("standingsBody").innerHTML = standings.length
       ? standings.map((row,index) => '<tr class="' + (username && String(row.username).toLowerCase() === username ? "you" : "") + '"><td>' + (index + 1) + '</td><td>' + escape(row.username) + '</td><td>' + Number(row.rating || 1200) + '</td><td>' + Number(row.played || 0) + '</td><td>' + Number(row.wins || 0) + '</td><td>' + Number(row.draws || 0) + '</td><td>' + Number(row.losses || 0) + '</td><td>' + Number(row.points || 0) + '</td></tr>').join("")
-      : '<tr><td class="empty" colspan="8">No completed tournament games in this table yet.</td></tr>';
+      : '<tr><td class="empty" colspan="8">No players have joined this clock and stake yet.</td></tr>';
     const fixtures = Array.isArray(response.data.fixtures) ? response.data.fixtures : [];
     document.getElementById("fixturesBody").innerHTML = fixtures.length
       ? fixtures.slice(0,20).map(row => '<tr><td>' + escape(row.white_player || "Player") + '</td><td>' + escape(row.black_player || "Finding opponent") + '</td><td>' + escape(resultLabel(row)) + '</td><td>' + escape(String(row.status || "").replace(/_/g," ")) + '</td></tr>').join("")
       : '<tr><td class="empty" colspan="4">No tournament fixtures for this clock and stake this month.</td></tr>';
     document.getElementById("tableStatus").textContent = "Server updated " + new Date().toLocaleTimeString();
   }
+  document.getElementById("cancelTournamentEntry").addEventListener("click", function() {
+    submitEntryAction("cancel", this);
+  });
+  document.getElementById("forfeitTournamentEntry").addEventListener("click", function() {
+    submitEntryAction("forfeit", this);
+  });
   clockButtons.forEach(button => button.addEventListener("click", function() {
     selectedClock = button.dataset.clock;
     clockButtons.forEach(item => item.classList.toggle("active", item === button));
     updateControls();
     refreshTables();
+    refreshEntryActions();
   }));
-  stakeSelect.addEventListener("change", function() { updateControls(); refreshTables(); });
+  stakeSelect.addEventListener("change", function() { updateControls(); refreshTables(); refreshEntryActions(); });
+  document.getElementById("joinNextMatch").addEventListener("click", function() {
+    const settings={"10+5":{minutes:10,increment:5},"3+2":{minutes:3,increment:2},"1+1":{minutes:1,increment:1}}[selectedClock];
+    const stake=Number(stakeSelect.value);
+    const target="board.html?mode="+encodeURIComponent(clockModes[selectedClock])+"&minutes="+settings.minutes+"&increment="+settings.increment+"&stake="+encodeURIComponent(stake);
+    GG.guardedGo(target,stake,"chess");
+  });
   document.addEventListener("visibilitychange", function() { if (!document.hidden) refreshTables(); });
   updateControls();
   refreshTables();
+  refreshEntryActions();
   setInterval(refreshTables, 10000);
+  setInterval(refreshEntryActions, 10000);
   </script>
 </body>
 </html>

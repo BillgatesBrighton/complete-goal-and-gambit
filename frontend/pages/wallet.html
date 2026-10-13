@@ -124,8 +124,9 @@ main {
 
 .grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 18px;
+    align-items: stretch;
 }
 
 .card {
@@ -134,6 +135,17 @@ main {
     border: 1px solid #292929;
     border-radius: 18px;
     padding: 25px;
+}
+
+.grid > .card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 450px;
+}
+
+.grid > .card > button {
+    margin-top: auto;
 }
 
 .card h2 {
@@ -207,21 +219,15 @@ button:disabled {
     cursor: not-allowed;
 }
 
-.withdraw button {
-    background: #242424;
-    color: white;
-}
-
-.withdraw button:hover {
-    background: #333;
-}
-
 .message {
     margin-top: 15px;
     color: #aaa;
     font-size: 13px;
     min-height: 18px;
 }
+.message.deposit-status-pending { color: #e2c454; }
+.message.deposit-status-success { color: #63d68d; }
+.message.deposit-status-error { color: #ff8d82; }
 
 .c2b-panel {
     margin-top: 20px;
@@ -282,6 +288,31 @@ button:disabled {
     overflow: hidden;
 }
 
+.history-toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 18px;
+    border-bottom: 1px solid #242424;
+}
+.history-toolbar > div { min-width: 0; }
+.history-toolbar .history-clear-button { grid-column: 2; justify-self: center; }
+.history-toolbar h2 { font-size: 18px; }
+.history-clear-button {
+    width: auto;
+    flex: 0 0 auto;
+    padding: 9px 12px;
+    border: 1px solid #f4bd20;
+    border-radius: 8px;
+    background: #f4bd20;
+    color: #090909;
+    font-weight: 900;
+    cursor: pointer;
+}
+.history-clear-button:hover { border-color: #ffd34f; background: #ffd34f; color: #090909; }
+.history-clear-button:disabled { opacity: .55; cursor: wait; }
+.history-feedback { padding: 0 18px 12px; color: #bbb; font-size: 12px; }
 .transaction {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -353,6 +384,9 @@ button:disabled {
         grid-template-columns: 1fr 1fr 1fr;
         font-size: 11px;
     }
+
+    .history-toolbar { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+    .history-toolbar > div, .history-toolbar .history-clear-button { grid-column: 1; }
 
 }
 
@@ -447,28 +481,15 @@ autocomplete="tel"
 Accepted: 07XXXXXXXX, 011XXXXXXX or 07420XXXXX.
 </div>
 
-<button id="depositButton" onclick="deposit()">
+<button id="depositButton" type="button" onclick="deposit()">
 Deposit Funds
 </button>
 
-<div class="message" id="depositMessage"></div>
-
-<section class="c2b-panel" id="c2bPanel" aria-live="polite">
-    <h3>Manual M-Pesa PayBill</h3>
-    <p class="c2b-help">When enabled, pay from M-Pesa using the business short code and the account reference shown here. The wallet updates after Safaricom confirms the payment.</p>
-    <p class="c2b-unavailable" id="c2bUnavailable">Checking PayBill setup…</p>
-    <div id="c2bDetails" hidden>
-        <div class="c2b-row"><span>Business short code</span><strong id="c2bShortCode"></strong><button type="button" onclick="copyC2bValue('c2bShortCode')">Copy</button></div>
-        <div class="c2b-row"><span>Account reference</span><strong id="c2bAccountReference"></strong><button type="button" onclick="copyC2bValue('c2bAccountReference')">Copy</button></div>
-        <p class="c2b-help" style="margin-top:10px">Sandbox payments require an administrator to register the callbacks before using Daraja’s simulator.</p>
-        <button class="c2b-register" id="c2bRegisterButton" type="button" onclick="registerC2bCallbacks()" hidden>Register sandbox callbacks</button>
-    </div>
-    <div class="message" id="c2bMessage"></div>
-</section>
+<div class="message" id="depositMessage" role="status" aria-live="polite"></div>
 
 </div>
 
-<div class="card withdraw">
+<form id="withdrawForm" class="card withdraw">
 
 <div class="mpesa-logo">M-PESA</div>
 
@@ -489,7 +510,7 @@ inputmode="numeric"
 >
 
 <div class="phone-hint" id="withdrawalEstimate">
-The 5% fee is rounded to the nearest KSh. Enter an amount to see your estimated payout.
+Enter an amount to see the estimated payout.
 </div>
 
 <label class="field-label" for="withdrawPhone">M-Pesa Number</label>
@@ -507,17 +528,25 @@ autocomplete="tel"
 Accepted: 07XXXXXXXX, 011XXXXXXX or 07420XXXXX.
 </div>
 
-<button id="withdrawButton" onclick="withdraw()">
+<button id="withdrawButton" type="submit">
 Withdraw Funds
 </button>
 
-<div class="message" id="withdrawMessage"></div>
+<div class="message" id="withdrawMessage" role="status" aria-live="polite"></div>
 
-</div>
+</form>
 
 </div>
 
 <section class="transactions">
+
+<div class="history-toolbar">
+    <div>
+        <h2>Transaction history</h2>
+    </div>
+    <button class="history-clear-button" id="clearTransactionHistory" type="button">Clear transaction history</button>
+</div>
+<div class="history-feedback" id="transactionHistoryFeedback" role="status" aria-live="polite"></div>
 
 <div class="transaction transaction-head">
 
@@ -538,19 +567,6 @@ No transactions yet.
 </div>
 
 </section>
-
-<div class="notice">
-
-<strong>Secure wallet:</strong>
-
-Your balance and transactions are now stored on the GOAL$GAMBIT server
-and can no longer be changed from your browser.
-
-Withdrawals carry a 5% processing fee.
-The fee is rounded to the nearest KSh. Withdrawals stay pending until M-Pesa confirms the payout; do not submit another while one is pending.
-Your M-Pesa number is required for both deposit and withdrawal requests.
-
-</div>
 
 </main>
 
@@ -593,6 +609,12 @@ var TYPE_LABELS = {
 var currentBalance = 0;
 var pendingWithdrawalRefreshTimer = null;
 
+function withdrawalFeeRate(amount) {
+    if (amount <= 100) return 0.05;
+    if (amount <= 200) return 0.10;
+    return 0.20;
+}
+
 function updateWithdrawalEstimate() {
 
     var amount = Number(
@@ -602,15 +624,15 @@ function updateWithdrawalEstimate() {
 
     if (!Number.isSafeInteger(amount) || amount < 1) {
         estimate.textContent =
-            "The 5% fee is rounded to the nearest KSh. Enter an amount to see your estimated payout.";
+            "Enter an amount to see the estimated payout.";
         return;
     }
 
-    var fee = Math.round(amount * 0.05);
+    var rate = withdrawalFeeRate(amount);
+    var fee = Math.round(amount * rate);
     var payout = amount - fee;
     estimate.textContent =
-        "Estimated fee: " + GG.formatMoney(fee) +
-        " · You receive: " + GG.formatMoney(payout);
+        "Estimated payout: " + GG.formatMoney(payout);
 
 }
 
@@ -619,6 +641,13 @@ function showMessage(id, text) {
 
     document.getElementById(id).textContent = text;
 
+}
+
+function showDepositStatus(kind, text) {
+    var status = document.getElementById("depositMessage");
+    status.classList.remove("deposit-status-pending", "deposit-status-success", "deposit-status-error");
+    if (kind) status.classList.add("deposit-status-" + kind);
+    status.textContent = text;
 }
 
 
@@ -884,6 +913,34 @@ async function loadTransactions(trackedReference) {
 
 }
 
+async function clearTransactionHistory() {
+    if (!window.confirm("Clear transaction history from your view? Your wallet records and balance will remain unchanged.")) return;
+    var button = document.getElementById("clearTransactionHistory");
+    var feedback = document.getElementById("transactionHistoryFeedback");
+    button.disabled = true;
+    feedback.textContent = "Clearing history…";
+    try {
+        var result = await GG.api("/api/history/clear", {
+            method: "POST",
+            body: { historyType: "transactions" }
+        });
+        if (!result.ok) {
+            feedback.textContent = (result.data && result.data.message) || "Could not clear transaction history.";
+            return;
+        }
+        localStorage.removeItem("goalGambitTransactions");
+        feedback.textContent = (result.data && result.data.message) || "Transaction history cleared from your view.";
+        document.getElementById("transactionList").innerHTML = '<div class="empty">No transactions in your history.</div>';
+        await loadTransactions();
+    } catch (_) {
+        feedback.textContent = "Could not clear transaction history. Check your connection and try again.";
+    } finally {
+        button.disabled = false;
+    }
+}
+
+document.getElementById("clearTransactionHistory").addEventListener("click", clearTransactionHistory);
+
 
 function normalizePhone(phone) {
 
@@ -999,13 +1056,10 @@ async function deposit() {
     button.disabled = true;
 
     button.textContent =
-        "Sending STK Push...";
+        "Waiting for STK push...";
 
 
-    showMessage(
-        "depositMessage",
-        "Sending payment request to your phone..."
-    );
+    showDepositStatus("pending", "Waiting for STK push…");
 
 
     try {
@@ -1026,23 +1080,17 @@ async function deposit() {
 
         if (!result.ok) {
 
-            showMessage(
-                "depositMessage",
-                result.data &&
-                result.data.message
-                    ? result.data.message
-                    : "M-Pesa payment request failed."
-            );
+            var reason = result.data && result.data.message
+                ? result.data.message
+                : "M-Pesa could not accept the payment request.";
+            showDepositStatus("error", "Failed transaction: " + reason);
 
             return;
 
         }
 
 
-        showMessage(
-            "depositMessage",
-            "Daraja accepted the STK request. Check your phone; your wallet will update only after Safaricom confirms payment."
-        );
+        showDepositStatus("pending", "STK push sent. Check your phone and enter your M-Pesa PIN. Your wallet updates after Safaricom confirms payment.");
 
 
         amountInput.value = "";
@@ -1073,18 +1121,15 @@ async function deposit() {
 
                     if (transaction && transaction.status === "completed") {
                         clearInterval(refreshTimer);
-                        showMessage("depositMessage", "Safaricom confirmed the payment. Your wallet has been credited.");
+                        showDepositStatus("success", "Payment successful. Check your wallet for the updated balance.");
                         return;
                     }
 
                     if (transaction && transaction.status === "failed") {
                         clearInterval(refreshTimer);
-                        showMessage(
-                            "depositMessage",
-                            "Safaricom did not complete this payment: " +
-                                (transaction.description || "No reason was provided.") +
-                                " Your wallet was not credited."
-                        );
+                        showDepositStatus("error", "Failed transaction: " +
+                            (transaction.description || "Safaricom declined or cancelled the payment; no reason was provided.") +
+                            " Your wallet was not credited.");
                         return;
                     }
 
@@ -1094,10 +1139,7 @@ async function deposit() {
                             refreshTimer
                         );
 
-                        showMessage(
-                            "depositMessage",
-                            "The payment is still awaiting Safaricom confirmation. Check your M-Pesa messages and transaction history before retrying."
-                        );
+                        showDepositStatus("pending", "Waiting for STK confirmation. Check your M-Pesa messages and transaction history before retrying.");
 
                     }
 
@@ -1114,10 +1156,7 @@ async function deposit() {
         );
 
 
-        showMessage(
-            "depositMessage",
-            "Unable to connect to the M-Pesa service."
-        );
+        showDepositStatus("error", "Failed transaction request: the payment service could not be reached. Check your wallet history and phone before retrying.");
 
     } finally {
 
@@ -1222,10 +1261,12 @@ async function withdraw() {
             return;
         }
 
-        showMessage(
-            messageId,
-            result.data.message || "Withdrawal request submitted."
-        );
+        var withdrawalMessage = result.data.message || "Withdrawal request submitted.";
+        if (Number.isFinite(Number(result.data.fee)) && Number.isFinite(Number(result.data.payout))) {
+            withdrawalMessage += " Deduction: " + GG.formatMoney(result.data.fee) +
+                "; M-Pesa payout: " + GG.formatMoney(result.data.payout) + ".";
+        }
+        showMessage(messageId, withdrawalMessage);
         input.value = "";
         phoneInput.value = "";
         updateWithdrawalEstimate();
@@ -1253,12 +1294,17 @@ document.getElementById("withdrawAmount").addEventListener(
     updateWithdrawalEstimate
 );
 
+document.getElementById("withdrawForm").addEventListener(
+    "submit",
+    function(event) {
+        event.preventDefault();
+        withdraw();
+    }
+);
+
 loadWallet(false);
 
 loadTransactions();
-
-loadC2bInstructions();
-
 
 window.addEventListener(
     "pageshow",
@@ -1267,8 +1313,6 @@ window.addEventListener(
         loadWallet(false);
 
         loadTransactions();
-
-        loadC2bInstructions();
 
     }
 );
@@ -1283,8 +1327,6 @@ document.addEventListener(
             loadWallet(false);
 
             loadTransactions();
-
-            loadC2bInstructions();
 
         }
 

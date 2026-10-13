@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const daraja = require("../routes/mpesa");
 
 const CALLBACK_TOKEN_BYTES = 32;
+const TOKEN_EXPIRY_SKEW_MS = 60000;
 
 function envValue(name) {
     let value = String(process.env[name] || "").trim();
@@ -34,39 +35,61 @@ function safeText(value, maxLength) {
         .slice(0, maxLength);
 }
 
+function publicBaseUrl() {
+    const configured = envValue("PUBLIC_BASE_URL") ||
+        (envValue("RENDER_EXTERNAL_HOSTNAME")
+            ? "https://" + envValue("RENDER_EXTERNAL_HOSTNAME")
+            : envValue("RENDER_EXTERNAL_URL"));
+    if (!configured) return null;
+    try {
+        return new URL(configured);
+    } catch (_) {
+        return null;
+    }
+}
+
 function callbackUrl(kind, token) {
-    const base = envValue("PUBLIC_BASE_URL");
-    const url = new URL(base);
+    const url = publicBaseUrl();
+    if (!url) throw new Error("Public HTTPS callback base URL is not configured.");
     url.pathname = "/api/payments/payout-" + kind + "/" + encodeURIComponent(token);
     url.search = "";
     url.hash = "";
     return url.toString();
 }
 
+function b2cBaseUrl() {
+    return envValue("MPESA_B2C_ENVIRONMENT").toLowerCase() === "production"
+        ? "https://api.safaricom.co.ke"
+        : "https://sandbox.safaricom.co.ke";
+}
+
 function configurationIssue() {
     if (envValue("MPESA_B2C_ENABLED").toLowerCase() !== "true") {
-        return "M-Pesa withdrawals are not enabled.";
+        return "M-Pesa withdrawals are not enabled yet. The administrator must configure an approved B2C payout account.";
     }
-    if (envValue("MPESA_ENVIRONMENT").toLowerCase() !== "sandbox") {
-        return "B2C withdrawals are restricted to the Daraja sandbox until production is configured separately.";
+    const environment = envValue("MPESA_B2C_ENVIRONMENT").toLowerCase();
+    if (environment !== "sandbox" && environment !== "production") {
+        return "Set MPESA_B2C_ENVIRONMENT to sandbox or production for the separate B2C Daraja app.";
     }
 
     const required = [
-        "MPESA_CONSUMER_KEY",
-        "MPESA_CONSUMER_SECRET",
+        "MPESA_B2C_CONSUMER_KEY",
+        "MPESA_B2C_CONSUMER_SECRET",
         "MPESA_B2C_SHORTCODE",
         "MPESA_B2C_INITIATOR_NAME",
-        "MPESA_B2C_SECURITY_CREDENTIAL",
-        "PUBLIC_BASE_URL"
+        "MPESA_B2C_SECURITY_CREDENTIAL"
     ];
     if (required.some(name => !envValue(name))) {
-        return "M-Pesa B2C sandbox configuration is incomplete.";
+        return "M-Pesa B2C settings are incomplete. Configure the separate B2C app keys, approved payout shortcode, API initiator, and encrypted security credential.";
     }
 
-    let publicBase;
-    try {
-        publicBase = new URL(envValue("PUBLIC_BASE_URL"));
-    } catch (_) {
+    const shortcode = envValue("MPESA_B2C_SHORTCODE");
+    if (!/^\d{5,7}$/.test(shortcode)) {
+        return "MPESA_B2C_SHORTCODE must be the approved 5–7 digit B2C disbursement shortcode.";
+    }
+
+    const publicBase = publicBaseUrl();
+    if (!publicBase) {
         return "Set a valid public HTTPS callback base URL.";
     }
     const host = publicBase.hostname.toLowerCase();
@@ -111,6 +134,50 @@ function hashMatches(token, expectedHash) {
 
 function createMpesaB2c(pool) {
     const router = express.Router();
+    let cachedB2cAccessToken = "";
+    let b2cAccessTokenExpiresAt = 0;
+    let pendingB2cTokenRequest = null;
+
+    async function getB2cAccessToken() {
+        if (cachedB2cAccessToken && Date.now() < b2cAccessTokenExpiresAt) {
+            return cachedB2cAccessToken;
+        }
+        if (pendingB2cTokenRequest) return pendingB2cTokenRequest;
+
+        pendingB2cTokenRequest = (async function() {
+            const consumerKey = envValue("MPESA_B2C_CONSUMER_KEY");
+            const consumerSecret = envValue("MPESA_B2C_CONSUMER_SECRET");
+            const basic = Buffer.from(consumerKey + ":" + consumerSecret, "utf8").toString("base64");
+            const response = await daraja.fetchWithTimeout(
+                b2cBaseUrl() + "/oauth/v1/generate?grant_type=client_credentials",
+                {
+                    method: "GET",
+                    headers: { Authorization: "Basic " + basic }
+                },
+                12000
+            );
+            let data;
+            try {
+                data = await response.json();
+            } catch (_) {
+                data = null;
+            }
+            if (!response.ok || !data || !data.access_token) {
+                throw new Error("Daraja did not issue a B2C access token.");
+            }
+
+            const expiresInSeconds = Number(data.expires_in) || 3600;
+            cachedB2cAccessToken = String(data.access_token);
+            b2cAccessTokenExpiresAt = Date.now() + Math.max(1, expiresInSeconds - 60) * 1000;
+            return cachedB2cAccessToken;
+        })();
+
+        try {
+            return await pendingB2cTokenRequest;
+        } finally {
+            pendingB2cTokenRequest = null;
+        }
+    }
 
     function isConfigured() {
         return configurationIssue() === null;
@@ -241,7 +308,7 @@ function createMpesaB2c(pool) {
 
         let accessToken;
         try {
-            accessToken = await daraja.getAccessToken();
+            accessToken = await getB2cAccessToken();
         } catch (_) {
             return {
                 accepted: false,
@@ -267,7 +334,7 @@ function createMpesaB2c(pool) {
         let response;
         try {
             response = await daraja.fetchWithTimeout(
-                daraja.mpesaBaseUrl() + "/mpesa/b2c/v3/paymentrequest",
+                b2cBaseUrl() + "/mpesa/b2c/v3/paymentrequest",
                 {
                     method: "POST",
                     headers: {

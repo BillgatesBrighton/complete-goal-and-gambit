@@ -161,7 +161,10 @@ module.exports = function (pool, authenticateToken) {
                 throw new Error("Your account is registered for Chess only.");
             }
 
-            const league = await findLeague(client, req.params.id);
+            const foundLeague = await findLeague(client, req.params.id);
+            const league = foundLeague
+                ? (await client.query("SELECT * FROM efootball_leagues WHERE id=$1 FOR UPDATE", [foundLeague.id])).rows[0]
+                : null;
             if (!league) throw new Error("League not found.");
 
             const already = await client.query(
@@ -170,6 +173,10 @@ module.exports = function (pool, authenticateToken) {
             if (already.rows.length) {
                 await client.query("ROLLBACK");
                 return res.json({ success: true, alreadyJoined: true, message: "You are already in the " + league.name + " League." });
+            }
+
+            if (league.status !== "open") {
+                throw Object.assign(new Error("This league season has started or ended and is no longer accepting entries."), { status: 409 });
             }
 
             const count = await client.query(

@@ -313,6 +313,11 @@
                 <strong id="summaryStake">KSh 20</strong>
             </div>
 
+            <div class="summary-row">
+                <span>1st / 2nd / 3rd prizes</span>
+                <strong id="prizeSummary">KSh 100 / 80 / 60</strong>
+            </div>
+
         </div>
 
 
@@ -366,6 +371,9 @@
                 ).textContent =
                     "KSh " + selectedStake;
 
+                document.getElementById("prizeSummary").textContent =
+                    "KSh " + (selectedStake * 5) + " / " + (selectedStake * 4) + " / " + (selectedStake * 3);
+
             }
         );
 
@@ -376,15 +384,27 @@
         "joinButton"
     ).addEventListener(
         "click",
-        function() {
-
-            GG.guardedGo("board.html" +
-                "?mode=rapid-tournament" +
-                "&minutes=10" +
-                "&increment=5" +
-                "&stake=" +
-                encodeURIComponent(selectedStake), selectedStake, "chess");
-
+        async function() {
+            const button = document.getElementById("joinButton");
+            button.disabled = true;
+            button.textContent = "Adding you to the live table…";
+            try {
+                const response = await GG.api("/api/chess/competitions/tournament/entry", {
+                    method: "POST",
+                    body: { timeControl: "10+5", stake: selectedStake },
+                    noRedirect: true
+                });
+                if (!response.ok) {
+                    alert(response.data.message || "Could not join the chess tournament table.");
+                    return;
+                }
+                location.href = "tournament-lobby.html?timeControl=10%2B5&stake=" + encodeURIComponent(selectedStake);
+            } catch (error) {
+                alert("Could not reach the server. Please try again.");
+            } finally {
+                button.disabled = false;
+                button.textContent = "Join Tournament";
+            }
         }
     );
 

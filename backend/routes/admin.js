@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
@@ -108,6 +109,39 @@ module.exports = function(pool, authenticateToken) {
         } catch (error) {
             console.error("Admin result-verification list error:", error.message);
             return res.status(500).json({ success: false, message: "Could not load result reviews." });
+        }
+    });
+
+    router.post("/result-verifications/clear-resolved", authenticateToken, adminOnly, async (req, res) => {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const cleared = await client.query(
+                `UPDATE efootball_result_verifications v
+                    SET admin_cleared_at=NOW(),admin_cleared_by=$1
+                   FROM efootball_matches m
+                  WHERE m.id=v.match_id AND v.admin_cleared_at IS NULL
+                    AND m.settled_at IS NOT NULL AND m.status IN ('completed','cancelled')
+                 RETURNING v.id`,
+                [req.user.userId]
+            );
+            const ids = cleared.rows.map((row) => Number(row.id));
+            if (ids.length) {
+                await client.query(
+                    `INSERT INTO efootball_result_admin_events(verification_id,admin_id,event_type)
+                     SELECT verifications.id,$2,'cleared'
+                       FROM unnest($1::bigint[]) AS verifications(id)`,
+                    [ids, req.user.userId]
+                );
+            }
+            await client.query("COMMIT");
+            return res.json({ success: true, count: ids.length, message: ids.length ? ids.length + " resolved result dispute(s) cleared from the list." : "There are no resolved result disputes to clear." });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Admin bulk result dispute clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear resolved result disputes." });
+        } finally {
+            client.release();
         }
     });
 
@@ -294,17 +328,175 @@ module.exports = function(pool, authenticateToken) {
         try {
             const q = String(req.query.search || "").trim().toLowerCase();
             const r = await pool.query(
-                `SELECT id, username, phone, game, rating, role, account_status,
-                        suspended_until, moderation_reason, created_at
-                 FROM users
-                 WHERE ($1 = '' OR LOWER(username) LIKE '%' || $1 || '%' OR phone LIKE '%' || $1 || '%')
-                 ORDER BY created_at DESC LIMIT 200`,
+                `SELECT u.id, u.username, u.phone, u.game, u.rating, u.role, u.account_status,
+                        u.suspended_until, u.moderation_reason, u.created_at,
+                        COALESCE(w.balance,0)::numeric(12,2) AS balance,
+                        COALESCE(w.locked_balance,0)::numeric(12,2) AS locked_balance
+                 FROM users u LEFT JOIN wallets w ON w.user_id=u.id
+                 WHERE ($1 = '' OR LOWER(u.username) LIKE '%' || $1 || '%' OR u.phone LIKE '%' || $1 || '%')
+                 ORDER BY u.created_at DESC LIMIT 200`,
                 [q]
             );
             res.json({success:true,users:r.rows});
         } catch (e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to load users."});
+        }
+    });
+
+    // Adjust only available balance; locked match/competition stakes are never
+    // touched. The wallet, user transaction, and detailed audit are atomic.
+    router.post("/users/:id/wallet-adjustment", authenticateToken, adminOnly, async (req, res) => {
+        const userId = Number(req.params.id);
+        const amount = Number(req.body && req.body.amount);
+        const reason = String(req.body && req.body.reason || "").trim().slice(0, 1000);
+        if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isFinite(amount) || amount === 0 ||
+            Math.abs(amount) > 1000000 || Math.round(amount * 100) !== amount * 100 || reason.length < 10) {
+            return res.status(400).json({success:false,message:"Enter a non-zero adjustment up to KSh 1,000,000 and a reason of at least 10 characters."});
+        }
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const target = await client.query("SELECT id,username FROM users WHERE id=$1 FOR UPDATE", [userId]);
+            if (!target.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({success:false,message:"Account not found."});
+            }
+            await client.query("INSERT INTO wallets(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING", [userId]);
+            const wallet = await client.query("SELECT balance,locked_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [userId]);
+            const previous = Number(wallet.rows[0].balance);
+            const updated = await client.query(
+                `UPDATE wallets SET balance=balance+$1,updated_at=NOW()
+                  WHERE user_id=$2 AND balance+$1 >= 0
+                  RETURNING balance,locked_balance`,
+                [amount, userId]
+            );
+            if (!updated.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({success:false,message:"The debit exceeds the account’s available wallet balance."});
+            }
+            const reference = `ADMIN-WALLET-${crypto.randomUUID()}`;
+            await client.query(
+                `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                 VALUES($1,$2,$3,'KES','completed',$4,$5)`,
+                [userId, amount > 0 ? "admin_adjustment_credit" : "admin_adjustment_debit", Math.abs(amount), reference, "Admin adjustment: " + reason]
+            );
+            await client.query(
+                `INSERT INTO admin_wallet_adjustments
+                    (admin_id,user_id,username,amount,previous_balance,new_balance,reason,reference)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [req.user.userId, userId, target.rows[0].username, amount, previous, updated.rows[0].balance, reason, reference]
+            );
+            await client.query("COMMIT");
+            return res.json({success:true,message:"Available wallet balance adjusted. Locked stakes were left unchanged.",wallet:updated.rows[0]});
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Admin wallet adjustment failed:", error.message);
+            return res.status(500).json({success:false,message:"Could not safely adjust this wallet."});
+        } finally {
+            client.release();
+        }
+    });
+
+    function competitionTables(type) {
+        if (type === "league") return {table:"efootball_league_members", parent:"efootball_leagues", parentKey:"league_id", name:"name", stake:"entry_stake"};
+        if (type === "tournament") return {table:"efootball_tournament_members", parent:"efootball_tournaments", parentKey:"tournament_id", name:"name", stake:"entry_fee"};
+        return null;
+    }
+
+    router.get("/competitions", authenticateToken, adminOnly, async (req, res) => {
+        try {
+            const [leagues, tournaments] = await Promise.all([
+                pool.query(`SELECT 'league' AS type,l.id,l.name,l.status,l.entry_stake AS entry_fee,
+                                   COUNT(m.user_id)::int AS players
+                              FROM efootball_leagues l LEFT JOIN efootball_league_members m ON m.league_id=l.id
+                             GROUP BY l.id ORDER BY l.id`),
+                pool.query(`SELECT 'tournament' AS type,t.id,t.name,t.status,t.entry_fee,
+                                   COUNT(m.user_id)::int AS players
+                              FROM efootball_tournaments t LEFT JOIN efootball_tournament_members m ON m.tournament_id=t.id
+                             GROUP BY t.id ORDER BY t.id`)
+            ]);
+            return res.json({success:true,competitions:leagues.rows.concat(tournaments.rows)});
+        } catch (error) {
+            console.error("Admin competition list error:", error.message);
+            return res.status(500).json({success:false,message:"Could not load competition tables."});
+        }
+    });
+
+    router.get("/competitions/:type/:id", authenticateToken, adminOnly, async (req, res) => {
+        const config = competitionTables(String(req.params.type));
+        const id = Number(req.params.id);
+        if (!config || !Number.isSafeInteger(id) || id <= 0) return res.status(400).json({success:false,message:"Invalid competition."});
+        try {
+            const [competition, standings] = await Promise.all([
+                pool.query(`SELECT id,${config.name} AS name,status,${config.stake} AS entry_fee,season_rounds,completed_at FROM ${config.parent} WHERE id=$1`, [id]),
+                pool.query(
+                    `SELECT m.user_id,u.username,m.played,m.wins,m.draws,m.losses,m.points,
+                            m.goal_difference,m.goals_for,m.goals_against,m.fee_paid,m.forfeited_at
+                       FROM ${config.table} m JOIN users u ON u.id=m.user_id
+                      WHERE m.${config.parentKey}=$1
+                      ORDER BY m.points DESC,m.wins DESC,m.goal_difference DESC,m.goals_for DESC,u.username ASC`,
+                    [id]
+                )
+            ]);
+            if (!competition.rows.length) return res.status(404).json({success:false,message:"Competition not found."});
+            return res.json({success:true,competition:competition.rows[0],standings:standings.rows});
+        } catch (error) {
+            console.error("Admin competition table error:", error.message);
+            return res.status(500).json({success:false,message:"Could not load this competition table."});
+        }
+    });
+
+    router.post("/competitions/:type/:id/standings/:userId", authenticateToken, adminOnly, async (req, res) => {
+        const type = String(req.params.type);
+        const config = competitionTables(type);
+        const id = Number(req.params.id);
+        const userId = Number(req.params.userId);
+        const reason = String(req.body && req.body.reason || "").trim().slice(0, 1000);
+        const numbers = ["wins","draws","losses","goalsFor","goalsAgainst"].map((key) => Number(req.body && req.body[key]));
+        if (!config || !Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(userId) || userId <= 0 ||
+            numbers.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 10000) || reason.length < 10) {
+            return res.status(400).json({success:false,message:"Provide valid non-negative match and goal totals, plus a reason of at least 10 characters."});
+        }
+        const [wins,draws,losses,goalsFor,goalsAgainst] = numbers;
+        const played = wins + draws + losses;
+        if (played > 10000) return res.status(400).json({success:false,message:"The played total is too large."});
+        const stats = {played,wins,draws,losses,points:wins*3+draws,goal_difference:goalsFor-goalsAgainst,goals_for:goalsFor,goals_against:goalsAgainst};
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const locked = await client.query(
+                `SELECT m.user_id,u.username,m.played,m.wins,m.draws,m.losses,m.points,m.goal_difference,m.goals_for,m.goals_against
+                   FROM ${config.table} m JOIN ${config.parent} c ON c.id=m.${config.parentKey}
+                   JOIN users u ON u.id=m.user_id
+                  WHERE c.id=$1 AND m.user_id=$2 FOR UPDATE OF m,c`,
+                [id,userId]
+            );
+            if (!locked.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({success:false,message:"This player is not listed in that competition."});
+            }
+            const old = locked.rows[0];
+            await client.query(
+                `UPDATE ${config.table}
+                    SET played=$1,wins=$2,draws=$3,losses=$4,points=$5,goal_difference=$6,goals_for=$7,goals_against=$8
+                  WHERE ${config.parentKey}=$9 AND user_id=$10`,
+                [stats.played,stats.wins,stats.draws,stats.losses,stats.points,stats.goal_difference,stats.goals_for,stats.goals_against,id,userId]
+            );
+            await client.query(
+                `INSERT INTO admin_competition_adjustments
+                    (admin_id,competition_type,competition_id,user_id,username,previous_stats,new_stats,reason)
+                 VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)`,
+                [req.user.userId,type,id,userId,old.username,JSON.stringify(old),JSON.stringify(stats),reason]
+            );
+            await client.query("COMMIT");
+            return res.json({success:true,message:"Competition table updated and adjustment recorded.",stats});
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Admin standings adjustment error:", error.message);
+            return res.status(500).json({success:false,message:"Could not safely update this table."});
+        } finally {
+            client.release();
         }
     });
 
@@ -589,6 +781,21 @@ module.exports = function(pool, authenticateToken) {
         }
     });
 
+    router.post("/support/clear-all", authenticateToken, adminOnly, async (req, res) => {
+        try {
+            const result = await pool.query(
+                `UPDATE chat_threads SET admin_cleared_at=NOW()
+                  WHERE thread_type='support' AND admin_cleared_at IS NULL
+                 RETURNING id`
+            );
+            const count = result.rows.length;
+            return res.json({ success: true, count, message: count ? count + " conversation(s) cleared from the admin inbox. Message history is preserved." : "The admin inbox is already clear." });
+        } catch (error) {
+            console.error("Admin bulk support clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear the admin inbox." });
+        }
+    });
+
     router.post("/support/:userId/restore", authenticateToken, adminOnly, async (req, res) => {
         const userId = Number(req.params.userId);
         if (!Number.isSafeInteger(userId) || userId <= 0) {
@@ -716,6 +923,34 @@ module.exports = function(pool, authenticateToken) {
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to deactivate announcement."});
+        }
+    });
+
+    router.post("/announcements/deactivate-all", authenticateToken, adminOnly, async (req,res) => {
+        try {
+            const result = await pool.query(
+                "UPDATE admin_announcements SET active=FALSE WHERE active=TRUE RETURNING id"
+            );
+            const count = result.rows.length;
+            return res.json({ success: true, count, message: count ? count + " active announcement(s) hidden from players." : "There are no active announcements to clear." });
+        } catch (error) {
+            console.error("Admin bulk announcement clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear active announcements." });
+        }
+    });
+
+    router.delete("/announcements/:id", authenticateToken, adminOnly, async (req,res) => {
+        const id=Number(req.params.id);
+        if(!Number.isSafeInteger(id)||id<=0)
+            return res.status(400).json({success:false,message:"Invalid announcement."});
+        try {
+            const r=await pool.query("DELETE FROM admin_announcements WHERE id=$1 RETURNING id",[id]);
+            if(!r.rows.length)
+                return res.status(404).json({success:false,message:"Announcement not found."});
+            return res.json({success:true,message:"Announcement deleted from the admin list and player history."});
+        } catch(e) {
+            console.error(e);
+            return res.status(500).json({success:false,message:"Failed to delete announcement."});
         }
     });
 

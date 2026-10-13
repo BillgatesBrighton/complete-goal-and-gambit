@@ -353,4 +353,3 @@ if(matchId){loadMatch().then(setupSocket)}else if(window.parent!==window)window.
 // Keep both players' clocks and board state synced if Socket.IO disconnects.
 setInterval(()=>{if(matchId&&state&&(state.status==="waiting"||state.status==="active")&&!document.hidden)loadMatch()},2000);
 clockTimer=setInterval(updateClocks,250);
-
