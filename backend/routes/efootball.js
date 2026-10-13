@@ -546,7 +546,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const userId = Number(req.user.userId);
         const mode = cleanMode(req.body && req.body.mode);
         let league = cleanLeague(req.body && req.body.league);
-        const roundName = cleanRound(req.body && req.body.round_name);
+        let roundName = cleanRound(req.body && req.body.round_name);
         const tournamentId = req.body && req.body.tournament_id ? Number(req.body.tournament_id) : null;
         const requestedStake = Number(req.body && (req.body.stake_amount !== undefined ? req.body.stake_amount : req.body.stake));
         let stake = 0;
@@ -599,10 +599,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
             if (isTournament) {
                 const member = await client.query(
-                    "SELECT 1 FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.user_id=$1 AND tm.tournament_id=$2 AND t.status='open'",
+                    "SELECT tm.group_code FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.user_id=$1 AND tm.tournament_id=$2 AND t.status='open'",
                     [userId, tournamentId]
                 );
-                if (!member.rows.length) throw Object.assign(new Error("Join an open tournament before starting a tournament match."), { status: 403 });
+                if (!member.rows.length) throw Object.assign(new Error("Join an open tournament before starting a tournament match."), { status: 403 }); if (!member.rows[0].group_code) throw Object.assign(new Error("Your tournament group is not assigned yet. Please refresh and try again."), { status: 409 }); roundName = "Group " + member.rows[0].group_code;
             }
 
             // Serialize searches for the same ranked stake, league division,
