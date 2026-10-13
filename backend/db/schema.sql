@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS efootball_tournament_members (
     id                  BIGSERIAL PRIMARY KEY,
     tournament_id       BIGINT NOT NULL REFERENCES efootball_tournaments(id) ON DELETE CASCADE,
     user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    joined_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), group_code VARCHAR(2),
     UNIQUE(tournament_id, user_id)
 );
 
@@ -389,7 +389,7 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_id BIGINT REFERENCES efootball_tournaments(id) ON DELETE SET NULL;
-ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0; ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS group_code VARCHAR(2); WITH ranked_members AS (SELECT tm.id, ROW_NUMBER() OVER (PARTITION BY tm.tournament_id ORDER BY tm.joined_at, tm.id) AS member_rank, GREATEST(1, CEIL(t.max_players::numeric / LEAST(4, GREATEST(1, CEIL(t.max_players::numeric / 4))))) AS group_size FROM efootball_tournament_members tm JOIN efootball_tournaments t ON t.id=tm.tournament_id WHERE tm.group_code IS NULL) UPDATE efootball_tournament_members tm SET group_code=CHR(65+FLOOR((ranked.member_rank-1)/ranked.group_size)::integer) FROM ranked_members ranked WHERE tm.id=ranked.id; ALTER TABLE efootball_tournament_members ALTER COLUMN group_code SET NOT NULL; CREATE INDEX IF NOT EXISTS efootball_tournament_members_group_idx ON efootball_tournament_members(tournament_id,group_code,user_id); UPDATE efootball_matches m SET round_name='Group '||home.group_code FROM efootball_tournament_members home WHERE m.tournament_id=home.tournament_id AND m.creator_id=home.user_id AND m.round_name IS NULL AND (m.opponent_id IS NULL OR EXISTS (SELECT 1 FROM efootball_tournament_members away WHERE away.tournament_id=home.tournament_id AND away.user_id=m.opponent_id AND away.group_code=home.group_code));
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_for INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_against INTEGER NOT NULL DEFAULT 0;
