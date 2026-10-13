@@ -1590,7 +1590,7 @@ function loadMatch(){
     document.getElementById(
         "matchLeague"
     ).textContent =
-        currentMatch.league ||
+        currentMatch.league || currentMatch.groupName ||
         "—";
 
 
@@ -1669,7 +1669,7 @@ function updateInterface(){
             "pairingMessage"
         ).textContent = currentMatch.league
             ? "Searching only among players currently waiting in the " + currentMatch.league + " league."
-            : "Searching only among players currently waiting in this same ranked stake queue.";
+            : currentMatch.tournamentId ? "Searching in your tournament group." : "Searching only among players currently waiting in this same ranked stake queue.";
 
         return;
     }
@@ -3567,7 +3567,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         const fr = await GG.api("/api/efootball/matches/" + encodeURIComponent(fixtureId), { noRedirect:true });
         if (fr.ok && fr.data.match) {
             const sm = fr.data.match;
-            currentMatch = { id:"GG-"+sm.id, backendId:sm.id, game:"eFootball", mode:sm.league ? sm.league+" League" : "League", league:sm.league||null, stake:Number(sm.stake_amount||0), player:sm.yourName||currentUser, opponent:sm.opponentFound?sm.opponentName:"Opponent", status:sm.status, resultSubmitted:!!(sm.youAreCreator?sm.creator_submitted:sm.opponent_submitted), createdAt:sm.created_at };
+            currentMatch = { id:"GG-"+sm.id, backendId:sm.id, game:"eFootball", mode:sm.league ? sm.league+" League" : (sm.mode === "tournament" || params.get("tournament")) ? "Tournament" : (sm.mode || "eFootball"), league:sm.league||null, groupName:(sm.mode === "tournament" || params.get("tournament")) ? (sm.round_name||"Group stage") : null, tournamentId:sm.tournament_id||params.get("tournament")||null, stake:Number(sm.stake_amount||0), player:sm.yourName||currentUser, opponent:sm.opponentFound?sm.opponentName:"Opponent", status:sm.status, resultSubmitted:!!(sm.youAreCreator?sm.creator_submitted:sm.opponent_submitted), createdAt:sm.created_at };
             localStorage.setItem("goalGambitCurrentMatch",JSON.stringify(currentMatch));
             loadMatch();
         }
