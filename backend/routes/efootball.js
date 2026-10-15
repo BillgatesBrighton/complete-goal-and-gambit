@@ -444,12 +444,14 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             ? (senderId === creatorId ? opponentId : creatorId)
             : null;
         safe.room_code = shownCode && !isSender && !match.code_correction_requested_at ? shownCode : null;
+        delete safe.external_room_code;
         safe.opponentFound = Boolean(match.opponent_id);
         safe.youAreCreator = isCreator;
         safe.youAreSender = isSender;
         safe.youAreReceiver = senderIsParticipant && receiverId === Number(userId);
         safe.codeReceived = Boolean(senderIsParticipant && match.code_received_at && Number(match.code_received_by) === receiverId);
         safe.codeReceivedAt = match.code_received_at || null;
+        safe.codeSentAt = match.code_sent_at || null;
         safe.codeCorrectionRequested = Boolean(match.code_correction_requested_at);
         safe.codeCorrectionRequestedAt = match.code_correction_requested_at || null;
         safe.roomCodeRevision = Number(match.room_code_revision || 0);
@@ -1551,17 +1553,16 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("ROLLBACK");
                 return res.status(403).json({ success: false, message: "You are not part of this match." });
             }
-            if (!match.opponent_id || !["waiting", "ready"].includes(match.status)) {
+            if (!match.opponent_id || !["waiting", "ready"].includes(match.status) || match.started_at) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({ success: false, message: "The room code can only be sent before the game starts." });
             }
 
-            let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
+            const senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
             const matchParticipants = [Number(match.creator_id), Number(match.opponent_id)];
             if (!matchParticipants.includes(senderId)) {
-                // A sender who submits a code on a legacy match establishes the role.
-                senderId = userId;
-                await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This match has no valid room-code sender. Contact support before sending a code." });
             }
             if (senderId !== userId) {
                 await client.query("COMMIT");
@@ -1573,6 +1574,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 Number(match.code_correction_requested_by) !== senderId
             );
             if (match.code_sent && !replacingCode) {
+                if (String(match.external_room_code || "") === code) {
+                    const updated = await getMatchForUser(client, matchId, userId);
+                    await client.query("COMMIT");
+                    return res.json({ success: true, duplicate: true, message: "This room code was already saved and sent to your opponent.", room_code: code, match: updated });
+                }
                 await client.query("ROLLBACK");
                 return res.status(409).json({ success: false, message: "The room code has already been sent. The receiver must explicitly request a replacement before you can send another." });
             }
@@ -1582,6 +1588,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 `UPDATE efootball_matches
                     SET external_room_code=$1,
                         code_sent=TRUE,
+                        code_sent_at=NOW(),
                         room_code_revision=room_code_revision+1,
                         code_received_at=NULL,
                         code_received_by=NULL,
@@ -1598,8 +1605,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const receiver = await client.query("SELECT username FROM users WHERE id=$1", [receiverId]);
             const sender = await client.query("SELECT username FROM users WHERE id=$1", [userId]);
             await createSystemNotification(
-                client, receiverId, replacingCode ? "room_code_replaced" : "room_code", replacingCode ? "Replacement eFootball Room Code" : "eFootball Room Code",
-                (replacingCode ? "Your opponent replaced the eFootball room code: " : "Your opponent sent the eFootball room code: ") + code, matchId
+                client, receiverId, replacingCode ? "room_code_replaced" : "room_code", "ROOM CODE RECEIVED",
+                (replacingCode ? "Your opponent sent a replacement official Konami room code for Match GG-" : "Your opponent sent the official Konami room code for Match GG-") + matchId + ". Open the match room to view it and confirm receipt.", matchId
             );
             await createSystemNotification(
                 client, senderId, "room_code_sent", "Room code delivered",
@@ -1609,6 +1616,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const updated = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
             emitMatchUpdate(receiverId, matchId, "room-code-sent");
+            emitMatchUpdate(senderId, matchId, "room-code-sent");
             wakePushQueue();
             return res.json({ success: true, message: "Room code sent privately to your opponent.", room_code: code, match: updated });
         } catch (error) {
@@ -1655,13 +1663,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return res.status(409).json({ success: false, message: "A room code can only be replaced before the match starts." });
             }
             const participantIds = [Number(match.creator_id), Number(match.opponent_id)];
-            let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
+            const senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
             if (senderId === null || !participantIds.includes(senderId)) {
-                // On an older match without a saved role, the requester is the receiver.
-                senderId = participantIds.find(id => id !== userId);
-                await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
-            }
-            if (!participantIds.includes(senderId)) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({ success: false, message: "This match has no valid room-code sender." });
             }
@@ -1721,13 +1724,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return res.status(409).json({ success: false, message: "This match no longer has a room code waiting for receipt." });
             }
             const participantIds = [Number(match.creator_id), Number(match.opponent_id)];
-            let senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
-            if (senderId === null || !participantIds.includes(senderId)) {
-                // Repair older matches with a delivered code but no saved sender.
-                // The player confirming receipt is the receiver; the other sent it.
-                senderId = participantIds.find(id => id !== userId);
-                await client.query("UPDATE efootball_matches SET code_sender_id=$1 WHERE id=$2", [senderId, matchId]);
-            }
+            const senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
             if (!participantIds.includes(senderId)) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({ success: false, message: "This room code has no valid sender. Ask the sender to resend it from the Match Room." });

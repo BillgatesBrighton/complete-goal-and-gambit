@@ -576,6 +576,7 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS opponent_submitted_oppone
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS result_round SMALLINT NOT NULL DEFAULT 1;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS external_room_code VARCHAR(50);
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS room_code_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_sent_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested_at TIMESTAMPTZ;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_correction_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS code_received_at TIMESTAMPTZ;

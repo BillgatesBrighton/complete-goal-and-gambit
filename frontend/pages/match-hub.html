@@ -615,25 +615,18 @@ button{
     border-radius:5px;
 }
 
-.room-code-bubble{
-    position:fixed;
-    top:calc(82px + env(safe-area-inset-top, 0px));
-    left:50%;
-    transform:translateX(-50%);
-    width:min(540px, calc(100vw - 24px));
-    padding:19px;
-    background:#101010;
-    border:1px solid #d4af37;
-    border-radius:16px;
-    box-shadow:0 16px 48px rgba(0,0,0,.78), 0 0 0 1px rgba(212,175,55,.12);
-    z-index:1200;
-}
-.room-code-bubble-header{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
-.room-code-bubble-icon{flex:0 0 34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#241e0e;color:#f0cf55;font-size:18px;font-weight:900}
-.room-code-bubble h2{color:#f0cf55;font-size:18px;margin:0 0 4px}
-.room-code-bubble p{color:#c6c6c6;font-size:13px;line-height:1.5}
-.room-code-bubble .room-code-form{margin:14px 0 8px}
-.room-code-bubble-note{color:#888 !important;font-size:11px !important;text-align:center}
+.room-code-modal-backdrop{position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;padding:calc(18px + env(safe-area-inset-top,0px)) 14px calc(18px + env(safe-area-inset-bottom,0px));background:rgba(0,0,0,.78);}
+.room-code-dialog{width:min(540px,100%);max-height:100%;overflow:auto;padding:22px;background:#101010;border:1px solid #d4af37;border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.78);}
+.room-code-dialog h2{color:#f0cf55;font-size:20px;margin:0 0 8px}
+.room-code-dialog p{color:#c6c6c6;font-size:14px;line-height:1.5;margin:0 0 14px}
+.room-code-dialog textarea{width:100%;min-height:58px;resize:vertical;}
+.room-code-dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.room-code-dialog-actions button{width:100%;margin:0}
+.room-code-dialog-actions .send-code-action{grid-column:1/-1;}
+.room-code-entry-status{min-height:1.5em;margin-top:9px!important;font-size:13px!important;color:#f0cf55!important;}
+.room-code-entry-status.error{color:#ff7373!important}
+.room-code-entry-status.success{color:#73df9b!important}
+@media(max-width:520px){.room-code-dialog{padding:18px}.room-code-dialog-actions{grid-template-columns:1fr}.room-code-dialog-actions .send-code-action{grid-column:auto}}
 
 @media(max-width:760px){
 
@@ -716,22 +709,6 @@ button{
     </a>
 
 </nav>
-
-<section class="room-code-bubble hidden" id="roomCodeBubble" role="dialog" aria-labelledby="roomCodeBubbleTitle" aria-describedby="roomCodeBubbleDescription">
-    <div class="room-code-bubble-header">
-        <div class="room-code-bubble-icon" aria-hidden="true">!</div>
-        <div>
-            <h2 id="roomCodeBubbleTitle">Your room code is needed</h2>
-            <p id="roomCodeBubbleDescription">You were selected to create the eFootball room. Enter its code here so your opponent can join.</p>
-        </div>
-    </div>
-    <form class="room-code-form" id="roomCodeForm" onsubmit="event.preventDefault(); sendRoomCode();">
-        <label for="roomCodeInput">Room code</label>
-        <input type="text" id="roomCodeInput" maxlength="50" placeholder="Enter eFootball room code" autocomplete="off" aria-label="eFootball room code">
-        <button class="primary-btn" id="sendRoomCodeButton" type="submit">SEND CODE</button>
-    </form>
-    <p class="room-code-bubble-note">This bubble stays here until your room code is sent.</p>
-</section>
 
 <div class="container">
 
@@ -901,9 +878,10 @@ button{
             </div>
 
             <p class="description" style="margin-top:12px;">
-                Create the room in eFootball. The room-code form stays in the bubble at the top of this screen until you send it.
+                Create the room in eFootball, then send its official code to your matched opponent from this Match Hub.
             </p>
-
+            <button class="primary-btn hidden" id="openRoomCodeDialog" type="button">SEND ROOM CODE</button>
+            <div class="role-banner hidden" id="senderCodeStatus" role="status" aria-live="polite"></div>
         </div>
 
 
@@ -931,6 +909,8 @@ button{
                     <small>eFOOTBALL ROOM CODE</small>
                     <strong id="receivedCode">------</strong>
                 </div>
+                <button class="secondary-btn" id="copyReceivedRoomCodeButton" type="button">COPY ROOM CODE</button>
+                <p class="description" id="receivedCodeCopyStatus" role="status" aria-live="polite"></p>
                 <button
                     class="primary-btn"
                     id="confirmRoomCodeButton"
@@ -1377,6 +1357,22 @@ button{
 </div>
 
 
+<div class="room-code-modal-backdrop hidden" id="roomCodeModal" role="presentation">
+    <section class="room-code-dialog" role="dialog" aria-modal="true" aria-labelledby="roomCodeModalTitle" aria-describedby="roomCodeModalDescription">
+        <h2 id="roomCodeModalTitle">Send Official Konami Room Code</h2>
+        <p id="roomCodeModalDescription">Copy the official room code from Konami/eFootball, then paste it below. You can also use your Android keyboard’s Paste action in the field.</p>
+        <label for="roomCodeInput">Room code</label>
+        <textarea id="roomCodeInput" maxlength="50" rows="2" placeholder="Paste your Konami room code here..." autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Konami room code"></textarea>
+        <p class="room-code-entry-status" id="roomCodeEntryStatus" role="status" aria-live="polite"></p>
+        <div class="room-code-dialog-actions">
+            <button class="secondary-btn" id="pasteRoomCodeButton" type="button">PASTE CODE</button>
+            <button class="secondary-btn" id="cancelRoomCodeButton" type="button">CANCEL</button>
+            <button class="primary-btn send-code-action" id="sendRoomCodeButton" type="button">SEND CODE</button>
+        </div>
+    </section>
+</div>
+
+
 <!-- =========================================================
      ACTIVE MATCH INDICATOR
 ========================================================== -->
@@ -1477,6 +1473,9 @@ let currentUser =
 let pollingTimer = null;
 let lastQueueHeartbeatAt = 0;
 let lastTournamentHeartbeatAt = 0;
+let roomCodeSubmitting = false;
+let roomCodePreviousFocus = null;
+let authoritativeMatchState = null;
 
 
 /* ============================================================
@@ -1754,58 +1753,7 @@ async function cancelCurrentMatch(){
 ============================================================ */
 
 function assignMatchRoles(){
-
-    if(currentMatch.codeSender){
-        updateRoleMessage();
-        return;
-    }
-
-
-    /*
-        Prototype:
-
-        Randomly select one of the two players.
-
-        The room-code sender is assigned separately from the
-        server-selected screenshot uploader.
-    */
-
-
-    const player =
-        currentMatch.player ||
-        currentUser;
-
-
-    const opponent =
-        currentMatch.opponent;
-
-
-    if(!opponent){
-        return;
-    }
-
-
-    const sender =
-        Math.random() < 0.5
-            ? player
-            : opponent;
-
-
-    currentMatch.codeSender =
-        sender;
-
-
-    currentMatch.screenshotSender = null;
-
-
-    localStorage.setItem(
-        "goalGambitCurrentMatch",
-        JSON.stringify(currentMatch)
-    );
-
-
     updateRoleMessage();
-
 }
 
 
@@ -1815,13 +1763,8 @@ function assignMatchRoles(){
 
 function updateRoleMessage(){
 
-    const sender =
-        currentMatch.codeSender;
-
-
-    const isMe =
-        sender === currentUser ||
-        sender === currentMatch.player;
+    const sender = currentMatch && currentMatch.codeSender;
+    const isMe = isSender();
 
 
     const message =
@@ -1835,10 +1778,14 @@ function updateRoleMessage(){
         message.textContent =
             "You were randomly selected to send the room code. Screenshot upload is assigned separately after both players report scores.";
 
-    }else{
+    }else if(sender){
 
         message.textContent =
             `${sender} was randomly selected to send the room code. Screenshot upload is assigned separately after both players report scores.`;
+
+    }else{
+
+        message.textContent = "The room-code sender has not been assigned for this match. Please contact support.";
 
     }
 
@@ -1869,17 +1816,9 @@ function updateRoleMessage(){
 ============================================================ */
 
 function isSender(){
-
-    if(!currentMatch){
-        return false;
-    }
-
-
-    return (
-        currentMatch.codeSender === currentUser ||
-        currentMatch.codeSender === currentMatch.player
-    );
-
+    return !!(currentMatch && authoritativeMatchState &&
+        Number(authoritativeMatchState.id) === Number(currentMatch.backendId) &&
+        authoritativeMatchState.youAreSender === true);
 }
 
 
@@ -1888,11 +1827,25 @@ function isSender(){
 ============================================================ */
 
 function updateRoomCodeForm(){
-    const bubble = document.getElementById("roomCodeBubble");
-    if(!bubble) return;
-    const canSend = currentMatch && currentMatch.backendId && isSender() &&
-        !currentMatch.codeSent && !currentMatch.roomCode;
-    bubble.classList.toggle("hidden", !canSend);
+    const button = document.getElementById("openRoomCodeDialog");
+    const status = document.getElementById("senderCodeStatus");
+    const canSend = !!(currentMatch && currentMatch.backendId && isSender() &&
+        ["waiting", "ready"].includes(currentMatch.status) && !currentMatch.matchStarted &&
+        (!currentMatch.codeSent || currentMatch.codeCorrectionRequested));
+    if(button){
+        button.classList.toggle("hidden", !canSend);
+        button.textContent = currentMatch && currentMatch.codeCorrectionRequested ? "SEND REPLACEMENT ROOM CODE" : "SEND ROOM CODE";
+        button.disabled = roomCodeSubmitting;
+    }
+    if(status){
+        const senderWithCode = !!(currentMatch && isSender() && currentMatch.codeSent && !currentMatch.codeCorrectionRequested);
+        status.classList.toggle("hidden", !senderWithCode);
+        status.classList.toggle("success", !!(senderWithCode && currentMatch.codeReceived));
+        status.classList.toggle("warning", !!(senderWithCode && !currentMatch.codeReceived));
+        status.textContent = senderWithCode
+            ? (currentMatch.codeReceived ? "CODE RECEIVED BY OPPONENT · YOU ARE READY" : "ROOM CODE SENT · YOU ARE READY · WAITING FOR OPPONENT")
+            : "";
+    }
 }
 
 
@@ -1941,101 +1894,6 @@ function updateSenderReceiver(){
         }
 
     }
-
-}
-
-
-/* ============================================================
-   SEND ROOM CODE
-============================================================ */
-
-function sendRoomCode(){
-
-    if(!currentMatch){
-        return;
-    }
-
-
-    const input =
-        document.getElementById(
-            "roomCode"
-        );
-
-
-    const code =
-        input.value.trim();
-
-
-    if(!code){
-
-        alert(
-            "Please enter the actual eFootball room code."
-        );
-
-        input.focus();
-
-        return;
-    }
-
-
-    currentMatch.roomCode =
-        code;
-
-
-    currentMatch.codeSent =
-        true;
-
-
-    currentMatch.codeSentAt =
-        new Date().toISOString();
-
-
-    localStorage.setItem(
-        "goalGambitCurrentMatch",
-        JSON.stringify(currentMatch)
-    );
-
-
-    document.getElementById(
-        "matchStatus"
-    ).textContent =
-        "ROOM CODE SENT";
-
-
-    document.getElementById(
-        "senderArea"
-    ).innerHTML = `
-
-        <div class="role-banner">
-            ✓ ROOM CODE SENT
-        </div>
-
-        <div class="received-code">
-
-            <small>
-                YOUR ROOM CODE
-            </small>
-
-            <strong>
-                ${escapeHTML(code)}
-            </strong>
-
-        </div>
-
-        <p
-            class="description"
-            style="margin-top:15px;text-align:center;"
-        >
-            Your opponent has been notified.
-        </p>
-
-    `;
-
-
-    notifyUser(
-        "GOAL$GAMBIT",
-        "Room code sent successfully."
-    );
 
 }
 
@@ -3295,14 +3153,11 @@ function alertIfLoser(serverMatch) {
 }
 
 async function syncFromServer() {
-    if (!currentMatch || !currentMatch.backendId) return;
+    if (roomCodeSubmitting || !currentMatch || !currentMatch.backendId) return;
     const r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId), { noRedirect: true });
     if (!r.ok) return;
     const m = r.data.match;
-    if (m.opponentFound && ["waiting", "ready"].includes(m.status)) {
-        location.replace("match-room.html?matchId=" + encodeURIComponent(m.id));
-        return;
-    }
+    authoritativeMatchState = m;
     if (["playing", "awaiting_verification", "disputed", "completed"].includes(m.status)) {
         location.replace("match-results.html?matchId=" + encodeURIComponent(m.id));
         return;
@@ -3321,10 +3176,10 @@ async function syncFromServer() {
     currentMatch.league = m.league || currentMatch.league || null;
     currentMatch.codeSender = m.codeSenderName || (m.youAreSender ? currentMatch.player : currentMatch.opponent);
     currentMatch.codeReceiver = m.codeReceiverName || (m.youAreSender ? currentMatch.opponent : currentMatch.player);
+    currentMatch.codeCorrectionRequested = !!m.codeCorrectionRequested;
     currentMatch.screenshotSender = m.youMustUploadScreenshot ? currentMatch.player : currentMatch.opponent;
     currentMatch.roomCode = m.room_code || null;
     currentMatch.codeSent = !!m.codeSent;
-    currentMatch.codeReceived = !!m.codeReceived;
     currentMatch.codeReceived = !!m.codeReceived;
     currentMatch.screenshotUploaded = !!m.screenshotSubmitted;
 
@@ -3339,8 +3194,6 @@ async function syncFromServer() {
         );
     }
     currentMatch.verificationStatus = m.verificationStatus || null;
-    currentMatch.playerReady = !!m.yourReady;
-    currentMatch.opponentReady = !!m.opponentReady;
     currentMatch.status = m.status;
     currentMatch.matchStarted = ["playing", "awaiting_verification", "disputed", "completed"].includes(m.status) || !!(m.yourReady && m.opponentReady);
     currentMatch.resultSubmitted = !!(m.youAreCreator ? m.creator_submitted : m.opponent_submitted);
@@ -3401,63 +3254,148 @@ function assignMatchRoles() {
     updateRoleMessage();
 }
 
-async function sendRoomCode() {
-    if (!currentMatch || !currentMatch.backendId) {
-        alert("This match is not connected to the server yet.");
+function openRoomCodeEntry(){
+    if(!currentMatch || !currentMatch.backendId || !isSender() || !["waiting", "ready"].includes(currentMatch.status) || currentMatch.matchStarted){
         return;
     }
+    const modal = document.getElementById("roomCodeModal");
     const input = document.getElementById("roomCodeInput");
-    if (!input) {
-        alert("The room-code field is unavailable. Reload the Match Hub and try again.");
+    if(!modal || !input) return;
+    roomCodePreviousFocus = document.activeElement;
+    modal.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+    const status = document.getElementById("roomCodeEntryStatus");
+    if(status){status.textContent = "";status.classList.remove("error", "success");}
+    window.setTimeout(function(){input.focus();}, 0);
+}
+
+function closeRoomCodeEntry(){
+    const modal = document.getElementById("roomCodeModal");
+    if(modal) modal.classList.add("hidden");
+    document.body.style.overflow = "";
+    if(roomCodePreviousFocus && typeof roomCodePreviousFocus.focus === "function") roomCodePreviousFocus.focus();
+}
+
+async function pasteRoomCode(){
+    const input = document.getElementById("roomCodeInput");
+    const status = document.getElementById("roomCodeEntryStatus");
+    if(!input) return;
+    if(!navigator.clipboard || typeof navigator.clipboard.readText !== "function"){
+        status.textContent = "Clipboard access is unavailable here. Tap the field and use your keyboard’s Paste action.";
+        status.classList.add("error");
         return;
     }
-    const code = input ? input.value.trim() : "";
-    if (!code) {
-        alert("Please enter the actual eFootball room code.");
+    try{
+        const clipboardText = await navigator.clipboard.readText();
+        if(!clipboardText.trim()){
+            status.textContent = "Your clipboard is empty. Copy the room code first, or paste it with your keyboard.";
+            status.classList.remove("error");
+            return;
+        }
+        input.value = clipboardText.trim();
+        status.textContent = "Code pasted. Check it, then send.";
+        status.classList.remove("error");
+        input.focus();
+    }catch(_){
+        status.textContent = "Clipboard permission was unavailable. Tap the field and use your keyboard’s Paste action.";
+        status.classList.add("error");
+        input.focus();
+    }
+}
+
+async function sendRoomCode(){
+    if(roomCodeSubmitting || !currentMatch || !currentMatch.backendId || !isSender() ||
+        !["waiting", "ready"].includes(currentMatch.status) || currentMatch.matchStarted) return;
+    const input = document.getElementById("roomCodeInput");
+    const status = document.getElementById("roomCodeEntryStatus");
+    const button = document.getElementById("sendRoomCodeButton");
+    if(!input || !status || !button) return;
+    const code = input.value.trim();
+    status.classList.remove("error", "success");
+    if(!code){
+        status.textContent = "Paste the official Konami room code before sending.";
+        status.classList.add("error");
         input.focus();
         return;
     }
-    const button = document.getElementById("sendRoomCodeButton");
-    if (button) {
-        button.disabled = true;
-        button.textContent = "SENDING…";
+    if(!/^[A-Za-z0-9 _-]{1,50}$/.test(code)){
+        status.textContent = "Use letters, numbers, spaces, hyphens or underscores (up to 50 characters).";
+        status.classList.add("error");
+        input.focus();
+        return;
     }
-    let r;
-    try {
-        r = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/roomcode", {
-            method: "POST",
-            body: { code: code }
+    roomCodeSubmitting = true;
+    button.disabled = true;
+    button.textContent = "SENDING…";
+    status.textContent = "Saving and sending the code to your opponent…";
+    try{
+        const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/send-code", {
+            method: "POST", body: { code: code }, noRedirect: true
         });
-    } catch (error) {
-        if (button) {
-            button.disabled = false;
-            button.textContent = "SEND CODE";
+        if(!result.ok){
+            status.textContent = result.data.message || "The code was not sent. Your entry is still here; you can retry.";
+            status.classList.add("error");
+            return;
         }
-        alert(error.message || "Could not reach the server. Your code has not been sent.");
-        return;
+        const saved = result.data.match || {};
+        currentMatch.codeSent = true;
+        currentMatch.codeCorrectionRequested = false;
+        currentMatch.codeReceived = !!saved.codeReceived;
+        currentMatch.playerReady = !!saved.yourReady;
+        currentMatch.opponentReady = !!saved.opponentReady;
+        currentMatch.status = saved.status || currentMatch.status;
+        currentMatch.serverMatch = Object.assign({}, currentMatch.serverMatch || {}, saved, {youAreSender:true});
+        authoritativeMatchState = Object.assign({}, saved, { id: currentMatch.backendId, youAreSender: true });
+        currentMatch.roomCode = null;
+        localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
+        document.getElementById("matchStatus").textContent = "ROOM CODE SENT · YOU ARE READY";
+        closeRoomCodeEntry();
+        status.textContent = result.data.message || "Room code saved and sent. You are marked ready.";
+        status.classList.add("success");
+        input.value = "";
+        updateInterface();
+        updateRoomCodeForm();
+        notifyUser("GOAL$GAMBIT", "Room code sent. You are marked ready; waiting for your opponent to confirm receipt.");
+        await syncFromServer();
+    }catch(error){
+        status.textContent = (error && error.message ? error.message + " " : "") + "The request may not have reached the server. Your code is preserved; retrying the same code is safe.";
+        status.classList.add("error");
+    }finally{
+        roomCodeSubmitting = false;
+        button.disabled = false;
+        button.textContent = "SEND CODE";
+        updateRoomCodeForm();
     }
-    if (!r.ok) {
-        if (button) {
-            button.disabled = false;
-            button.textContent = "SEND CODE";
-        }
-        alert(r.data.message || "Could not send the room code.");
-        return;
-    }
-    const sent = r.data.match.room_code || code;
-    currentMatch.roomCode = sent;
-    currentMatch.codeSent = true;
-    localStorage.setItem("goalGambitCurrentMatch", JSON.stringify(currentMatch));
-    document.getElementById("matchStatus").textContent = "ROOM CODE SENT";
-    updateRoomCodeForm();
-    document.getElementById("senderArea").innerHTML =
-        '<div class="role-banner">✓ ROOM CODE SENT</div>' +
-        '<div class="received-code"><small>YOUR ROOM CODE</small><strong>' + escapeHTML(sent) + '</strong></div>' +
-        '<p class="description" style="margin-top:15px;text-align:center;">Your opponent can now see the code.</p>';
-    notifyUser("GOAL$GAMBIT", "Room code sent successfully.");
-    currentMatch.playerReady = !!r.data.match.yourReady;
-    location.replace("match-results.html?matchId=" + encodeURIComponent(currentMatch.backendId));
 }
+
+document.getElementById("openRoomCodeDialog").addEventListener("click", openRoomCodeEntry);
+document.getElementById("cancelRoomCodeButton").addEventListener("click", closeRoomCodeEntry);
+document.getElementById("pasteRoomCodeButton").addEventListener("click", pasteRoomCode);
+document.getElementById("sendRoomCodeButton").addEventListener("click", sendRoomCode);
+document.getElementById("roomCodeModal").addEventListener("click", function(event){
+    if(event.target === event.currentTarget) closeRoomCodeEntry();
+});
+document.addEventListener("keydown", function(event){
+    if(event.key === "Escape" && !document.getElementById("roomCodeModal").classList.contains("hidden")) closeRoomCodeEntry();
+});
+document.getElementById("copyReceivedRoomCodeButton").addEventListener("click", async function(){
+    const code = currentMatch && currentMatch.roomCode;
+    const status = document.getElementById("receivedCodeCopyStatus");
+    if(!code) return;
+    try{
+        if(!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") throw new Error("Clipboard unavailable");
+        await navigator.clipboard.writeText(code);
+        status.textContent = "Room code copied. Paste it into eFootball.";
+    }catch(_){
+        const codeNode = document.getElementById("receivedCode");
+        const range = document.createRange();
+        range.selectNodeContents(codeNode);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        status.textContent = "Code selected. Copy it, then paste it into eFootball.";
+    }
+});
 
 async function toggleReady() {
     if (!currentMatch || !currentMatch.backendId) return;

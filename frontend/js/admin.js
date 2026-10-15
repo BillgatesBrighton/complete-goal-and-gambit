@@ -266,9 +266,9 @@ async function loadUsers() {
     users=r.data.users||[];
 
 
-    $("userList").innerHTML=users.length?users.map(function(u){
+    $("userList").innerHTML=users.length?users.map(function(u,index){
         var id=Number(u.id), self=id===Number(adminId), status=String(u.account_status||"active"), cls=status==="active"?"active-status":status==="suspended"?"suspended-status":"closed-status";
-        var h='<article class="userrow" data-user="'+id+'"><div><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
+        var h='<article class="userrow" data-user="'+id+'"><div><span class="user-meta">Account #'+(index+1)+'</span><br><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
         h+='<label class="sr-only" for="un'+id+'">Optional action note</label><input id="un'+id+'" class="note" data-user-note maxlength="1000" placeholder="Optional note">';
         h+='<button class="btn" type="button" data-view-dashboard="'+id+'">View dashboard</button>';
         if(self)h+='<span class="foot">Your admin access is protected.</span>';
@@ -338,7 +338,9 @@ async function saveCompetitionEdit(form) {
 }
 async function loadOverview() {
     var r=await GG.api("/api/admin/overview"); if(!r.ok)return;
-    var u=r.data.users||{}; $("statRestricted").textContent=(Number(u.suspended)||0)+(Number(u.closed)||0);
+    var u=r.data.users||{};
+    $("statActiveUsers").textContent=(Number(u.active)||0).toLocaleString();
+    $("statRestricted").textContent=((Number(u.suspended)||0)+(Number(u.closed)||0)).toLocaleString();
 }
 async function loadAdminWallet() {
     var r=await GG.api("/api/admin/wallet");
