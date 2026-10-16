@@ -7,7 +7,7 @@ const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const router = express.Router();
 
-module.exports = function(pool, authenticateToken) {
+module.exports = function(pool, authenticateToken, getOnlineUserIds) {
     async function getOrCreateSupportThread(userId) {
         const created = await pool.query(
             `INSERT INTO chat_threads(thread_type,user_one_id,user_two_id)
@@ -337,7 +337,16 @@ module.exports = function(pool, authenticateToken) {
                  ORDER BY u.created_at DESC LIMIT 200`,
                 [q]
             );
-            res.json({success:true,users:r.rows});
+            const onlineIds = new Set(
+                (typeof getOnlineUserIds === "function" ? getOnlineUserIds() : [])
+                    .map(function(id) { return String(Number(id)); })
+            );
+            res.json({
+                success:true,
+                users:r.rows.map(function(user) {
+                    return Object.assign({}, user, { online: onlineIds.has(String(Number(user.id))) });
+                })
+            });
         } catch (e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to load users."});

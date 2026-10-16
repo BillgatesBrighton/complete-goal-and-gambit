@@ -265,7 +265,7 @@ public final class MainActivity extends Activity {
                         content.addView(confirm, marginParams(-1, -2, 0, 0, 0, 12));
                         confirm.setOnClickListener(view -> confirmReceipt(matchId, confirm, match));
                     } else if (sender) {
-                        match.setText("You are the room-code sender. While eFootball is open, pull down the notification shade, expand the match alert, and tap ENTER ROOM CODE. The reply field appears after tapping the action.");
+                        match.setText("You are the room-code sender. While eFootball is open, pull down the notification shade, expand the match alert, tap REPLY, enter the room code, then tap Send on your keyboard.");
                     } else {
                         match.setText("Your opponent has not sent the room code yet.");
                     }

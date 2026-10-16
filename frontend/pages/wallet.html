@@ -387,6 +387,7 @@ button:disabled {
 
     .history-toolbar { grid-template-columns: 1fr; justify-items: center; text-align: center; }
     .history-toolbar > div, .history-toolbar .history-clear-button { grid-column: 1; }
+    .history-toolbar .history-clear-button { align-self: flex-end; }
 
 }
 
@@ -426,8 +427,8 @@ Manage your funds.
 </h1>
 
 <p>
-Deposit funds for competitions or
-request withdrawals from your balance.
+Deposit funds for competitions or request a manual withdrawal. Your balance is
+deducted only after the admin confirms the M-Pesa payment.
 </p>
 
 </section>
@@ -608,6 +609,7 @@ var TYPE_LABELS = {
 
 var currentBalance = 0;
 var pendingWithdrawalRefreshTimer = null;
+var trackedWithdrawalReference = null;
 
 function withdrawalFeeRate(amount) {
     if (amount <= 100) return 0.05;
@@ -800,9 +802,22 @@ async function loadTransactions(trackedReference) {
     var transactions =
         result.data.transactions || [];
 
-    var trackedTransaction = trackedReference
-        ? transactions.find(function(t) { return t.reference === trackedReference; }) || null
+    trackedWithdrawalReference = trackedReference || trackedWithdrawalReference || localStorage.getItem("goalGambitPendingManualWithdrawal");
+    var trackedTransaction = trackedWithdrawalReference
+        ? transactions.find(function(t) { return t.reference === trackedWithdrawalReference; }) || null
         : null;
+
+    if (trackedTransaction && trackedTransaction.status === "completed") {
+        showMessage("withdrawMessage", "Withdrawal successful. The admin confirmed the manual M-Pesa payment and your wallet was updated.");
+        localStorage.removeItem("goalGambitPendingManualWithdrawal");
+        trackedWithdrawalReference = null;
+    } else if (trackedTransaction && trackedTransaction.status === "failed") {
+        showMessage("withdrawMessage", "The withdrawal request was not completed. Your wallet was not charged.");
+        localStorage.removeItem("goalGambitPendingManualWithdrawal");
+        trackedWithdrawalReference = null;
+    } else if (trackedTransaction && trackedTransaction.status === "pending") {
+        showMessage("withdrawMessage", "Your manual withdrawal is awaiting admin payment. The wallet will be deducted only after payment is confirmed.");
+    }
 
     var hasPendingWithdrawal = transactions.some(function(t) {
         return t.type === "withdrawal" && t.status === "pending";
@@ -812,7 +827,7 @@ async function loadTransactions(trackedReference) {
         pendingWithdrawalRefreshTimer = setInterval(async function() {
             if (document.hidden) return;
             await loadWallet(false);
-            await loadTransactions();
+            await loadTransactions(trackedWithdrawalReference);
         }, 10000);
     } else if (!hasPendingWithdrawal && pendingWithdrawalRefreshTimer !== null) {
         clearInterval(pendingWithdrawalRefreshTimer);
@@ -931,7 +946,7 @@ async function clearTransactionHistory() {
         localStorage.removeItem("goalGambitTransactions");
         feedback.textContent = (result.data && result.data.message) || "Transaction history cleared from your view.";
         document.getElementById("transactionList").innerHTML = '<div class="empty">No transactions in your history.</div>';
-        await loadTransactions();
+        await loadTransactions(trackedWithdrawalReference);
     } catch (_) {
         feedback.textContent = "Could not clear transaction history. Check your connection and try again.";
     } finally {
@@ -1235,11 +1250,11 @@ async function withdraw() {
 
 
     button.disabled = true;
-    showMessage(messageId, "Sending withdrawal request to M-Pesa...");
+    showMessage(messageId, "Sending manual withdrawal request to the admin...");
 
     try {
         var result = await GG.api(
-            "/api/wallet/withdraw",
+            "/api/wallet/withdraw/manual",
             {
                 method: "POST",
                 body: {
@@ -1261,11 +1276,9 @@ async function withdraw() {
             return;
         }
 
-        var withdrawalMessage = result.data.message || "Withdrawal request submitted.";
-        if (Number.isFinite(Number(result.data.fee)) && Number.isFinite(Number(result.data.payout))) {
-            withdrawalMessage += " Deduction: " + GG.formatMoney(result.data.fee) +
-                "; M-Pesa payout: " + GG.formatMoney(result.data.payout) + ".";
-        }
+        trackedWithdrawalReference = result.data.reference || null;
+        if (trackedWithdrawalReference) localStorage.setItem("goalGambitPendingManualWithdrawal", trackedWithdrawalReference);
+        var withdrawalMessage = result.data.message || "Withdrawal request received. The admin will send the payment manually.";
         showMessage(messageId, withdrawalMessage);
         input.value = "";
         phoneInput.value = "";
@@ -1275,7 +1288,7 @@ async function withdraw() {
             currentBalance = Number(result.data.wallet.balance || 0);
             updateBalance(true);
         }
-        await loadTransactions();
+        await loadTransactions(trackedWithdrawalReference);
     } catch (_) {
         showMessage(
             messageId,

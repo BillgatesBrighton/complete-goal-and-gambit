@@ -65,6 +65,29 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_reference_unique ON transactions (reference);
 
+-- Manual wallet withdrawal requests stay visible to admins until paid,
+-- declined, and (for completed requests) cleared from the admin queue.
+CREATE TABLE IF NOT EXISTS manual_withdrawal_requests (
+    id                  BIGSERIAL PRIMARY KEY,
+    reference           VARCHAR(120) NOT NULL UNIQUE,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_phone     VARCHAR(20) NOT NULL,
+    total_amount        NUMERIC(12,2) NOT NULL CHECK (total_amount > 0),
+    fee_amount          NUMERIC(12,2) NOT NULL CHECK (fee_amount >= 0),
+    payout_amount       NUMERIC(12,2) NOT NULL CHECK (payout_amount > 0),
+    status              VARCHAR(20) NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','completed','cancelled')),
+    requested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ,
+    resolved_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    admin_cleared_at    TIMESTAMPTZ,
+    admin_cleared_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_withdrawal_one_pending_per_user
+    ON manual_withdrawal_requests(user_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_manual_withdrawal_admin_queue
+    ON manual_withdrawal_requests(status, admin_cleared_at, requested_at DESC);
+
 -- Per-user view markers let players clear old history without deleting the
 -- financial ledger or match records used for settlements, disputes and audit.
 CREATE TABLE IF NOT EXISTS user_history_clears (

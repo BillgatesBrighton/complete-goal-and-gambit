@@ -16,7 +16,7 @@ function normalizeMpesaPhone(value) {
     return null;
 }
 
-module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesaB2c) {
+module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesaB2c, pushService) {
     const router = express.Router();
 
     async function adminOnly(req, res, next) {
@@ -55,6 +55,143 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
         } catch (error) {
             console.error("Admin wallet read failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not load the administrator wallet." });
+        }
+    });
+
+    router.get("/manual-withdrawals", authenticateToken, adminOnly, async (req, res) => {
+        try {
+            const result = await pool.query(
+                `SELECT r.id,r.reference,r.user_id,r.recipient_phone,r.total_amount,
+                        r.fee_amount,r.payout_amount,r.status,r.requested_at,r.completed_at,
+                        r.admin_cleared_at, u.username, COALESCE(w.balance,0)::numeric(12,2) AS current_balance
+                   FROM manual_withdrawal_requests r
+                   JOIN users u ON u.id=r.user_id
+                   LEFT JOIN wallets w ON w.user_id=r.user_id
+                  WHERE r.status IN ('pending','completed') AND r.admin_cleared_at IS NULL
+                  ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,
+                           r.requested_at DESC
+                  LIMIT 200`
+            );
+            return res.json({ success: true, withdrawals: result.rows });
+        } catch (error) {
+            console.error("Manual withdrawal queue read failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not load manual withdrawal requests." });
+        }
+    });
+
+    router.post("/manual-withdrawals/:id/complete", authenticateToken, adminOnly, async (req, res) => {
+        const requestId = Number(req.params.id);
+        if (!Number.isSafeInteger(requestId) || requestId < 1) {
+            return res.status(400).json({ success: false, message: "Invalid withdrawal request." });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const requestResult = await client.query(
+                `SELECT id,reference,user_id,total_amount,fee_amount,payout_amount,recipient_phone,status
+                   FROM manual_withdrawal_requests WHERE id=$1 FOR UPDATE`,
+                [requestId]
+            );
+            if (!requestResult.rows.length) throw Object.assign(new Error("Withdrawal request not found."), { status: 404 });
+            const request = requestResult.rows[0];
+            if (request.status !== "pending") throw Object.assign(new Error("This withdrawal is no longer pending."), { status: 409 });
+
+            const walletResult = await client.query(
+                "SELECT balance FROM wallets WHERE user_id=$1 FOR UPDATE",
+                [request.user_id]
+            );
+            if (!walletResult.rows.length) throw Object.assign(new Error("Player wallet not found."), { status: 404 });
+            const total = Number(request.total_amount);
+            const currentBalance = Number(walletResult.rows[0].balance || 0);
+            if (currentBalance < total) {
+                throw Object.assign(new Error("The player’s current wallet balance is below the total withdrawal amount. The request was not completed."), { status: 409 });
+            }
+
+            const walletUpdate = await client.query(
+                "UPDATE wallets SET balance=balance-$1,updated_at=NOW() WHERE user_id=$2 RETURNING balance",
+                [total, request.user_id]
+            );
+            await client.query(
+                `UPDATE manual_withdrawal_requests
+                    SET status='completed',completed_at=NOW(),resolved_by=$2
+                  WHERE id=$1`,
+                [requestId, Number(req.user.userId)]
+            );
+            await client.query(
+                `UPDATE transactions SET status='completed',description=$1
+                  WHERE user_id=$2 AND reference=$3 AND transaction_type='withdrawal'`,
+                ["Manual M-Pesa payout confirmed by admin. Reference " + request.reference, request.user_id, request.reference]
+            );
+            await client.query(
+                `UPDATE transactions SET status='completed',description=$1
+                  WHERE user_id=$2 AND reference=$3 AND transaction_type='withdrawal_fee'`,
+                ["Processing fee included in the completed manual withdrawal.", request.user_id, request.reference + "-FEE"]
+            );
+            const successMessage = "Your manual M-Pesa withdrawal of KSh " +
+                Number(request.payout_amount).toLocaleString("en-KE") + " was confirmed by the admin. " +
+                "KSh " + total.toLocaleString("en-KE") + " including the processing fee was deducted from your wallet.";
+            await client.query(
+                "INSERT INTO system_notifications(user_id,type,title,message) VALUES($1,'withdrawal_completed','Withdrawal successful',$2)",
+                [request.user_id, successMessage]
+            );
+            if (pushService && typeof pushService.enqueueNotification === "function") {
+                await client.query("SAVEPOINT manual_withdrawal_push_enqueue");
+                try {
+                    await pushService.enqueueNotification(client, Number(request.user_id), {
+                        eventKey: "manual-withdrawal:" + request.reference + ":completed",
+                        title: "GOAL$GAMBIT — Withdrawal Successful",
+                        body: "Your manual M-Pesa payout was confirmed. Open GOAL$GAMBIT to view your updated wallet.",
+                        page: "match-hub"
+                    });
+                    await client.query("RELEASE SAVEPOINT manual_withdrawal_push_enqueue");
+                } catch (pushError) {
+                    await client.query("ROLLBACK TO SAVEPOINT manual_withdrawal_push_enqueue").catch(() => {});
+                    await client.query("RELEASE SAVEPOINT manual_withdrawal_push_enqueue").catch(() => {});
+                    console.error("Manual withdrawal push enqueue failed:", pushError.message);
+                }
+            }
+            await client.query("COMMIT");
+            if (pushService && typeof pushService.sendPendingJobs === "function") {
+                pushService.sendPendingJobs().catch(function() {});
+            }
+            return res.json({
+                success: true,
+                message: "Manual payment confirmed. KSh " + Number(request.total_amount).toLocaleString("en-KE") +
+                    " was deducted from the player wallet.",
+                withdrawal: { id: requestId, status: "completed", reference: request.reference },
+                wallet: { balance: Number(walletUpdate.rows[0].balance) }
+            });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            return res.status(Number(error.status) || 500).json({
+                success: false,
+                message: error.message || "Could not complete the manual withdrawal."
+            });
+        } finally {
+            client.release();
+        }
+    });
+
+    router.post("/manual-withdrawals/:id/clear", authenticateToken, adminOnly, async (req, res) => {
+        const requestId = Number(req.params.id);
+        if (!Number.isSafeInteger(requestId) || requestId < 1) {
+            return res.status(400).json({ success: false, message: "Invalid withdrawal request." });
+        }
+        try {
+            const result = await pool.query(
+                `UPDATE manual_withdrawal_requests
+                    SET admin_cleared_at=NOW(),admin_cleared_by=$2
+                  WHERE id=$1 AND status='completed' AND admin_cleared_at IS NULL
+                  RETURNING id`,
+                [requestId, Number(req.user.userId)]
+            );
+            if (!result.rows.length) {
+                return res.status(409).json({ success: false, message: "Only a completed, uncleared withdrawal can be cleared." });
+            }
+            return res.json({ success: true, message: "Completed withdrawal cleared from the admin queue." });
+        } catch (error) {
+            console.error("Manual withdrawal clear failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not clear this completed withdrawal." });
         }
     });
 

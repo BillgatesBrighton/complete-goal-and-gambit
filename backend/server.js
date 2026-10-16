@@ -846,7 +846,7 @@ app.use(
 
 app.use(
     "/api/admin",
-    adminRoutes(pool, authenticateToken)
+    adminRoutes(pool, authenticateToken, getOnlineUserIds)
 );
 
 app.use(
@@ -861,7 +861,7 @@ app.use(
 
 app.use(
     "/api/admin/wallet",
-    adminWalletRoutes(pool, authenticateToken, mpesaB2c)
+    adminWalletRoutes(pool, authenticateToken, mpesaB2c, pushService)
 );
 
 app.get("/api/announcements/current", authenticateToken, async function(req, res) {

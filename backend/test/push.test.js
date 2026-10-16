@@ -85,7 +85,7 @@ test("Android push queue sends a data-only room-code action and records the deli
     const job = {
         id: 9, event_id: 5, token_id: 2, attempt_count: 0,
         event_key: "efootball-match:44:room-code-needed", match_id: 44,
-        title: "Your Match Is Ready", body: "Open GOAL$GAMBIT to send your room code.",
+        title: "GOAL$GAMBIT — Match Room Code", body: "Your opponent is waiting. Paste the room code below and tap Send.",
         target_path: "pages/match-room.html?matchId=44", token: "fake-fcm-registration-token"
     };
     const pool = {
@@ -112,6 +112,8 @@ test("Android push queue sends a data-only room-code action and records the deli
     assert.equal(sentMessages.length, 1);
     assert.equal(sentMessages[0].data.matchId, "44");
     assert.equal(sentMessages[0].data.eventKey, "efootball-match:44:room-code-needed");
+    assert.equal(sentMessages[0].data.title, "GOAL$GAMBIT — Match Room Code");
+    assert.equal(sentMessages[0].data.body, "Your opponent is waiting. Paste the room code below and tap Send.");
     assert.equal(sentMessages[0].android.priority, "high");
     assert.equal(Object.prototype.hasOwnProperty.call(sentMessages[0], "notification"), false);
     assert.equal(sentMessages[0].data.roomCode, undefined);
@@ -149,7 +151,7 @@ test("subscription API stores ownership from the authenticated account", async (
 });
 
 test("match workflow, chat, and wallet page scripts parse", () => {
-    for (const file of ["match-room.html", "match-results.html", "match-hub.html", "chat.html", "wallet.html"]) {
+    for (const file of ["match-room.html", "match-results.html", "match-hub.html", "chat.html", "wallet.html", "login.html"]) {
         const fullPath = path.join(__dirname, "..", "..", "frontend", "pages", file);
         const html = fs.readFileSync(fullPath, "utf8");
         const scripts = Array.from(html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi))
@@ -163,16 +165,125 @@ test("match workflow, chat, and wallet page scripts parse", () => {
 
 test("Android sender alert offers inline code reply and persists until successful send", () => {
     const androidRoot = path.join(__dirname, "..", "..", "android", "app", "src", "main");
-    const notificationSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "Notifications.java"), "utf8");
-    const replySource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeReplyReceiver.java"), "utf8");
+    const notificationSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "Notifications.kt"), "utf8");
+    const replySource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeReplyReceiver.kt"), "utf8");
     const manifest = fs.readFileSync(path.join(androidRoot, "AndroidManifest.xml"), "utf8");
-    assert.match(notificationSource, /new RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
-    assert.match(notificationSource, /"ENTER ROOM CODE"/);
+    assert.match(notificationSource, /RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
+    assert.match(notificationSource, /\.setLabel\("Paste room code"\)/);
+    assert.match(notificationSource, /Builder\(android\.R\.drawable\.ic_menu_send, "REPLY", pendingIntent\)/);
     assert.match(notificationSource, /\.setAutoCancel\(!persistent\)/);
     assert.match(notificationSource, /NotificationManager\.IMPORTANCE_DEFAULT/);
     assert.match(replySource, /Notifications\.showReplySending/);
     assert.match(replySource, /Notifications\.showReplySuccess/);
+    assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Sent/);
+    assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Not Sent/);
+    assert.match(replySource, /Regex\("\^\[A-Za-z0-9 _-\]\{1,50\}\$"\)\.matches\(code\)/);
     assert.doesNotMatch(manifest, /SYSTEM_ALERT_WINDOW|TYPE_APPLICATION_OVERLAY/);
+});
+
+test("browser sender push exposes a button fallback and notification click opens the focused match form", async () => {
+    const handlers = new Map();
+    const shown = [];
+    const client = {
+        url: "https://example.test/frontend/pages/match-hub.html",
+        navigate: async function (url) { this.url = url; },
+        focus: async function () {}
+    };
+    const self = {
+        registration: {
+            scope: "https://example.test/frontend/",
+            showNotification: async function (title, options) { shown.push({ title, options }); }
+        },
+        addEventListener: function (name, callback) { handlers.set(name, callback); },
+        clients: {
+            matchAll: async function () { return [client]; },
+            openWindow: async function (url) { client.url = url; return client; }
+        }
+    };
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "sw.js"), "utf8");
+    vm.runInNewContext(source, { self, URL, fetch: async () => ({ ok: true }) });
+
+    let pushWork;
+    handlers.get("push")({
+        data: { json: () => ({
+            title: "GOAL$GAMBIT — Match Room Code",
+            body: "Your opponent is waiting. Paste the room code below and tap Send.",
+            type: "efootball-match:44:room-code-needed",
+            targetPath: "pages/match-room.html?matchId=44",
+            eventId: 8,
+            tag: "goal-gambit-event-8"
+        }) },
+        waitUntil: function (promise) { pushWork = promise; }
+    });
+    await pushWork;
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].title, "GOAL$GAMBIT — Match Room Code");
+    assert.equal(shown[0].options.body, "Your opponent is waiting. Paste the room code below and tap Send.");
+    assert.deepEqual(JSON.parse(JSON.stringify(shown[0].options.actions)), [{ action: "send-code", title: "ENTER CODE" }]);
+    assert.equal(shown[0].options.data.type, "efootball-match:44:room-code-needed");
+
+    let clickWork;
+    handlers.get("notificationclick")({
+        action: "",
+        notification: { data: shown[0].options.data, close: function () {} },
+        waitUntil: function (promise) { clickWork = promise; }
+    });
+    await clickWork;
+    const destination = new URL(client.url);
+    assert.equal(destination.pathname, "/frontend/pages/match-room.html");
+    assert.equal(destination.searchParams.get("matchId"), "44");
+    assert.equal(destination.searchParams.get("action"), "send-code");
+
+    const apiSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "js", "api.js"), "utf8");
+    const loginSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "pages", "login.html"), "utf8");
+    const matchRoomSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "pages", "match-room.html"), "utf8");
+    assert.match(apiSource, /rememberMatchRoomReturn\(\);\s*location\.href = "login\.html";/);
+    assert.match(apiSource, /function takePostLoginDestination\(\)[\s\S]*?match-room\\\.html\\\?matchId=/);
+    assert.match(loginSource, /location\.replace\(GG\.takePostLoginDestination\(\) \|\| "dashboard\.html"\);/);
+    assert.match(matchRoomSource, /var openCodeFromNotification=params\.get\("action"\)==="send-code"/);
+    assert.match(matchRoomSource, /openCodeFromNotification && m\.youAreSender/);
+    assert.match(matchRoomSource, /\/api\/efootball\/matches\/"\+encodeURIComponent\(matchId\)\+"\/send-code/);
+});
+
+test("browser fallback still shows sender notification when notification action buttons are unsupported", async () => {
+    const handlers = new Map();
+    const shown = [];
+    const self = {
+        registration: {
+            scope: "https://example.test/frontend/",
+            showNotification: async function (title, options) {
+                if (options.actions && options.actions.length) throw new TypeError("Notification actions are unsupported.");
+                shown.push({ title, options });
+            }
+        },
+        addEventListener: function (name, callback) { handlers.set(name, callback); },
+        clients: { matchAll: async function () { return []; }, openWindow: async function () {} }
+    };
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "sw.js"), "utf8");
+    vm.runInNewContext(source, { self, URL, fetch: async () => ({ ok: true }) });
+    let pushWork;
+    handlers.get("push")({
+        data: { json: () => ({
+            title: "GOAL$GAMBIT — Match Room Code",
+            body: "Your opponent is waiting. Paste the room code below and tap Send.",
+            type: "efootball-match:45:room-code-needed",
+            targetPath: "pages/match-room.html?matchId=45"
+        }) },
+        waitUntil: function (promise) { pushWork = promise; }
+    });
+    await pushWork;
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].title, "GOAL$GAMBIT — Match Room Code");
+    assert.equal(Object.hasOwn(shown[0].options, "actions"), false);
+    assert.equal(shown[0].options.data.type, "efootball-match:45:room-code-needed");
+});
+
+test("Konami sender assignment queues the private sender alert using the assigned match sender", () => {
+    const source = fs.readFileSync(path.join(__dirname, "..", "routes", "efootball.js"), "utf8");
+    assert.match(source, /const senderId = randomInt\(0, 2\) === 0 \? Number\(candidate\.rows\[0\]\.creator_id\) : userId;/);
+    assert.match(source, /queuePush\(client, senderId, \{ eventKey: "efootball-match:" \+ candidate\.rows\[0\]\.id \+ ":room-code-needed"/);
+    assert.match(source, /title: "GOAL\$GAMBIT — Match Room Code", body: "Your opponent is waiting\. Paste the room code below and tap Send\."/);
+    assert.match(source, /queuePush\(client, senderId, \{ eventKey: "efootball-match:" \+ matchId \+ ":room-code-needed"/);
 });
 
 test("push notification insertion is idempotent and never accepts an external target", async () => {

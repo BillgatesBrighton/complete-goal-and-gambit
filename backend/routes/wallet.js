@@ -288,34 +288,23 @@ const routerFactory = function(
         }
     );
 
+    // Manual payout mode is used until the production B2C service is enabled.
+    // The request is recorded for the admin, but the wallet is not debited until
+    // the admin confirms that the M-Pesa payment was sent.
     router.post(
-        "/withdraw",
+        ["/withdraw/manual", "/withdraw"],
         authenticateToken,
         async function(req, res) {
             const amount = parseMoney(req.body && req.body.amount);
             const mpesaPhone = normalizeMpesaPhone(req.body && req.body.phone);
-
-            if (amount === null) {
-                return res.status(400).json({ success: false, message: "Invalid withdrawal amount." });
-            }
-            if (!Number.isSafeInteger(amount)) {
-                return res.status(400).json({ success: false, message: "Enter a whole KSh amount for M-Pesa withdrawal." });
+            if (amount === null || !Number.isSafeInteger(amount) || amount < 1 || amount > MAX_AMOUNT) {
+                return res.status(400).json({ success: false, message: "Enter a whole KSh amount from 1 to 1,000,000." });
             }
             if (mpesaPhone === null) {
                 return res.status(400).json({ success: false, message: "Valid Kenyan M-Pesa number is required." });
             }
-            if (!mpesaB2c || !mpesaB2c.isConfigured()) {
-                const issue = mpesaB2c && typeof mpesaB2c.configurationIssue === "function"
-                    ? mpesaB2c.configurationIssue()
-                    : null;
-                return res.status(503).json({
-                    success: false,
-                    message: issue || "M-Pesa withdrawals are temporarily unavailable."
-                });
-            }
 
             const userId = Number(req.user.userId);
-            const callback = mpesaB2c.createCallbackToken();
             const reference = "WD-" + userId + "-" + randomUUID();
             const feeRate = withdrawalFeeRate(amount);
             const fee = Math.round(amount * feeRate);
@@ -325,148 +314,69 @@ const routerFactory = function(
             }
 
             let client;
-            let walletCurrency = "KES";
             try {
                 client = await pool.connect();
                 await client.query("BEGIN");
                 const walletResult = await client.query(
-                    "SELECT id, balance, locked_balance, currency FROM wallets WHERE user_id=$1 FOR UPDATE",
+                    "SELECT balance FROM wallets WHERE user_id=$1 FOR UPDATE",
                     [userId]
                 );
-                if (!walletResult.rows.length) throw new Error("Wallet not found.");
-
-                const wallet = walletResult.rows[0];
-                const balance = Number(wallet.balance || 0);
-                if (balance < amount) throw new Error("Insufficient available balance.");
-
+                if (!walletResult.rows.length) throw Object.assign(new Error("Wallet not found."), { status: 404 });
+                if (Number(walletResult.rows[0].balance || 0) < amount) {
+                    throw Object.assign(new Error("Insufficient available balance."), { status: 400 });
+                }
                 const pending = await client.query(
-                    "SELECT 1 FROM mpesa_payouts WHERE user_id=$1 AND status='pending' LIMIT 1",
+                    "SELECT 1 FROM manual_withdrawal_requests WHERE user_id=$1 AND status='pending' LIMIT 1",
                     [userId]
                 );
                 if (pending.rows.length) {
-                    throw new Error("A withdrawal is already awaiting M-Pesa confirmation.");
+                    throw Object.assign(new Error("You already have a withdrawal request awaiting admin payment."), { status: 409 });
                 }
-
                 await client.query(
-                    "UPDATE wallets SET balance=balance - $1, updated_at=NOW() WHERE user_id=$2",
-                    [amount, userId]
+                    `INSERT INTO manual_withdrawal_requests
+                     (reference,user_id,recipient_phone,total_amount,fee_amount,payout_amount)
+                     VALUES($1,$2,$3,$4,$5,$6)`,
+                    [reference, userId, mpesaPhone, amount, fee, payout]
                 );
                 await client.query(
-                    "INSERT INTO transactions (user_id, transaction_type, amount, currency, status, reference, description) VALUES ($1, 'withdrawal', $2, 'KES', 'pending', $3, 'Wallet withdrawal request')",
-                    [userId, payout, reference]
+                    `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                     VALUES($1,'withdrawal',$2,'KES','pending',$3,$4)`,
+                    [userId, payout, reference, "Manual withdrawal request received; wallet deduction waits for admin payment confirmation."]
                 );
                 await client.query(
-                    "INSERT INTO transactions (user_id, transaction_type, amount, currency, status, reference, description) VALUES ($1, 'withdrawal_fee', $2, 'KES', 'pending', $3, 'Withdrawal processing fee')",
-                    [userId, fee, reference + "-FEE"]
+                    `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                     VALUES($1,'withdrawal_fee',$2,'KES','pending',$3,$4)`,
+                    [userId, fee, reference + "-FEE", "Processing fee included in the withdrawal amount."]
                 );
-                await client.query(
-                    "INSERT INTO mpesa_payouts (reference, user_id, recipient_phone, callback_token_hash, originator_conversation_id) VALUES ($1, $2, $3, $4, $5)",
-                    [reference, userId, mpesaPhone, callback.tokenHash, callback.originatorConversationId]
-                );
-                walletCurrency = wallet.currency || "KES";
                 await client.query("COMMIT");
-                client.release();
-                client = null;
+                return res.status(202).json({
+                    success: true,
+                    status: "pending",
+                    reference,
+                    fee,
+                    feeRate,
+                    payout,
+                    message: "Withdrawal request received. The admin will manually send " +
+                        "KSh " + payout.toLocaleString("en-KE") + " to your M-Pesa number. " +
+                        "KSh " + amount.toLocaleString("en-KE") + " (including the processing fee) " +
+                        "will be deducted from your wallet only after the admin confirms payment."
+                });
             } catch (error) {
-                if (client) {
-                    await client.query("ROLLBACK").catch(() => {});
-                    client.release();
-                    client = null;
-                }
+                if (client) await client.query("ROLLBACK").catch(() => {});
                 const duplicatePending = error && error.code === "23505" &&
-                    String(error.constraint || "").includes("idx_mpesa_payout_one_pending");
-                const knownClientError = [
-                    "Wallet not found.",
-                    "Insufficient available balance.",
-                    "A withdrawal is already awaiting M-Pesa confirmation."
-                ].includes(error && error.message);
-                return res.status(duplicatePending ? 409 : knownClientError ? 400 : 500).json({
+                    String(error.constraint || "").includes("idx_manual_withdrawal_one_pending_per_user");
+                const status = Number(error && error.status) || (duplicatePending ? 409 : 500);
+                return res.status(status).json({
                     success: false,
                     message: duplicatePending
-                        ? "A withdrawal is already awaiting M-Pesa confirmation."
-                        : knownClientError
-                            ? error.message
-                            : "Could not create the withdrawal request."
+                        ? "You already have a withdrawal request awaiting admin payment."
+                        : error.message || "Could not create the withdrawal request."
                 });
             } finally {
                 if (client) client.release();
             }
-
-            let outcome;
-            try {
-                outcome = await mpesaB2c.submitPayout({
-                    amount: payout,
-                    phone: mpesaPhone,
-                    reference,
-                    callbackToken: callback.token,
-                    originatorConversationId: callback.originatorConversationId
-                });
-            } catch (_) {
-                outcome = {
-                    accepted: false,
-                    ambiguous: true,
-                    message: "Daraja response was not conclusive. The withdrawal is pending confirmation; do not submit it again."
-                };
-            }
-
-            if (!outcome.accepted && !outcome.ambiguous) {
-                try {
-                    await mpesaB2c.rejectPayout(reference);
-                } catch (_) {
-                    return res.status(503).json({
-                        success: false,
-                        status: "pending",
-                        message: "Daraja did not accept the request, but the wallet could not be restored yet. Keep this page open and contact support with reference " + reference + "."
-                    });
-                }
-            }
-
-            let current;
-            try {
-                const currentResult = await pool.query(
-                    "SELECT p.status, w.balance, w.locked_balance, w.currency FROM mpesa_payouts p JOIN wallets w ON w.user_id=p.user_id WHERE p.reference=$1",
-                    [reference]
-                );
-                current = currentResult.rows[0];
-            } catch (_) {}
-
-            const status = current ? current.status : "pending";
-            const wallet = current ? {
-                balance: Number(current.balance),
-                lockedBalance: Number(current.locked_balance || 0),
-                availableBalance: Number(current.balance),
-                currency: current.currency || walletCurrency
-            } : undefined;
-
-            if (!outcome.accepted && !outcome.ambiguous && status === "failed") {
-                return res.status(502).json({
-                    success: false,
-                    status: "failed",
-                    message: outcome.message || "Daraja rejected this withdrawal. The wallet was restored.",
-                    wallet
-                });
-            }
-
-            const message = outcome.ambiguous
-                ? outcome.message
-                : status === "completed"
-                    ? "M-Pesa confirmed the payout."
-                    : status === "failed"
-                        ? "M-Pesa did not complete the payout. Your wallet was restored."
-                        : "Withdrawal sent to Daraja and awaiting confirmation. Do not submit it again.";
-
-            return res.status(status === "pending" ? 202 : 200).json({
-                success: status !== "failed",
-                message,
-                status,
-                fee,
-                feeRate,
-                payout,
-                wallet
-            });
         }
     );
-
 
     // ==================================================
     // TRANSACTION HISTORY

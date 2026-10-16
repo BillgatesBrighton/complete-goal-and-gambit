@@ -922,7 +922,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 const receiverId = senderId === userId ? Number(candidate.rows[0].creator_id) : userId;
                 await createSystemNotification(client, senderId, "room_code_sender", "You are sending the room code", senderMessage, candidate.rows[0].id);
                 await createSystemNotification(client, receiverId, "room_code_waiting", "Opponent is preparing the room code", "Your opponent will receive a reminder when the room code is sent.", candidate.rows[0].id);
-                await queuePush(client, senderId, { eventKey: "efootball-match:" + candidate.rows[0].id + ":room-code-needed", matchId: candidate.rows[0].id, title: "Your Match Is Ready", body: "Your eFootball match is ready. Open GOAL$GAMBIT to send your room code to your opponent.", page: "match-room" });
+                await queuePush(client, senderId, { eventKey: "efootball-match:" + candidate.rows[0].id + ":room-code-needed", matchId: candidate.rows[0].id, title: "GOAL$GAMBIT — Match Room Code", body: "Your opponent is waiting. Paste the room code below and tap Send.", page: "match-room" });
                 const match = await getMatchForUser(client, candidate.rows[0].id, userId);
                 await client.query("COMMIT");
                 emitMatchUpdate(Number(candidate.rows[0].creator_id), candidate.rows[0].id, "opponent-found");
@@ -1273,7 +1273,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const receiverId = senderId === userId ? Number(match.creator_id) : userId;
             await createSystemNotification(client, senderId, "room_code_sender", "You are sending the room code", senderMessage, matchId);
             await createSystemNotification(client, receiverId, "room_code_waiting", "Opponent is preparing the room code", "Your opponent will be reminded when the code is sent.", matchId);
-            await queuePush(client, senderId, { eventKey: "efootball-match:" + matchId + ":room-code-needed", matchId: matchId, title: "Your Match Is Ready", body: "Your eFootball match is ready. Open GOAL$GAMBIT to send your room code to your opponent.", page: "match-room" });
+            await queuePush(client, senderId, { eventKey: "efootball-match:" + matchId + ":room-code-needed", matchId: matchId, title: "GOAL$GAMBIT — Match Room Code", body: "Your opponent is waiting. Paste the room code below and tap Send.", page: "match-room" });
             const updated = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
             emitMatchUpdate(Number(match.creator_id), matchId, "opponent-found");
@@ -1612,7 +1612,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 client, senderId, "room_code_sent", "Room code delivered",
                 "Your room code was sent privately to " + (receiver.rows[0] && receiver.rows[0].username || "your opponent") + ".", matchId
             );
-            await queuePush(client, receiverId, { eventKey: "efootball-match:" + matchId + ":room-code-sent:" + revision, matchId: matchId, title: replacingCode ? "Your Opponent Replaced the Room Code" : "Your Opponent Sent the Room Code", body: "Your eFootball room code is ready. Open your match to view it and confirm receipt.", page: "match-room" });
+            await queuePush(client, receiverId, { eventKey: "efootball-match:" + matchId + ":room-code-sent:" + revision, matchId: matchId, title: "GOAL$GAMBIT — Match Room Code", body: "Your opponent has sent the room code. Open your match to view it.", page: "match-room" });
             const updated = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
             emitMatchUpdate(receiverId, matchId, "room-code-sent");
@@ -1684,8 +1684,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             await queuePush(client, senderId, {
                 eventKey: "efootball-match:" + matchId + ":code-correction-requested:" + Number(match.room_code_revision || 0),
                 matchId: matchId,
-                title: "Replacement Room Code Requested",
-                body: "Your opponent requested a replacement room code. Open the match to send it.",
+                title: "GOAL$GAMBIT — Match Room Code",
+                body: "Your opponent is waiting. Paste the room code below and tap Send.",
                 page: "match-room"
             });
             const updated = await getMatchForUser(client, matchId, userId);

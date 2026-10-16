@@ -20,6 +20,7 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
+    var POST_LOGIN_PATH_KEY = "goalGambitPostLoginPath";
     // Resolve the frontend root from this shared script so the worker stays
     // inside /frontend on GitHub Pages and works from the backend's static root.
     var apiScriptUrl = document.currentScript && document.currentScript.src
@@ -32,6 +33,27 @@
 
     function getToken() {
         return localStorage.getItem(TOKEN_KEY);
+    }
+
+    function rememberMatchRoomReturn() {
+        if (!/\/pages\/match-room\.html$/i.test(location.pathname)) return;
+        var params = new URLSearchParams(location.search || "");
+        var matchId = params.get("matchId") || "";
+        if (!/^[1-9][0-9]*$/.test(matchId)) return;
+        var destination = "match-room.html?matchId=" + encodeURIComponent(matchId);
+        if (params.get("action") === "send-code") destination += "&action=send-code";
+        try { sessionStorage.setItem(POST_LOGIN_PATH_KEY, destination); } catch (_) {}
+    }
+
+    function takePostLoginDestination() {
+        var destination = "";
+        try {
+            destination = sessionStorage.getItem(POST_LOGIN_PATH_KEY) || "";
+            sessionStorage.removeItem(POST_LOGIN_PATH_KEY);
+        } catch (_) {}
+        return /^match-room\.html\?matchId=[1-9][0-9]*(?:&action=send-code)?$/.test(destination)
+            ? destination
+            : "";
     }
 
     function publishPresence(ids) {
@@ -133,6 +155,7 @@
         localStorage.removeItem("goalGambitGame");
         localStorage.removeItem("goalGambitCurrentMatch");
         localStorage.removeItem("goalGambitTransactions");
+        sessionStorage.removeItem("goalGambitPushAlternativeAcknowledged");
     }
 
     function logout() {
@@ -195,6 +218,7 @@
     // Call at the top of any page that needs a logged-in user.
     function requireLogin() {
         if (!getToken()) {
+            rememberMatchRoomReturn();
             location.href = "login.html";
             return false;
         }
@@ -209,6 +233,34 @@
     // ------------------------------------------------------------------
     function pushBrowserSupported() {
         return !!(window.isSecureContext && "Notification" in window && "serviceWorker" in navigator && "PushManager" in window);
+    }
+
+    function konamiNotificationsRequired() {
+        var game = String(localStorage.getItem("goalGambitGame") || "").toLowerCase();
+        if (!game) {
+            try {
+                var account = JSON.parse(localStorage.getItem("goalGambitAccount") || "{}");
+                game = String(account.game || "").toLowerCase();
+            } catch (_) {}
+        }
+        return game === "konami" || game === "both";
+    }
+
+    async function requestPushPermission() {
+        if (!pushBrowserSupported()) {
+            throw new Error("This browser or device does not support background Web Push. Use a supported browser/device or the GOAL$GAMBIT Android companion for match alerts.");
+        }
+        var permission = Notification.permission;
+        // Call the browser permission prompt before awaiting network work so
+        // mobile browsers still see this as a direct response to the user's tap.
+        if (permission === "default") permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+            if (permission === "denied") localStorage.setItem("goalGambitPushPermissionDenied", "1");
+            throw new Error(permission === "denied"
+                ? "Notifications are blocked for this site. Open the site’s notification permission in browser or phone settings, allow notifications, then return and try again."
+                : "Notification permission was not granted.");
+        }
+        return { permission: permission };
     }
 
     function pushServiceWorkerUrl() {
@@ -272,13 +324,7 @@
     async function enablePushNotifications() {
         if (!pushBrowserSupported()) throw new Error("Web Push needs a supported browser and a secure HTTPS page. On iPhone or iPad, add the site to the Home Screen first.");
         if (!getToken()) throw new Error("Sign in before enabling match notifications.");
-        await getPushPublicConfig();
-        var permission = Notification.permission;
-        if (permission === "default") permission = await Notification.requestPermission();
-        if (permission !== "granted") {
-            if (permission === "denied") localStorage.setItem("goalGambitPushPermissionDenied", "1");
-            throw new Error(permission === "denied" ? "Notifications are blocked for this site. Allow them in your browser settings, then return here." : "Notification permission was not granted.");
-        }
+        await requestPushPermission();
         var result = await syncPushSubscription();
         localStorage.removeItem("goalGambitPushPromptDismissed");
         localStorage.removeItem("goalGambitPushPermissionDenied");
@@ -331,53 +377,112 @@
             permission: permission,
             configured: !!(server.ok && server.data.configured),
             activeSubscriptions: server.ok ? Number(server.data.activeSubscriptions || 0) : 0,
+            androidConfigured: !!(server.ok && server.data.androidConfigured),
+            activeAndroidDevices: server.ok ? Number(server.data.activeAndroidDevices || 0) : 0,
             thisDeviceRegistered: localSubscription,
             serverReachable: !!server.ok
         };
     }
 
     function initPushExperience() {
-        if (window.__GG_PUSH_EXPERIENCE_STARTED || !document.body || !getToken()) return;
+        if (window.__GG_PUSH_EXPERIENCE_STARTED || !document.body || !getToken() || !konamiNotificationsRequired()) return;
+        // The settings page must remain reachable so a user can repair a
+        // permission that was previously denied in browser settings.
+        if (/\/notification-settings\.html$/i.test(location.pathname)) return;
         window.__GG_PUSH_EXPERIENCE_STARTED = true;
-        if (!pushBrowserSupported()) return;
-        navigator.serviceWorker.addEventListener("message", function(event) {
-            if (event.data && event.data.type === "GG_PUSH_SUBSCRIPTION_CHANGED") {
-                syncPushSubscription().catch(function() {});
-            }
-        });
-        if (Notification.permission === "granted") {
-            syncPushSubscription().catch(function() {});
-            return;
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.addEventListener("message", function(event) {
+                if (event.data && event.data.type === "GG_PUSH_SUBSCRIPTION_CHANGED") {
+                    syncPushSubscription().catch(function() {});
+                }
+            });
         }
-        if (Notification.permission === "denied" || localStorage.getItem("goalGambitPushPromptDismissed")) return;
-        getPushPublicConfig().then(function() {
+        getPushStatus().then(function(pushStatus) {
             if (!getToken() || !document.body || document.getElementById("gg-push-onboarding")) return;
+            if (pushStatus.browserSupported && pushStatus.thisDeviceRegistered) return;
+            if (!pushStatus.browserSupported && pushStatus.androidConfigured && pushStatus.activeAndroidDevices > 0) return;
+            if (sessionStorage.getItem("goalGambitPushAlternativeAcknowledged")) return;
+
             var panel = document.createElement("section");
             panel.id = "gg-push-onboarding";
-            panel.setAttribute("role", "dialog");
+            panel.setAttribute("role", "alertdialog");
+            panel.setAttribute("aria-modal", "true");
             panel.setAttribute("aria-labelledby", "gg-push-title");
-            panel.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483001;width:min(420px,calc(100vw - 32px));padding:20px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.55);font:15px/1.5 Arial,sans-serif";
-            panel.innerHTML = "<h2 id='gg-push-title' style='margin:0 0 8px;color:#e4bd43;font-size:20px'>Never Miss a Match</h2><p style='margin:0 0 14px'>Enable GOAL$GAMBIT notifications to know when your match is ready, when your opponent sends a room code, and when your match needs your attention—even when you’re using eFootball.</p><p id='gg-push-onboarding-status' role='status' style='min-height:1.4em;margin:0 0 8px;color:#f3d881'></p><div style='display:flex;flex-wrap:wrap;gap:8px'><button id='gg-push-enable' type='button' style='padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700'>Enable Notifications</button><button id='gg-push-later' type='button' style='padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee'>Not Now</button><a href='notification-settings.html' style='align-self:center;color:#e4bd43'>Settings</a></div>";
+            panel.style.cssText = "position:fixed;inset:0;z-index:2147483001;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.82);font:15px/1.5 Arial,sans-serif";
+            var card = document.createElement("div");
+            card.style.cssText = "width:min(500px,100%);padding:22px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.65)";
+            var title = document.createElement("h2");
+            title.id = "gg-push-title";
+            title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
+            title.textContent = "Konami Match Notifications Required";
+            var explanation = document.createElement("p");
+            explanation.style.margin = "0 0 12px";
+            explanation.textContent = "GOAL$GAMBIT uses notifications for Konami match alerts, room-code sender assignments, and room-code messages—even while you are using eFootball.";
+            var help = document.createElement("p");
+            help.style.cssText = "margin:0 0 12px;color:#d0c9b5";
+            if (pushStatus.browserSupported && pushStatus.permission === "denied") {
+                help.textContent = "Notifications are blocked in this browser. Open this site’s permissions in your browser or phone settings, allow notifications, return here, and select Enable & Verify. On iPhone/iPad, install the site from Safari’s Share menu → Add to Home Screen before enabling notifications.";
+            } else if (pushStatus.browserSupported && !pushStatus.configured) {
+                help.textContent = "This browser supports Web Push, but the GOAL$GAMBIT push service is not currently available. Keep this page open and retry after the service is restored, or contact support.";
+            } else if (pushStatus.browserSupported && pushStatus.permission === "granted") {
+                help.textContent = "Browser permission is granted, but this device has not been verified with the GOAL$GAMBIT push service. Select Enable & Verify to register it.";
+            } else if (!pushStatus.browserSupported) {
+                help.textContent = "This browser/device cannot receive background Web Push. Use GOAL$GAMBIT from a supported mobile browser/device, or sign in on the GOAL$GAMBIT Android companion. On this device, Match Hub updates work only while the page remains open.";
+            } else {
+                help.textContent = "Enable notifications to receive Konami match alerts and private room-code messages outside the open website.";
+            }
+            var status = document.createElement("p");
+            status.id = "gg-push-onboarding-status";
+            status.setAttribute("role", "status");
+            status.setAttribute("aria-live", "polite");
+            status.style.cssText = "min-height:1.4em;margin:0 0 10px;color:#f3d881";
+            var actions = document.createElement("div");
+            actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;align-items:center";
+            var enable = document.createElement("button");
+            enable.id = "gg-push-enable";
+            enable.type = "button";
+            enable.style.cssText = "padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700";
+            enable.textContent = pushStatus.browserSupported ? "Enable & Verify Notifications" : "I’ll Use a Supported Device or Android Companion";
+            var settings = document.createElement("a");
+            settings.href = "notification-settings.html";
+            settings.style.cssText = "align-self:center;color:#e4bd43";
+            settings.textContent = "Notification settings";
+            var signout = document.createElement("button");
+            signout.type = "button";
+            signout.style.cssText = "padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee";
+            signout.textContent = "Sign out";
+            actions.appendChild(enable);
+            actions.appendChild(settings);
+            actions.appendChild(signout);
+            card.appendChild(title);
+            card.appendChild(explanation);
+            card.appendChild(help);
+            card.appendChild(status);
+            card.appendChild(actions);
+            panel.appendChild(card);
             document.body.appendChild(panel);
-            panel.querySelector("#gg-push-later").addEventListener("click", function() {
-                localStorage.setItem("goalGambitPushPromptDismissed", "1");
-                panel.remove();
-            });
-            panel.querySelector("#gg-push-enable").addEventListener("click", async function() {
+            enable.addEventListener("click", async function() {
                 var button = this;
-                var status = panel.querySelector("#gg-push-onboarding-status");
                 button.disabled = true;
-                status.textContent = "Requesting permission and registering this device…";
+                status.textContent = pushStatus.browserSupported ? "Requesting permission and verifying this device with the server…" : "Please use a supported device for background match alerts. This device can receive in-page alerts only while Match Hub is open.";
+                if (!pushStatus.browserSupported) {
+                    sessionStorage.setItem("goalGambitPushAlternativeAcknowledged", "1");
+                    window.setTimeout(function() { panel.remove(); }, 1200);
+                    return;
+                }
                 try {
                     await enablePushNotifications();
-                    status.textContent = "Notifications are enabled on this device.";
-                    window.setTimeout(function() { panel.remove(); }, 1200);
+                    status.textContent = "Notifications are enabled and this device is registered.";
+                    window.setTimeout(function() { panel.remove(); }, 900);
                 } catch (error) {
                     status.textContent = error.message || "Could not enable notifications.";
                     button.disabled = false;
                 }
             });
-        }).catch(function() {});
+            signout.addEventListener("click", logout);
+        }).catch(function(error) {
+            console.error("Konami notification onboarding could not check device status:", error && error.message || error);
+        });
     }
 
     if (document.readyState === "loading") {
@@ -594,6 +699,7 @@
         API_BASE: API_BASE,
         api: api,
         getToken: getToken,
+        takePostLoginDestination: takePostLoginDestination,
         saveSession: saveSession,
         clearSession: clearSession,
         logout: logout,
@@ -608,6 +714,9 @@
         formatMoney: formatMoney,
         startPresence: startPresence,
         enablePushNotifications: enablePushNotifications,
+        requestPushPermission: requestPushPermission,
+        supportsPushNotifications: pushBrowserSupported,
+        konamiNotificationsRequired: konamiNotificationsRequired,
         disablePushNotifications: disablePushNotifications,
         getPushStatus: getPushStatus,
         syncPushSubscription: syncPushSubscription,

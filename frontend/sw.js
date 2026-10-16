@@ -14,15 +14,22 @@ self.addEventListener("push", function(event) {
         const title = String(payload.title || "GOAL$GAMBIT match update").slice(0, 120);
         const body = String(payload.body || "Open GOAL$GAMBIT to view your match update.").slice(0, 240);
         const eventId = Number(payload.eventId) || 0;
+        const eventType = String(payload.type || "");
+        const senderReply = eventType.includes("room-code-needed") || eventType.includes("code-correction-requested");
         const targetPath = safeTargetPath(payload.targetPath);
         const options = {
             body: body,
             icon: "images/notification-icon.svg",
             tag: String(payload.tag || (eventId ? "goal-gambit-event-" + eventId : "goal-gambit-update")),
             renotify: false,
+            // Web Notification actions are buttons only; they do not support
+            // an inline text field. This action opens the authenticated
+            // Match Room sender form as the reliable browser fallback.
+            actions: senderReply ? [{ action: "send-code", title: "ENTER CODE" }] : [],
             data: {
                 targetPath: targetPath,
                 eventId: eventId,
+                type: eventType,
                 clickToken: String(payload.clickToken || ""),
                 trackingUrl: String(payload.trackingUrl || "")
             }
@@ -42,7 +49,11 @@ self.addEventListener("notificationclick", function(event) {
     const data = event.notification.data || {};
     const targetUrl = new URL(safeTargetPath(data.targetPath), self.registration.scope);
     const action = ["send-code", "view-code", "results"].includes(event.action) ? event.action : "open";
-    if (action === "send-code") targetUrl.searchParams.set("action", "send-code");
+    const senderReply = String(data.type || "").includes("room-code-needed") ||
+        String(data.type || "").includes("code-correction-requested");
+    if (action === "send-code" || (action === "open" && senderReply)) {
+        targetUrl.searchParams.set("action", "send-code");
+    }
     const target = targetUrl.href;
 
     event.waitUntil((async function() {

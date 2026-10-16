@@ -108,10 +108,19 @@ HTTPS URL shown by the online launcher, and the matching frontend API hostname.
 The optional source project in `../android` uses Firebase Cloud Messaging
 (FCM). FCM data messages let the app create a normal Android notification with
 a `RemoteInput` action, so the room-code sender can submit the code from the
-notification while eFootball remains open. The notification contains no room
-code; the sender enters it in the reply field. This does not use a floating
-bubble, pop a heads-up banner over eFootball, or ask for overlay permission.
-Browser notifications continue to open the Match Hub.
+notification while eFootball remains open. Android direct reply is available
+from Android 7.0 (API 24), which is the app's minimum SDK. Android 13+ also
+requires the user to grant notification permission. The notification contains
+no room code before submission. This does not use a floating bubble, pop a
+heads-up banner over eFootball, or ask for overlay permission.
+
+Standard Web Push notifications do not provide a custom inline text field.
+Supported browsers may show an `ENTER CODE` action button; activating it (or
+tapping the notification body) opens the authenticated, match-specific Match
+Room page with the existing sender code form opened and focused. On iPhone and
+iPad, Web Push requires a Home Screen web app on iOS/iPadOS 16.4 or later;
+Safari on macOS supports Web Push on macOS 13 or later. These browser alerts
+use the same page-based reply fallback, not native Android direct reply.
 
 Setup requires Android Studio, JDK 17, Android SDK 36, a Firebase Android app
 with package name `com.goalgambit.companion`, and Cloud Messaging enabled. Put

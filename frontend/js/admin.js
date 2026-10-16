@@ -6,6 +6,18 @@ var esc = GG.escapeHTML;
 var adminId = null, selectedUser = null, selectedName = "", messageSig = null, urls = [], complaintUrls = [], busy = false, timer = null, walletAdjustTimer = null, users = [], walletAdjustmentUsers = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, includeClearedMatches = false, includeInactiveAnnouncements = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
+function updateAccountPresence(ids) {
+    var online = new Set((Array.isArray(ids) ? ids : []).map(function(id) { return String(Number(id)); }));
+    document.querySelectorAll("[data-account-presence]").forEach(function(badge) {
+        var active = online.has(String(Number(badge.dataset.accountPresence)));
+        badge.classList.toggle("is-online", active);
+        badge.textContent = active ? "Online" : "Offline";
+        badge.setAttribute("aria-label", active ? "Online" : "Offline");
+    });
+}
+window.addEventListener("gg:presence-update", function(event) {
+    updateAccountPresence(event.detail && event.detail.onlineUserIds);
+});
 async function clearAdminItems(button, path, promptText, afterClear, legacyClear) {
     if (!confirm(promptText)) return;
     button.disabled = true;
@@ -49,7 +61,7 @@ function concealDashboard(message, clearData) {
     ["accountDialog", "complaintDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
     urls.concat(complaintUrls).forEach(function(url) { URL.revokeObjectURL(url); });
     urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = null; users = [];
-    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
+    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "manualWithdrawalsList", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
         var node = $(id); if (node) node.replaceChildren();
     });
     if ($("adminName")) $("adminName").textContent = "Admin";
@@ -268,7 +280,7 @@ async function loadUsers() {
 
     $("userList").innerHTML=users.length?users.map(function(u,index){
         var id=Number(u.id), self=id===Number(adminId), status=String(u.account_status||"active"), cls=status==="active"?"active-status":status==="suspended"?"suspended-status":"closed-status";
-        var h='<article class="userrow" data-user="'+id+'"><div><span class="user-meta">Account #'+(index+1)+'</span><br><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
+        var h='<article class="userrow" data-user="'+id+'"><div><span class="account-number">Account #'+(index+1)+'</span><br><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><span class="account-presence'+(u.online?' is-online':'')+'" data-account-presence="'+id+'" role="status" aria-label="'+(u.online?'Online':'Offline')+'">'+(u.online?'Online':'Offline')+'</span><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
         h+='<label class="sr-only" for="un'+id+'">Optional action note</label><input id="un'+id+'" class="note" data-user-note maxlength="1000" placeholder="Optional note">';
         h+='<button class="btn" type="button" data-view-dashboard="'+id+'">View dashboard</button>';
         if(self)h+='<span class="foot">Your admin access is protected.</span>';
@@ -280,6 +292,7 @@ async function loadUsers() {
         }
         return h+'</div></article>';
     }).join(""):'<div class="empty">No accounts match that search.</div>';
+    updateAccountPresence(GG.getOnlineUserIds());
 }
 async function loadWalletAdjustmentUsers() {
     var query=$("walletAdjustmentSearch").value.trim();
@@ -350,6 +363,41 @@ async function loadAdminWallet() {
     $("adminWalletTransactions").innerHTML=items.length?items.map(function(t){
         return '<article class="activity-item"><strong>'+esc(String(t.transaction_type||"wallet activity").replace(/_/g," "))+' · '+esc(GG.formatMoney(t.amount))+'</strong><br>'+esc(t.status||"completed")+' · '+esc(date(t.created_at))+(t.reference?'<br>Ref: '+esc(t.reference):"")+(t.description?'<br>'+esc(t.description):"")+'</article>';
     }).join(""):'<div class="empty">No administrator wallet activity is visible.</div>';
+}
+async function loadManualWithdrawals() {
+    var list=$("manualWithdrawalsList");
+    if(!list)return;
+    var r=await GG.api("/api/admin/wallet/manual-withdrawals");
+    if(!r.ok){list.innerHTML='<div class="empty">'+esc(r.data.message||"Could not load player withdrawal requests.")+'</div>';return;}
+    var items=r.data.withdrawals||[];
+    var pending=items.filter(function(item){return item.status==="pending";}).length;
+    if($("navManualWithdrawals"))$("navManualWithdrawals").textContent=String(pending);
+    list.innerHTML=items.length?items.map(function(item){
+        var id=Number(item.id), completed=item.status==="completed";
+        var h='<article class="withdrawal-row" data-manual-withdrawal="'+id+'"><div class="withdrawal-row-head"><div><strong>'+esc(item.username||"Player")+' · '+esc(item.recipient_phone)+'</strong><div class="user-meta">Request '+esc(item.reference)+' · '+esc(date(item.requested_at))+'</div></div><span class="badge '+(completed?'good':'wait')+'">'+(completed?'Paid manually':'Awaiting manual payout')+'</span></div>';
+        h+='<div class="withdrawal-amounts"><span>Wallet deduction after confirmation <strong>'+esc(GG.formatMoney(item.total_amount))+'</strong></span><span>Fee included <strong>'+esc(GG.formatMoney(item.fee_amount))+'</strong></span><span>Send to player <strong>'+esc(GG.formatMoney(item.payout_amount))+'</strong></span><span>Current wallet balance <strong>'+esc(GG.formatMoney(item.current_balance))+'</strong></span></div>';
+        if(completed){
+            h+='<div class="actions"><button class="btn gold" type="button" data-manual-withdrawal-clear="'+id+'">Clear completed withdrawal</button></div>';
+        }else{
+            h+='<div class="actions"><button class="btn gold" type="button" data-manual-withdrawal-complete="'+id+'">Confirm payment sent · deduct '+esc(GG.formatMoney(item.total_amount))+'</button></div><div class="foot">Send the listed net amount to the player first. Confirming here then deducts the gross amount (including the fee) from the wallet.</div>';
+        }
+        return h+'</article>';
+    }).join(""):'<div class="empty">No player withdrawals need manual handling.</div>';
+}
+async function manualWithdrawalAction(button) {
+    var id=button.dataset.manualWithdrawalComplete||button.dataset.manualWithdrawalClear;
+    var completing=!!button.dataset.manualWithdrawalComplete;
+    var card=button.closest("[data-manual-withdrawal]");
+    var prompt=completing
+        ? "Confirm you have manually sent the listed M-Pesa payout. This will mark the withdrawal successful and deduct its gross amount from the player’s wallet."
+        : "Clear this completed withdrawal from the admin queue? The wallet and transaction records remain saved.";
+    if(!confirm(prompt))return;
+    button.disabled=true;
+    var path="/api/admin/wallet/manual-withdrawals/"+encodeURIComponent(id)+(completing?"/complete":"/clear");
+    var r=await GG.api(path,{method:"POST",body:{}});
+    if(!r.ok){button.disabled=false;say(r.data.message||"Could not update this withdrawal.","error");return;}
+    say(r.data.message||"Withdrawal updated.","ok");
+    await loadManualWithdrawals();
 }
 async function clearAdminWalletHistory() {
     if(!confirm("Clear the administrator wallet activity from this view? Financial ledger entries will stay saved for reconciliation."))return;
@@ -466,7 +514,7 @@ function editing(id) { var r=$(id),a=document.activeElement;return !!(r&&a&&r.co
 async function refresh(force) {
     if(!adminAuthorized||busy||document.hidden)return; busy=true; $("live").textContent="Updating…";
     try {
-        var tasks=[loadOverview()];
+        var tasks=[loadOverview(),loadManualWithdrawals()];
         if(force||!editing("resultList"))tasks.push(loadResults());
         if(force||!editing("matchManagement"))tasks.push(loadMatchManagement());
         if(force||!editing("complaintSearch"))tasks.push(loadComplaints());
@@ -669,6 +717,7 @@ $("walletAdjustmentSearchButton").addEventListener("click",loadWalletAdjustmentU
 $("walletAdjustmentSearch").addEventListener("input",function(){clearTimeout(walletAdjustTimer);walletAdjustTimer=setTimeout(loadWalletAdjustmentUsers,250);});
 $("walletAdjustmentSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadWalletAdjustmentUsers();}});
 $("clearAdminWalletHistory").addEventListener("click",clearAdminWalletHistory);
+$("manualWithdrawalsList").addEventListener("click",function(e){var complete=e.target.closest("[data-manual-withdrawal-complete]");if(complete){manualWithdrawalAction(complete);return;}var clear=e.target.closest("[data-manual-withdrawal-clear]");if(clear)manualWithdrawalAction(clear);});
 $("competitionSelect").addEventListener("change",loadCompetitionTable);
 $("competitionTable").addEventListener("submit",function(e){var form=e.target.closest("[data-competition-type]");if(!form)return;e.preventDefault();saveCompetitionEdit(form);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});
