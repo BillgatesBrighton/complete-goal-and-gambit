@@ -1,3 +1,7 @@
+import java.io.File
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -11,6 +15,18 @@ val configuredApiBase = providers.gradleProperty("GG_API_BASE_URL")
     .get()
     .trimEnd('/')
 
+val releaseSigningPropertiesFile = System.getenv("APPDATA")?.let {
+    File(it, "GOAL" + '$' + "GAMBIT/release-signing.properties")
+}
+val releaseSigningProperties = Properties()
+if (releaseSigningPropertiesFile != null && releaseSigningPropertiesFile.isFile) {
+    FileInputStream(releaseSigningPropertiesFile).use(releaseSigningProperties::load)
+}
+val releaseSigningConfigured = releaseSigningPropertiesFile?.isFile == true &&
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all {
+        !releaseSigningProperties.getProperty(it).isNullOrBlank()
+    }
+
 android {
     namespace = "com.goalgambit.companion"
     compileSdk = 36
@@ -19,8 +35,8 @@ android {
         applicationId = "com.goalgambit.companion"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
         buildConfigField("String", "API_BASE_URL", "\"$configuredApiBase\"")
     }
 
@@ -33,6 +49,36 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(checkNotNull(releaseSigningProperties.getProperty("storeFile")))
+                storePassword = checkNotNull(releaseSigningProperties.getProperty("storePassword"))
+                keyAlias = checkNotNull(releaseSigningProperties.getProperty("keyAlias"))
+                keyPassword = checkNotNull(releaseSigningProperties.getProperty("keyPassword"))
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+}
+
+tasks.configureEach {
+    if ((name.startsWith("assemble") || name.startsWith("bundle")) &&
+        name.contains("Release", ignoreCase = true)) {
+        doFirst {
+            if (!releaseSigningConfigured) {
+                throw GradleException("Release signing is not configured. See the Android release signing instructions.")
+            }
+        }
+    }
 }
 
 dependencies {
