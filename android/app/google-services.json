@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "581023602727",
+    "project_id": "goal-gambit",
+    "storage_bucket": "goal-gambit.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:581023602727:android:d0b97dbdda9ce12774d602",
+        "android_client_info": {
+          "package_name": "com.goalgambit.companion"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAI4SBNVgJOPpLaeX0nUiimx4BHdllNuYY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
