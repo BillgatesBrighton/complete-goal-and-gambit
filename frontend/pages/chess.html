@@ -79,6 +79,7 @@ button {
 .chat-panel-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .chat-panel-controls button, .chat-panel-controls a { min-height: 34px; padding: 7px 9px; border: 1px solid #393939; border-radius: 8px; background: #171717; color: #ddd; font-size: 11px; font-weight: 700; text-decoration: none; white-space: nowrap; cursor: pointer; }
 .chat-panel-controls .chat-mode.is-active { border-color: #9b7a1a; color: #f4bd20; background: #211c0d; }
+.chat-panel-controls .chat-notifications { border-color: #9b7a1a; color: #f4bd20; }
 .chat-panel-controls .chat-close { width: 34px; padding: 0; font-size: 22px; line-height: 1; }
 #chessChatFrame { flex: 1; width: 100%; min-height: 0; border: 0; background: #080808; }
 .chat-launcher:focus-visible, .chat-panel button:focus-visible, .chat-panel a:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
@@ -323,6 +324,24 @@ main {
 .active-tournament-action { display:inline-block; margin:4px 8px 0 0; padding:8px 10px; border:1px solid #4a3c17; border-radius:8px; color:#f4bd20; font-size:12px; font-weight:800; }
 .active-tournament-action.secondary { border-color:#333; color:#ddd; }
 .active-tournament-empty { color:#888; font-size:13px; line-height:1.6; }
+.chess-schedule-intro { max-width:760px; margin:-5px 0 16px; color:#999; font-size:13px; line-height:1.6; }
+.chess-schedule-form { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; align-items:end; padding:16px; border:1px solid #292929; border-radius:12px; background:#101010; }
+.chess-schedule-field { display:grid; gap:6px; min-width:0; color:#bbb; font-size:12px; font-weight:700; }
+.chess-schedule-field input,.chess-schedule-field select { width:100%; min-height:42px; padding:9px 10px; border:1px solid #393939; border-radius:8px; background:#090909; color:#fff; font:inherit; }
+.chess-schedule-submit { min-height:42px; padding:9px 13px; border:0; border-radius:8px; background:#f4bd20; color:#111; font-weight:900; cursor:pointer; }
+.chess-schedule-submit:disabled,.chess-schedule-action:disabled { opacity:.55; cursor:wait; }
+.chess-schedule-feedback { min-height:20px; margin:9px 0 14px; color:#aaa; font-size:12px; }
+.chess-schedule-feedback.success { color:#8fe0aa; }
+.chess-schedule-feedback.error { color:#ff9b9b; }
+.chess-schedule-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; }
+.chess-schedule-card { padding:14px; border:1px solid #302a17; border-radius:11px; background:linear-gradient(145deg,#15140f,#0d0d0d); }
+.chess-schedule-card strong { display:block; margin-bottom:5px; color:#f4bd20; }
+.chess-schedule-card p { margin:4px 0; color:#aaa; font-size:12px; line-height:1.5; }
+.chess-schedule-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+.chess-schedule-action { min-height:34px; padding:7px 10px; border:1px solid #65531c; border-radius:7px; background:#19160b; color:#f4bd20; font-size:11px; font-weight:800; text-decoration:none; cursor:pointer; }
+.chess-schedule-action.secondary { border-color:#393939; background:#151515; color:#ddd; }
+.chess-schedule-empty { color:#888; font-size:13px; }
+@media(max-width:720px) { .chess-schedule-form { grid-template-columns:1fr; } }
 
 
 /* =========================================================
@@ -620,6 +639,7 @@ body {
         <div class="chat-panel-controls" aria-label="Chat options">
             <button class="chat-mode is-active" type="button" data-chat-page="chat-users.html?embedded=1" aria-pressed="true">Players</button>
             <button class="chat-mode" type="button" data-chat-page="chat-admin.html?embedded=1" aria-pressed="false">Support</button>
+            <a class="chat-notifications" href="notification-settings.html" target="_blank" rel="noopener" title="Notification settings and recent alerts">🔔 Notifications</a>
             <a class="chat-full-link" href="chat.html" target="_blank" rel="noopener">Full chat ↗</a>
             <button id="closeChatPanel" class="chat-close" type="button" aria-label="Close chat">×</button>
         </div>
@@ -732,6 +752,27 @@ Choose your format and compete at your level.
     <a class="competition-link" href="tournament-lobby.html">Browse tournament tables →</a>
   </div>
   <div id="myActiveChessTournaments" aria-live="polite"><p class="active-tournament-empty">Loading your tournament selections…</p></div>
+</section>
+
+<section class="section" aria-labelledby="chessScheduleTitle">
+  <div class="section-head">
+    <div><div class="small-label">UPCOMING GAMES</div><h2 id="chessScheduleTitle">Schedule a Chess match</h2></div>
+  </div>
+  <p class="chess-schedule-intro">Invite another Chess player and choose a time within the next 30 days. After they accept, both players can mark themselves ready near the start time. The Android Companion can send reminders about accepted matches.</p>
+  <form id="chessScheduleForm" class="chess-schedule-form">
+    <label class="chess-schedule-field" for="chessScheduleOpponent">Opponent username
+      <input id="chessScheduleOpponent" type="text" minlength="3" maxlength="30" autocomplete="off" placeholder="GOAL$GAMBIT username" required>
+    </label>
+    <label class="chess-schedule-field" for="chessScheduleAt">Date and time
+      <input id="chessScheduleAt" type="datetime-local" required>
+    </label>
+    <label class="chess-schedule-field" for="chessScheduleClock">Chess clock
+      <select id="chessScheduleClock"><option value="10+5">Rapid · 10+5</option><option value="3+2">Blitz · 3+2</option><option value="1+1">Bullet · 1+1</option></select>
+    </label>
+    <button id="chessScheduleSubmit" class="chess-schedule-submit" type="submit">Send match invitation</button>
+  </form>
+  <p id="chessScheduleFeedback" class="chess-schedule-feedback" role="status" aria-live="polite"></p>
+  <div id="chessScheduleList" class="chess-schedule-list" aria-live="polite"><p class="chess-schedule-empty">Loading your scheduled matches…</p></div>
 </section>
 
 <!-- =======================================================
@@ -1346,7 +1387,8 @@ GOAL$GAMBIT • Chess Dashboard
 </main>
 
 
-<script src="../js/api.js"></script>
+<script src="../js/api.js?v=20261017-companion-download"></script>
+<script src="../js/chess-schedules.js?v=20261017-scheduled-chess"></script>
 <script src="../js/active-tournaments.js"></script>
 <script>
 

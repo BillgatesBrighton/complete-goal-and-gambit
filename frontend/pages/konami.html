@@ -224,6 +224,7 @@ body {
     cursor: pointer;
 }
 .chat-panel-controls .chat-mode.is-active { border-color: #9b7a1a; color: #f4bd20; background: #211c0d; }
+.chat-panel-controls .chat-notifications { border-color: #9b7a1a; color: #f4bd20; }
 .chat-panel-controls .chat-close { width: 34px; padding: 0; font-size: 22px; line-height: 1; }
 #konamiChatFrame { flex: 1; width: 100%; min-height: 0; border: 0; background: #080808; }
 @media (max-width: 650px) {
@@ -775,6 +776,7 @@ body {
         <div class="chat-panel-controls" aria-label="Chat options">
             <button class="chat-mode is-active" type="button" data-chat-page="chat-users.html?embedded=1" aria-pressed="true">Players</button>
             <button class="chat-mode" type="button" data-chat-page="chat-admin.html?embedded=1" aria-pressed="false">Support</button>
+            <a class="chat-notifications" href="notification-settings.html" target="_blank" rel="noopener" title="Notification settings and recent alerts">🔔 Notifications</a>
             <a class="chat-full-link" href="chat.html" target="_blank" rel="noopener">Full chat ↗</a>
             <button id="closeChatPanel" class="chat-close" type="button" aria-label="Close chat">×</button>
         </div>
@@ -1464,7 +1466,7 @@ body {
 </div>
 
 
-<script src="../js/api.js"></script>
+<script src="../js/api.js?v=20261017-companion-download"></script>
 <script src="../js/active-tournaments.js"></script>
 <script>
 

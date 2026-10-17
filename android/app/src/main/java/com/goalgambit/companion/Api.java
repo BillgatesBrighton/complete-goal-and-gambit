@@ -81,7 +81,8 @@ final class Api {
         JSONObject body = new JSONObject();
         body.put("token", token);
         body.put("deviceId", deviceId);
-        body.put("deviceName", Build.MANUFACTURER + " " + Build.MODEL);
+        String build = (BuildConfig.DEBUG ? "Trial" : "Release") + " v" + BuildConfig.VERSION_NAME;
+        body.put("deviceName", Build.MANUFACTURER + " " + Build.MODEL + " · " + build);
         return request("POST", "/api/push/android/subscriptions", bearer, body);
     }
 

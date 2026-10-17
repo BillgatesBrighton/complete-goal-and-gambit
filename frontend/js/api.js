@@ -241,13 +241,24 @@
         banner.setAttribute("role", "status");
         banner.style.cssText = "box-sizing:border-box;padding:12px 16px;border:1px solid #80671e;border-radius:10px;background:#171307;color:#f5e9bd;margin:12px auto;max-width:1100px;font:14px/1.5 Arial,sans-serif";
         var message = document.createElement("span");
-        message.textContent = "Konami access requires the Android Companion to be registered. Both accounts can keep playing Chess while setting it up. ";
+        message.textContent = "This account has no Android Companion registered yet. Enable notifications in the companion to receive match alerts and room-code chat replies. Use the Android download link at the top of this page to get the app.";
+        banner.appendChild(message);
+        document.body.insertBefore(banner, document.body.firstChild);
+    }
+
+    function showAndroidCompanionDownloadLink() {
+        if (!document.body || !getToken() || document.getElementById("gg-android-companion-download")) return;
+        var banner = document.createElement("aside");
+        banner.id = "gg-android-companion-download";
+        banner.setAttribute("aria-label", "Android notification companion download");
+        banner.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 14px;width:100%;padding:10px 16px;border-bottom:1px solid #80671e;background:#171307;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
+        var message = document.createElement("span");
+        message.textContent = "GOAL$GAMBIT Android Companion: match alerts and room-code chat replies on your phone.";
         var download = document.createElement("a");
         download.href = ANDROID_COMPANION_DOWNLOAD_URL;
-        download.textContent = "Download the app";
-        download.style.cssText = "color:#f4bd20;font-weight:700";
-        banner.appendChild(message);
-        banner.appendChild(download);
+        download.textContent = "Download the Android app";
+        download.style.cssText = "color:#f4bd20;font-weight:700;text-decoration:underline";
+        banner.append(message, download);
         document.body.insertBefore(banner, document.body.firstChild);
     }
 
@@ -469,6 +480,7 @@
             activeSubscriptions: server.ok ? Number(server.data.activeSubscriptions || 0) : 0,
             androidConfigured: !!(server.ok && server.data.androidConfigured),
             activeAndroidDevices: server.ok ? Number(server.data.activeAndroidDevices || 0) : 0,
+            androidDevices: server.ok && Array.isArray(server.data.androidDevices) ? server.data.androidDevices : [],
             thisDeviceRegistered: localSubscription,
             serverReachable: !!server.ok
         };
@@ -819,6 +831,11 @@
         window.setInterval(checkServer, 25000);
     }
 
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", showAndroidCompanionDownloadLink, { once: true });
+    } else {
+        showAndroidCompanionDownloadLink();
+    }
     initServerStatus();
 
 })();

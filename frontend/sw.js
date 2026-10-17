@@ -2,6 +2,7 @@
 
 function safeTargetPath(value) {
     const path = String(value || "");
+    if (path === "pages/chess.html") return path;
     if (/^pages\/(match-room|match-results|match-hub)\.html(?:\?matchId=[1-9][0-9]*)?$/.test(path)) return path;
     return "pages/match-hub.html";
 }

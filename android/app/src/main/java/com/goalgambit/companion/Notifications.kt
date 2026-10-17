@@ -24,10 +24,10 @@ object Notifications {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "GOAL\$GAMBIT match alerts",
+                "GOAL\$GAMBIT reminders",
                 NotificationManager.IMPORTANCE_DEFAULT
             )
-            channel.description = "Match-ready alerts and room-code actions."
+            channel.description = "Scheduled Chess reminders, match alerts, and room-code chat actions."
             manager.createNotificationChannel(channel)
         }
     }

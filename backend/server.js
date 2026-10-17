@@ -21,12 +21,14 @@ const authRoutes = require("./routes/auth");
 const walletRoutes = require("./routes/wallet");
 const userHistoryRoutes = require("./routes/userHistory");
 const chessRoutes = require("./routes/chess");
+const chessScheduleRoutes = require("./routes/chessSchedules");
 const leaderboardRoutes = require("./routes/leaderboard");
 const chessCompetitionRoutes = require("./routes/chessCompetitions");
 const efootballRoutes = require("./routes/efootball");
 const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
+const createChessScheduleReminders = require("./services/chessScheduleReminders");
 const tournamentRoutes = require("./routes/tournaments");
 const leagueRoutes = require("./routes/leagues");
 const mpesaRoutes = require("./routes/mpesa");
@@ -118,12 +120,15 @@ const pushService = {
     start: function () {
         webPushService.start();
         androidPushService.start();
+        chessScheduleReminders.start();
     },
     stop: function () {
         webPushService.stop();
         androidPushService.stop();
+        chessScheduleReminders.stop();
     }
 };
+const chessScheduleReminders = createChessScheduleReminders(pool, pushService);
 
 authenticateToken.setPool(pool);
 
@@ -791,6 +796,12 @@ app.use(
 app.use(
     "/api/chess/competitions",
     chessCompetitionRoutes(pool, authenticateToken)
+);
+
+// Scheduled matches need their own route before /api/chess/:id is mounted.
+app.use(
+    "/api/chess/schedules",
+    chessScheduleRoutes(pool, authenticateToken, pushService)
 );
 
 app.use(

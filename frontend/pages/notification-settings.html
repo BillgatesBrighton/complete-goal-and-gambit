@@ -5,13 +5,13 @@
 <title>GOAL$GAMBIT · Notifications</title>
 <style>
 :root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa;--green:#8fe0aa;--red:#ff9b9b}*{box-sizing:border-box}body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}header{height:64px;padding:0 max(18px,calc((100% - 900px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}a{color:var(--gold)}main{width:min(900px,94%);margin:30px auto 80px}h1{color:var(--gold);font-size:clamp(27px,5vw,38px);margin:0}.lead,.muted{color:var(--muted)}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:21px;margin:17px 0}.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.status-cell{padding:13px;background:#090909;border:1px solid var(--line);border-radius:10px}.status-cell small{display:block;color:var(--muted)}button,.button{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:9px;padding:12px 16px;margin:8px 8px 0 0;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer;min-height:44px}.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}button:disabled{opacity:.55;cursor:not-allowed}.error{color:var(--red)}.success{color:var(--green)}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.item strong{color:var(--gold)}.hidden{display:none!important}@media(max-width:580px){header{padding:0 14px}.status-grid{grid-template-columns:1fr}.card{padding:17px}button,.button{width:100%;margin-right:0}}
-</style><script src="../js/api.js"></script>
+</style><script src="../js/api.js?v=20261017-companion-download"></script>
 </head>
 <body>
 <header><div class="brand">GOAL$GAMBIT</div><a href="dashboard.html">Dashboard</a></header>
 <main>
 <h1>Notification Settings</h1><p class="lead">Manage match alerts for this browser and review recent delivery activity.</p>
-<section class="card"><h2>Device status</h2><div class="status-grid"><div class="status-cell"><small>Browser permission</small><strong id="permissionState">Checking…</strong></div><div class="status-cell"><small>This device</small><strong id="deviceState">Checking…</strong></div><div class="status-cell"><small>Backend VAPID setup</small><strong id="serverState">Checking…</strong></div><div class="status-cell"><small>Active devices on this account</small><strong id="deviceCount">—</strong></div></div><p id="supportHelp" class="muted"></p><p id="statusMessage" role="status" aria-live="polite"></p><button id="enableButton" type="button">Enable Notifications</button><button id="disableButton" class="secondary" type="button">Disable on This Device</button><button id="disableAllButton" class="secondary" type="button">Disable on All Devices</button><button id="testButton" type="button">Send Test Notification</button></section>
+<section class="card"><h2>Device status</h2><div class="status-grid"><div class="status-cell"><small>Browser permission</small><strong id="permissionState">Checking…</strong></div><div class="status-cell"><small>This browser</small><strong id="deviceState">Checking…</strong></div><div class="status-cell"><small>Backend VAPID setup</small><strong id="serverState">Checking…</strong></div><div class="status-cell"><small>Active browser devices on this account</small><strong id="deviceCount">—</strong></div><div class="status-cell"><small>Registered Android companion builds</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="supportHelp" class="muted"></p><p id="statusMessage" role="status" aria-live="polite"></p><button id="enableButton" type="button">Enable Notifications</button><button id="disableButton" class="secondary" type="button">Disable on This Device</button><button id="disableAllButton" class="secondary" type="button">Disable on All Devices</button><button id="testButton" type="button">Send Test Notification</button></section>
 <section class="card"><h2>Recent Match Alerts</h2><p class="muted">“Accepted” means the browser’s push service accepted the message for delivery; it does not confirm that your phone displayed it.</p><div id="history">Loading notification history…</div></section>
 <section class="card"><a class="button secondary" href="match-hub.html">Match Hub</a><a class="button secondary" href="konami.html">Konami dashboard</a></section>
 </main>
@@ -28,6 +28,13 @@
     $("deviceState").textContent=status.thisDeviceRegistered?"Registered":"Not registered";
     $("serverState").textContent=status.configured?"Configured":"Unavailable";
     $("deviceCount").textContent=status.serverReachable?String(status.activeSubscriptions):"Unavailable";
+    var androidDevices=status.androidDevices||[];
+    $("androidDeviceCount").textContent=status.serverReachable?String(androidDevices.length):"Unavailable";
+    var deviceList=$("androidDeviceList");
+    deviceList.replaceChildren();
+    if(!status.serverReachable){deviceList.textContent="Could not check the Android app registrations.";}
+    else if(!androidDevices.length){deviceList.textContent="No Android companion build is registered to this account.";}
+    else androidDevices.forEach(function(device){var line=document.createElement("div");line.textContent=(device.deviceName||"Android build version not reported")+(device.updatedAt?" · registered "+fmt(device.updatedAt):"");deviceList.appendChild(line);});
     $("enableButton").disabled=!status.browserSupported||!status.configured||status.permission==="denied";
     $("disableButton").disabled=!status.thisDeviceRegistered;
     $("testButton").disabled=!status.thisDeviceRegistered;

@@ -143,6 +143,17 @@ in to the companion, enable notifications, and send a test notification. A
 real phone test is still required to verify notification display and inline
 reply behavior on the target Android version.
 
+## Scheduled Chess games
+
+Chess players can invite an active Chess or Both account to a casual game up to
+30 days ahead. The schedule API is mounted at `/api/chess/schedules`: use `GET`
+to list invitations, `POST` to create one, `POST /:id/respond` to accept or
+decline, `POST /:id/cancel` to cancel, and `POST /:id/ready` near the start time
+to mark ready. The server sends reminders about an hour before, 10 minutes
+before, and at the scheduled time to both players with active push registrations.
+The game starts without a stake when both players are ready and neither has an
+other active Chess game. The startup schema migration creates the schedule table.
+
 ## Daraja STK
 
 Keep `MPESA_ENVIRONMENT=sandbox` while validating. The Daraja consumer key,

@@ -228,6 +228,34 @@ CREATE INDEX IF NOT EXISTS idx_chess_matches_status ON chess_matches (status);
 CREATE INDEX IF NOT EXISTS idx_chess_matches_admin_history
     ON chess_matches (admin_cleared_at, finished_at DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS chess_scheduled_matches (
+    id                      BIGSERIAL PRIMARY KEY,
+    host_user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    guest_user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scheduled_at             TIMESTAMPTZ NOT NULL,
+    time_zone                VARCHAR(64) NOT NULL DEFAULT 'Africa/Nairobi',
+    time_control             VARCHAR(20) NOT NULL DEFAULT '10+5',
+    status                   VARCHAR(20) NOT NULL DEFAULT 'pending',
+    host_ready_at            TIMESTAMPTZ,
+    guest_ready_at           TIMESTAMPTZ,
+    match_id                 INTEGER REFERENCES chess_matches(id) ON DELETE SET NULL,
+    reminder_60m_sent_at     TIMESTAMPTZ,
+    reminder_10m_sent_at     TIMESTAMPTZ,
+    reminder_start_sent_at   TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chess_scheduled_matches_different_players CHECK (host_user_id <> guest_user_id),
+    CONSTRAINT chess_scheduled_matches_status CHECK (status IN ('pending','accepted','declined','cancelled','started')),
+    CONSTRAINT chess_scheduled_matches_control CHECK (time_control IN ('10+5','3+2','1+1'))
+);
+CREATE INDEX IF NOT EXISTS idx_chess_scheduled_matches_due
+    ON chess_scheduled_matches (scheduled_at)
+    WHERE status='accepted';
+CREATE INDEX IF NOT EXISTS idx_chess_scheduled_matches_host
+    ON chess_scheduled_matches (host_user_id, scheduled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chess_scheduled_matches_guest
+    ON chess_scheduled_matches (guest_user_id, scheduled_at DESC);
+
 CREATE TABLE IF NOT EXISTS chess_tournament_entries (
     id              BIGSERIAL PRIMARY KEY,
     season_key      VARCHAR(7) NOT NULL,

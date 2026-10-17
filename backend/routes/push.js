@@ -52,7 +52,7 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                 [req.user.userId]
             );
             const android = await pool.query(
-                "SELECT COUNT(*)::int AS active_subscriptions FROM android_push_tokens WHERE user_id=$1 AND active=TRUE",
+                "SELECT device_name,updated_at FROM android_push_tokens WHERE user_id=$1 AND active=TRUE ORDER BY updated_at DESC",
                 [req.user.userId]
             );
             const config = pushService.status();
@@ -62,7 +62,10 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                 androidConfigured: Boolean(config.androidConfigured),
                 permissionRequired: true,
                 activeSubscriptions: Number(result.rows[0].active_subscriptions || 0),
-                activeAndroidDevices: Number(android.rows[0].active_subscriptions || 0)
+                activeAndroidDevices: android.rows.length,
+                androidDevices: android.rows.map(function (device) {
+                    return { deviceName: device.device_name || "Android build version not reported", updatedAt: device.updated_at };
+                })
             });
         } catch (error) {
             console.error("Push status query failed.");

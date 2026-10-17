@@ -65,7 +65,8 @@ public final class MainActivity extends Activity {
 
         TextView title = text("GOAL$GAMBIT", 27, Color.rgb(237, 195, 53), true);
         content.addView(title, params(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        TextView subtitle = text("Android match companion", 15, Color.LTGRAY, false);
+        String buildLabel = BuildConfig.DEBUG ? "TRIAL BUILD" : "RELEASE BUILD";
+        TextView subtitle = text("Notification companion · " + buildLabel + " · v" + BuildConfig.VERSION_NAME, 13, Color.LTGRAY, false);
         content.addView(subtitle, marginParams(-1, -2, 0, 4, 0, 20));
         statusView = text("", 14, Color.rgb(205, 205, 205), false);
         statusView.setBackgroundColor(Color.rgb(25, 25, 25));
@@ -83,7 +84,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showLogin() {
-        statusView.setText("Sign in with your existing GOAL$GAMBIT account to register this Android device for match alerts.");
+        statusView.setText("Sign in with your existing GOAL$GAMBIT account to get scheduled Chess reminders and match alerts. Gameplay stays on the website.");
         EditText username = edit("Username");
         EditText password = edit("Password");
         password.setInputType(129);
@@ -129,7 +130,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showSignedIn() {
-        statusView.setText("Signed in. Enable Android notifications to receive match alerts and send a room code from the notification reply without opening the website.");
+        statusView.setText("This is the notification companion. Enable alerts for scheduled Chess games and match updates; send room-code chat replies from eligible eFootball notifications. Play on the GOAL$GAMBIT website.");
         Button enable = button("ENABLE MATCH NOTIFICATIONS");
         Button test = button("SEND TEST NOTIFICATION");
         Button disable = button("DISABLE NOTIFICATIONS ON THIS DEVICE");
@@ -195,7 +196,7 @@ public final class MainActivity extends Activity {
                     try {
                         Api.Result result = Api.registerDevice(fcmToken, TokenStore.deviceId(this), TokenStore.read(this));
                         runOnUiThread(() -> statusView.setText(result.ok()
-                            ? "This device is registered for GOAL$GAMBIT match notifications."
+                            ? (BuildConfig.DEBUG ? "Trial build" : "Release build") + " v" + BuildConfig.VERSION_NAME + " is registered for GOAL$GAMBIT notifications."
                             : result.message("Could not register this Android device.")));
                     } catch (Exception error) {
                         runOnUiThread(() -> statusView.setText("Device registration failed. Check the connection and try again."));

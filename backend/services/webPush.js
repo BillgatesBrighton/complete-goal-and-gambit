@@ -31,6 +31,7 @@ if (publicKey && privateKey) {
 
 function safeTargetPath(matchId, page) {
     const id = Number(matchId);
+    if (page === "chess" && (!Number.isSafeInteger(id) || id <= 0)) return "pages/chess.html";
     if (page === "match-hub" || !Number.isSafeInteger(id) || id <= 0) return "pages/match-hub.html";
     const allowedPage = page === "match-results" ? "match-results" : "match-room";
     return "pages/" + allowedPage + ".html?matchId=" + encodeURIComponent(String(id));
@@ -102,7 +103,8 @@ function createWebPushService(pool) {
             type: job.event_key,
             eventId: Number(job.event_id),
             matchId: job.match_id == null ? null : Number(job.match_id),
-            targetPath: safeTargetPath(job.match_id, job.target_path && job.target_path.indexOf("match-results.html") !== -1 ? "match-results" : "match-room"),
+            targetPath: safeTargetPath(job.match_id, job.target_path === "pages/chess.html" ? "chess"
+                : job.target_path && job.target_path.indexOf("match-results.html") !== -1 ? "match-results" : "match-room"),
             clickToken: clickToken(job.event_id),
             trackingUrl: /^https:\/\//i.test(String(process.env.PUBLIC_BASE_URL || ""))
                 ? String(process.env.PUBLIC_BASE_URL).replace(/\/+$/, "") + "/api/push/click" : null,

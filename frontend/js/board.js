@@ -109,7 +109,8 @@ function currentBoard(){return parseFen(state&&state.fen || "rnbqkbnr/pppppppp/8
 function setInfo(){
   const timeControl=state?.timeControl||config.timeControl||"";
   const speed=(config.rankedMode||config.speed||speedForTimeControl(timeControl)).replace(/[^a-z]/gi,"");
-  const type=(state?.matchType|| (config.tournamentMode?"tournament":"ranked"))==="tournament"?"Tournament":"Ranked";
+  const matchType=state?.matchType|| (config.tournamentMode?"tournament":"ranked");
+  const type=matchType==="tournament"?"Tournament":matchType==="casual"?"Casual":"Ranked";
   const label=speed.charAt(0).toUpperCase()+speed.slice(1)+" "+type;
   if(gameModeElement)gameModeElement.textContent=label;
   if(matchTypeElement)matchTypeElement.textContent=type;
