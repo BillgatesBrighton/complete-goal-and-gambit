@@ -20,6 +20,7 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
 
     var TOKEN_KEY = "goalGambitToken";
+    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk";
     var POST_LOGIN_PATH_KEY = "goalGambitPostLoginPath";
     // Resolve the frontend root from this shared script so the worker stays
     // inside /frontend on GitHub Pages and works from the backend's static root.
@@ -165,6 +166,91 @@
         });
     }
 
+    function showAndroidCompanionGate(data) {
+        if (!document.body || document.getElementById("gg-android-companion-required")) return;
+        var panel = document.createElement("section");
+        panel.id = "gg-android-companion-required";
+        panel.setAttribute("role", "alertdialog");
+        panel.setAttribute("aria-modal", "true");
+        panel.setAttribute("aria-labelledby", "gg-android-companion-title");
+        panel.style.cssText = "position:fixed;inset:0;z-index:2147483002;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.84);font:15px/1.5 Arial,sans-serif";
+
+        var card = document.createElement("div");
+        card.style.cssText = "box-sizing:border-box;width:min(520px,100%);padding:22px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.65)";
+        var title = document.createElement("h2");
+        title.id = "gg-android-companion-title";
+        title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
+        title.textContent = "Android Companion required for Konami";
+        var explanation = document.createElement("p");
+        explanation.textContent = "Install the Android notification companion, sign in with this account, and enable match alerts and room-code chat replies. Play Chess and eFootball on the website. Konami matches and tournaments unlock after the app registers your phone. Chess remains available for Both accounts.";
+        var download = document.createElement("a");
+        var requestedUrl = data && typeof data.downloadUrl === "string" ? data.downloadUrl : "";
+        download.href = /^https:\/\//i.test(requestedUrl) ? requestedUrl : ANDROID_COMPANION_DOWNLOAD_URL;
+        download.target = "_blank";
+        download.rel = "noopener noreferrer";
+        download.textContent = "Download Android notification companion";
+        download.style.cssText = "display:inline-block;margin:0 0 12px;color:#e4bd43;font-weight:700";
+        var status = document.createElement("p");
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        status.style.cssText = "min-height:1.4em;margin:0 0 12px;color:#d0c9b5";
+        status.textContent = "After enabling notifications in the app, return here and check activation.";
+        var actions = document.createElement("div");
+        actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
+        var check = document.createElement("button");
+        check.type = "button";
+        check.textContent = "I enabled notifications — check activation";
+        check.style.cssText = "padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700";
+        var signout = document.createElement("button");
+        signout.type = "button";
+        signout.textContent = "Sign out";
+        signout.style.cssText = "padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee";
+        actions.appendChild(check);
+        actions.appendChild(signout);
+        card.appendChild(title);
+        card.appendChild(explanation);
+        card.appendChild(download);
+        card.appendChild(status);
+        card.appendChild(actions);
+        panel.appendChild(card);
+        document.body.appendChild(panel);
+
+        check.addEventListener("click", async function() {
+            check.disabled = true;
+            status.textContent = "Checking Android device registration…";
+            var result = await api("/api/push/status", { noRedirect: true });
+            check.disabled = false;
+            if (result.ok && Number(result.data.activeAndroidDevices || 0) > 0) {
+                panel.remove();
+                location.reload();
+                return;
+            }
+            status.textContent = result.ok && !result.data.androidConfigured
+                ? "Android notifications are not configured on the GOAL$GAMBIT server yet. The companion cannot register until server setup is complete."
+                : result.data.message || "No Android companion is registered for this account yet. Open the app and enable match notifications, then try again.";
+        });
+        signout.addEventListener("click", logout);
+    }
+
+    async function showAndroidCompanionReminder() {
+        if (!document.body || document.getElementById("gg-android-companion-reminder")) return;
+        var result = await api("/api/push/status", { noRedirect: true });
+        if (!result.ok || Number(result.data.activeAndroidDevices || 0) > 0) return;
+        var banner = document.createElement("aside");
+        banner.id = "gg-android-companion-reminder";
+        banner.setAttribute("role", "status");
+        banner.style.cssText = "box-sizing:border-box;padding:12px 16px;border:1px solid #80671e;border-radius:10px;background:#171307;color:#f5e9bd;margin:12px auto;max-width:1100px;font:14px/1.5 Arial,sans-serif";
+        var message = document.createElement("span");
+        message.textContent = "Konami access requires the Android Companion to be registered. Both accounts can keep playing Chess while setting it up. ";
+        var download = document.createElement("a");
+        download.href = ANDROID_COMPANION_DOWNLOAD_URL;
+        download.textContent = "Download the app";
+        download.style.cssText = "color:#f4bd20;font-weight:700";
+        banner.appendChild(message);
+        banner.appendChild(download);
+        document.body.insertBefore(banner, document.body.firstChild);
+    }
+
     // Sends the request with the login token. Always resolves to
     // { ok, status, data } and never throws on HTTP errors.
     async function api(path, options) {
@@ -203,6 +289,10 @@
             if (response.status === 401 && token && !options.noRedirect) {
                 clearSession();
                 location.href = "login.html";
+            }
+
+            if (response.status === 403 && data && data.code === "ANDROID_COMPANION_REQUIRED") {
+                showAndroidCompanionGate(data);
             }
 
             return { ok: response.ok, status: response.status, data: data || {} };
@@ -384,113 +474,6 @@
         };
     }
 
-    function initPushExperience() {
-        if (window.__GG_PUSH_EXPERIENCE_STARTED || !document.body || !getToken() || !konamiNotificationsRequired()) return;
-        // The settings page must remain reachable so a user can repair a
-        // permission that was previously denied in browser settings.
-        if (/\/notification-settings\.html$/i.test(location.pathname)) return;
-        window.__GG_PUSH_EXPERIENCE_STARTED = true;
-        if ("serviceWorker" in navigator) {
-            navigator.serviceWorker.addEventListener("message", function(event) {
-                if (event.data && event.data.type === "GG_PUSH_SUBSCRIPTION_CHANGED") {
-                    syncPushSubscription().catch(function() {});
-                }
-            });
-        }
-        getPushStatus().then(function(pushStatus) {
-            if (!getToken() || !document.body || document.getElementById("gg-push-onboarding")) return;
-            if (pushStatus.browserSupported && pushStatus.thisDeviceRegistered) return;
-            if (!pushStatus.browserSupported && pushStatus.androidConfigured && pushStatus.activeAndroidDevices > 0) return;
-            if (sessionStorage.getItem("goalGambitPushAlternativeAcknowledged")) return;
-
-            var panel = document.createElement("section");
-            panel.id = "gg-push-onboarding";
-            panel.setAttribute("role", "alertdialog");
-            panel.setAttribute("aria-modal", "true");
-            panel.setAttribute("aria-labelledby", "gg-push-title");
-            panel.style.cssText = "position:fixed;inset:0;z-index:2147483001;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.82);font:15px/1.5 Arial,sans-serif";
-            var card = document.createElement("div");
-            card.style.cssText = "width:min(500px,100%);padding:22px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.65)";
-            var title = document.createElement("h2");
-            title.id = "gg-push-title";
-            title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
-            title.textContent = "Konami Match Notifications Required";
-            var explanation = document.createElement("p");
-            explanation.style.margin = "0 0 12px";
-            explanation.textContent = "GOAL$GAMBIT uses notifications for Konami match alerts, room-code sender assignments, and room-code messages—even while you are using eFootball.";
-            var help = document.createElement("p");
-            help.style.cssText = "margin:0 0 12px;color:#d0c9b5";
-            if (pushStatus.browserSupported && pushStatus.permission === "denied") {
-                help.textContent = "Notifications are blocked in this browser. Open this site’s permissions in your browser or phone settings, allow notifications, return here, and select Enable & Verify. On iPhone/iPad, install the site from Safari’s Share menu → Add to Home Screen before enabling notifications.";
-            } else if (pushStatus.browserSupported && !pushStatus.configured) {
-                help.textContent = "This browser supports Web Push, but the GOAL$GAMBIT push service is not currently available. Keep this page open and retry after the service is restored, or contact support.";
-            } else if (pushStatus.browserSupported && pushStatus.permission === "granted") {
-                help.textContent = "Browser permission is granted, but this device has not been verified with the GOAL$GAMBIT push service. Select Enable & Verify to register it.";
-            } else if (!pushStatus.browserSupported) {
-                help.textContent = "This browser/device cannot receive background Web Push. Use GOAL$GAMBIT from a supported mobile browser/device, or sign in on the GOAL$GAMBIT Android companion. On this device, Match Hub updates work only while the page remains open.";
-            } else {
-                help.textContent = "Enable notifications to receive Konami match alerts and private room-code messages outside the open website.";
-            }
-            var status = document.createElement("p");
-            status.id = "gg-push-onboarding-status";
-            status.setAttribute("role", "status");
-            status.setAttribute("aria-live", "polite");
-            status.style.cssText = "min-height:1.4em;margin:0 0 10px;color:#f3d881";
-            var actions = document.createElement("div");
-            actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;align-items:center";
-            var enable = document.createElement("button");
-            enable.id = "gg-push-enable";
-            enable.type = "button";
-            enable.style.cssText = "padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700";
-            enable.textContent = pushStatus.browserSupported ? "Enable & Verify Notifications" : "I’ll Use a Supported Device or Android Companion";
-            var settings = document.createElement("a");
-            settings.href = "notification-settings.html";
-            settings.style.cssText = "align-self:center;color:#e4bd43";
-            settings.textContent = "Notification settings";
-            var signout = document.createElement("button");
-            signout.type = "button";
-            signout.style.cssText = "padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee";
-            signout.textContent = "Sign out";
-            actions.appendChild(enable);
-            actions.appendChild(settings);
-            actions.appendChild(signout);
-            card.appendChild(title);
-            card.appendChild(explanation);
-            card.appendChild(help);
-            card.appendChild(status);
-            card.appendChild(actions);
-            panel.appendChild(card);
-            document.body.appendChild(panel);
-            enable.addEventListener("click", async function() {
-                var button = this;
-                button.disabled = true;
-                status.textContent = pushStatus.browserSupported ? "Requesting permission and verifying this device with the server…" : "Please use a supported device for background match alerts. This device can receive in-page alerts only while Match Hub is open.";
-                if (!pushStatus.browserSupported) {
-                    sessionStorage.setItem("goalGambitPushAlternativeAcknowledged", "1");
-                    window.setTimeout(function() { panel.remove(); }, 1200);
-                    return;
-                }
-                try {
-                    await enablePushNotifications();
-                    status.textContent = "Notifications are enabled and this device is registered.";
-                    window.setTimeout(function() { panel.remove(); }, 900);
-                } catch (error) {
-                    status.textContent = error.message || "Could not enable notifications.";
-                    button.disabled = false;
-                }
-            });
-            signout.addEventListener("click", logout);
-        }).catch(function(error) {
-            console.error("Konami notification onboarding could not check device status:", error && error.message || error);
-        });
-    }
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initPushExperience, { once: true });
-    } else {
-        window.setTimeout(initPushExperience, 0);
-    }
-
     // ------------------------------------------------------------------
     // Wallet / profile helpers shared by every dashboard and match page
     // ------------------------------------------------------------------
@@ -593,6 +576,9 @@
         var balance = await refreshBalance();
         if (balance !== null) fillBalance(balance);
         await showDashboardAnnouncements();
+        if (user.game === "konami" || user.game === "both") {
+            showAndroidCompanionReminder().catch(function() {});
+        }
         return user;
     }
 
@@ -697,6 +683,7 @@
 
     window.GG = {
         API_BASE: API_BASE,
+        androidCompanionDownloadUrl: ANDROID_COMPANION_DOWNLOAD_URL,
         api: api,
         getToken: getToken,
         takePostLoginDestination: takePostLoginDestination,

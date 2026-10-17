@@ -7,6 +7,7 @@ const MAX_LEAGUE_PLAYERS = 20;
 
 module.exports = function (pool, authenticateToken) {
     const router = express.Router();
+    const requireKonamiCompanion = gameAccess(pool, "konami");
 
     // A league can be addressed by numeric id or by name (Bronze / Silver / Gold).
     async function findLeague(db, key) {
@@ -25,7 +26,7 @@ module.exports = function (pool, authenticateToken) {
         res.json({ success: true, leagues: r.rows });
     });
 
-    router.get("/:id/fixtures", authenticateToken, async (req,res)=>{
+    router.get("/:id/fixtures", authenticateToken, requireKonamiCompanion, async (req,res)=>{
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -150,7 +151,7 @@ module.exports = function (pool, authenticateToken) {
     });
 
     // Joining charges the entry stake from the wallet. No balance = no entry.
-    router.post("/:id/join", authenticateToken, async (req, res) => {
+    router.post("/:id/join", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const uid = Number(req.user.userId);
         const client = await pool.connect();
         try {
@@ -216,7 +217,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.post("/:id/cancel", authenticateToken, async (req, res) => {
+    router.post("/:id/cancel", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const uid = Number(req.user.userId);
         const client = await pool.connect();
         try {
@@ -289,7 +290,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.post("/:id/forfeit", authenticateToken, async (req, res) => {
+    router.post("/:id/forfeit", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const uid = Number(req.user.userId);
         const client = await pool.connect();
         try {

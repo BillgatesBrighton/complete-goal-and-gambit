@@ -119,13 +119,17 @@ explains that Chess tournament registration is not connected yet.
 Existing databases are upgraded automatically on the next `npm start`
 (or run `npm run setup-db`). Existing accounts default to the "both" dashboard.
 
-## 7. Native Android notifications with room-code reply
+## 7. GOAL$GAMBIT Android app and required Konami access
 
-The optional Android companion uses Firebase Cloud Messaging (FCM) and a
-normal Android notification action. The room-code sender can reply from the
-notification shade while eFootball stays open. The notification does not pop
-over the game or request overlay permission. Browser notifications continue
-to open the Match Hub.
+The Android companion enables native Firebase Cloud Messaging (FCM) match
+alerts and notification-based room-code chat replies while eFootball stays open
+on the website. Chess and eFootball gameplay remain on the website. Players
+choosing Konami or Both must sign in to the companion and enable notifications
+before they can enter eFootball matches, leagues, or tournaments. Both accounts
+can use Chess while setting up the companion. The API checks for an active
+Android device registration, so acknowledging the signup notice alone does not
+unlock Konami access. The notification does not pop over the game or request
+overlay permission.
 
 Install Android Studio with JDK 17 and Android SDK 36. In Firebase, register
 an Android app with package name `com.goalgambit.companion` and enable Cloud
@@ -137,13 +141,21 @@ the placeholders from `backend\.env.example` into the private
 `backend\.env` or set them in the backend process environment. Never commit
 either Firebase JSON file.
 
+The public APK will be served from
+`https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk`.
+Do not publish the download until Firebase and the public API host are configured.
+
 From the `android` directory, build a debug APK with
 `gradlew.bat assembleDebug`. If the API host differs from the configured
-Tailscale address, pass `-PGG_API_BASE_URL=https://your-backend-host` to
-Gradle. The APK is written to
+Tailscale address, pass `-PGG_API_BASE_URL=https://your-public-backend-host` to
+Gradle. A downloadable build must use an HTTPS API host reachable from the
+player's phone over the public internet; a private Tailscale-only address will
+not work for other players. The APK is written to
 `android\app\build\outputs\apk\debug\app-debug.apk`. After installation,
 sign in, enable notifications, and use **SEND TEST NOTIFICATION** to check
-delivery. A real match-ready alert shows **ENTER ROOM CODE** after you expand
-it in the notification shade; tap that action to open the reply field. A
-physical Android phone test is still required for delivery and inline reply
-behavior.
+delivery. After the public API and Firebase setup are verified, copy the APK
+to `frontend/downloads/goal-gambit-companion.apk` and publish the GitHub Pages
+update so the signup link becomes available. A real match-ready alert shows **ENTER ROOM CODE** after
+you expand it in the notification shade; tap that action to open the reply
+field. A physical Android phone test is still required for delivery and inline
+reply behavior.

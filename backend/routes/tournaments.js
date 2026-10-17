@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const express = require("express");
+const gameAccess = require("../middleware/gameAccess");
 const { ensureTournamentRound, recordFixtureResult } = require("../services/efootballtournament");
 
 function httpError(status, message) {
@@ -17,10 +18,11 @@ function parseId(value) {
 
 module.exports = function (pool, authenticateToken) {
     const router = express.Router();
+    const requireKonamiCompanion = gameAccess(pool, "konami");
 
     // The listing is user-specific because each card shows whether the
     // signed-in player has already entered.
-    router.get("/", authenticateToken, async (req, res) => {
+    router.get("/", authenticateToken, requireKonamiCompanion, async (req, res) => {
         res.set("Cache-Control", "no-store");
         try {
             const result = await pool.query(
@@ -79,7 +81,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.get("/:id/status", authenticateToken, async (req, res) => {
+    router.get("/:id/status", authenticateToken, requireKonamiCompanion, async (req, res) => {
         res.set("Cache-Control", "no-store");
         const id = parseId(req.params.id);
         if (!id) {
@@ -223,7 +225,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.post("/:id/join", authenticateToken, async (req, res) => {
+    router.post("/:id/join", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const id = parseId(req.params.id);
         if (!id) {
             return res.status(400).json({ success: false, message: "Invalid tournament ID." });
@@ -391,7 +393,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.post("/:id/cancel", authenticateToken, async (req, res) => {
+    router.post("/:id/cancel", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const id = parseId(req.params.id);
         const userId = Number(req.user.userId);
         if (!id) return res.status(400).json({ success: false, message: "Invalid tournament ID." });
@@ -519,7 +521,7 @@ module.exports = function (pool, authenticateToken) {
         }
     });
 
-    router.post("/:id/forfeit", authenticateToken, async (req, res) => {
+    router.post("/:id/forfeit", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const id = parseId(req.params.id);
         const userId = Number(req.user.userId);
         if (!id) return res.status(400).json({ success: false, message: "Invalid tournament ID." });
