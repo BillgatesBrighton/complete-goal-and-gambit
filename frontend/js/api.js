@@ -730,7 +730,7 @@
         gameHome: gameHome
     };
 
-    // Show a shared maintenance banner when the backend or database is unreachable.
+    // Show a short offline banner when the backend or database is unreachable.
     // The health probe is read-only, unauthenticated, and never sends payment data.
     function initServerStatus() {
         if (window.__GG_STATUS_MONITOR_STARTED || !document.body) return;
@@ -771,7 +771,7 @@
         function showOffline() {
             window.clearTimeout(recoveryTimer);
             wasOffline = true;
-            banner.textContent = "⚠ Server under maintenance. The server or database is offline, so some features are unavailable. Please try again shortly.";
+            banner.textContent = "Server offline";
             banner.style.background = "#2b1710";
             banner.style.color = "#fff7ed";
             banner.style.borderBottomColor = "#f4bd20";
