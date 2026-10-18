@@ -140,7 +140,8 @@ object Notifications {
 
         if (allowReply && senderAction && matchId > 0) {
             val input = RemoteInput.Builder(REMOTE_CODE_KEY)
-                .setLabel("Paste room code")
+                .setLabel("Type or paste room code")
+                .setAllowFreeFormInput(true)
                 .build()
             val intent = Intent(context, RoomCodeReplyReceiver::class.java)
                 .setAction("com.goalgambit.companion.SEND_ROOM_CODE")
@@ -153,7 +154,7 @@ object Notifications {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
-            val replyBuilder = Notification.Action.Builder(android.R.drawable.ic_menu_send, "SEND", pendingIntent)
+            val replyBuilder = Notification.Action.Builder(android.R.drawable.ic_menu_send, "REPLY", pendingIntent)
                 .addRemoteInput(input)
                 .setAllowGeneratedReplies(false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

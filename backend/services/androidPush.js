@@ -79,6 +79,9 @@ function createAndroidPushService(pool, options) {
             outcome = "accepted";
         } catch (error) {
             errorCode = String(error && error.code || "messaging/unknown-error").slice(0, 100);
+            // Log the provider's stable error code (never the registration token)
+            // so delivery failures can be distinguished from database failures.
+            console.error("Firebase Android push send failed:", errorCode);
             deactivate = errorCode === "messaging/registration-token-not-registered" ||
                 errorCode === "messaging/invalid-registration-token";
             const retryable = !deactivate && (
@@ -102,7 +105,7 @@ function createAndroidPushService(pool, options) {
             const retry = outcome === "queued";
             const delaySeconds = Math.min(3600, 15 * Math.pow(2, Math.max(0, job.attempt_count - 1)));
             await client.query(
-                "UPDATE android_push_delivery_jobs SET status=$2," +
+                "UPDATE android_push_delivery_jobs SET status=$2::varchar," +
                 "next_attempt_at=CASE WHEN $3 THEN NOW()+($4::int*INTERVAL '1 second') ELSE next_attempt_at END," +
                 "accepted_at=CASE WHEN $2='accepted' THEN NOW() ELSE accepted_at END," +
                 "last_error=$5,updated_at=NOW() WHERE id=$1",
@@ -119,7 +122,7 @@ function createAndroidPushService(pool, options) {
             await client.query("COMMIT");
         } catch (error) {
             await client.query("ROLLBACK").catch(function () {});
-            console.error("Android push delivery status could not be saved.");
+            console.error("Android push delivery status could not be saved:", error && error.code || "database-error");
         } finally {
             client.release();
         }

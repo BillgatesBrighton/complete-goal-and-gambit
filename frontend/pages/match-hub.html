@@ -626,6 +626,7 @@ button{
 .room-code-entry-status{min-height:1.5em;margin-top:9px!important;font-size:13px!important;color:#f0cf55!important;}
 .room-code-entry-status.error{color:#ff7373!important}
 .room-code-entry-status.success{color:#73df9b!important}
+.room-code-entry-status.pending{color:#e5c75c!important}
 @media(max-width:520px){.room-code-dialog{padding:18px}.room-code-dialog-actions{grid-template-columns:1fr}.room-code-dialog-actions .send-code-action{grid-column:auto}}
 
 @media(max-width:760px){
@@ -1842,7 +1843,7 @@ function updateRoomCodeForm(){
         roomCodeNotificationStatusMatchId = matchId;
         roomCodeNotificationCooldownUntil = 0;
         notificationStatus.textContent = "";
-        notificationStatus.classList.remove("error", "success");
+        notificationStatus.classList.remove("error", "success", "pending");
         notificationStatus.classList.add("hidden");
     }
     const canSend = !!(currentMatch && currentMatch.backendId && isSender() &&
@@ -1882,7 +1883,7 @@ async function sendRoomCodeAppNotification(){
     button.disabled = true;
     status.classList.remove("hidden");
     status.textContent = "Sending a room-code alert to your Android Companion…";
-    status.classList.remove("error", "success");
+    status.classList.remove("error", "success", "pending");
     try{
         const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/room-code-notification", {
             method: "POST", noRedirect: true
@@ -1898,8 +1899,8 @@ async function sendRoomCodeAppNotification(){
             }
             return;
         }
-        status.textContent = result.data.message || "Room-code notification queued for your Android Companion.";
-        status.classList.add("success");
+        status.textContent = result.data.message || "Firebase accepted the room-code alert for your Android Companion.";
+        status.classList.add(result.data.pending ? "pending" : "success");
         const cooldownSeconds = Math.max(1, Number(result.data.retryAfterSeconds) || 60);
         roomCodeNotificationCooldownUntil = Date.now() + cooldownSeconds * 1000;
         window.setTimeout(updateRoomCodeForm, cooldownSeconds * 1000);

@@ -1709,7 +1709,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     Number(match.room_code_revision || 0) + ":" + randomUUID(),
                 matchId,
                 title: "GOAL$GAMBIT — Match Room Code",
-                body: "Your opponent is waiting. Open this notification, reply with the room code, then tap Send.",
+                body: "Expand this notification and tap REPLY to type or paste the room code, then tap Send. You can stay in eFootball.",
                 page: "match-room",
                 androidOnly: true
             });
@@ -1733,10 +1733,40 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             await client.query("COMMIT");
             wakePushQueue();
-            return res.json({
-                success: true,
-                retryAfterSeconds: 60,
-                message: "Room-code notification queued for your Android Companion."
+            const deliveryDeadline = Date.now() + 6000;
+            let delivery = null;
+            do {
+                const result = await pool.query(
+                    `SELECT COUNT(*) FILTER (WHERE j.status='accepted')::int AS accepted_count,
+                            COUNT(*) FILTER (WHERE j.status IN ('queued','sending'))::int AS pending_count
+                       FROM android_push_delivery_jobs j
+                       JOIN android_push_tokens t ON t.id=j.token_id
+                      WHERE j.event_id=$1 AND t.user_id=$2`,
+                    [queued.id, userId]
+                );
+                delivery = result.rows[0] || { accepted_count: 0, pending_count: 0 };
+                if (Number(delivery.accepted_count) > 0 || Number(delivery.pending_count) === 0 || Date.now() >= deliveryDeadline) break;
+                await new Promise(resolve => setTimeout(resolve, 200));
+            } while (Date.now() < deliveryDeadline);
+
+            if (Number(delivery.accepted_count) > 0) {
+                return res.json({
+                    success: true,
+                    retryAfterSeconds: 60,
+                    message: "Firebase accepted the room-code alert for delivery to your Android Companion."
+                });
+            }
+            if (Number(delivery.pending_count) > 0) {
+                return res.status(202).json({
+                    success: true,
+                    pending: true,
+                    retryAfterSeconds: 60,
+                    message: "The room-code alert is still queued for Android delivery. Keep the Companion online while Firebase retries."
+                });
+            }
+            return res.status(503).json({
+                success: false,
+                message: "Firebase could not deliver the alert to an active Android device. Open the Companion, sign in to this GOAL$GAMBIT account, and try again."
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
