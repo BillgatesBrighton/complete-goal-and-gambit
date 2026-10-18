@@ -1198,8 +1198,7 @@ module.exports = function (
                         true,
 
                     message:
-                        stkResponse.CustomerMessage ||
-                        "STK Push sent to your phone.",
+                        "Check your phone for the STK prompt.",
 
                     checkoutRequestId:
                         stkResponse.CheckoutRequestID,
