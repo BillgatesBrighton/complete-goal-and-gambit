@@ -58,12 +58,8 @@ async function enqueueNotification(client, userId, notification) {
     const inserted = await client.query(
         `INSERT INTO push_notification_events
             (user_id, match_id, event_key, title, body, target_path)
-         SELECT $1, $2, $3, $4, $5, $6
-          WHERE NOT EXISTS (
-              SELECT 1 FROM push_notification_events
-               WHERE user_id=$1 AND event_key=$3
-          )
-         ON CONFLICT DO NOTHING
+         VALUES ($1::integer, $2::bigint, $3::varchar(180), $4::varchar(160), $5::varchar(240), $6::varchar(300))
+         ON CONFLICT (user_id, event_key) DO NOTHING
          RETURNING id`,
         [recipientId, matchId, eventKey, title, body, targetPath]
     );
