@@ -29,6 +29,7 @@ const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
 const createChessScheduleReminders = require("./services/chessScheduleReminders");
+const createAdminAnnouncementReminders = require("./services/adminAnnouncementReminders");
 const tournamentRoutes = require("./routes/tournaments");
 const leagueRoutes = require("./routes/leagues");
 const mpesaRoutes = require("./routes/mpesa");
@@ -39,6 +40,7 @@ const adminMatchManagementRoutes = require("./routes/adminMatchManagement");
 const adminComplaintCases = require("./routes/adminComplaintCases");
 const adminWalletRoutes = require("./routes/adminWallet");
 const chatRoutes = require("./routes/chat");
+const companionRoutes = require("./routes/companion");
 const authenticateToken = require("./middleware/authMiddleware");
 const gameAccess = require("./middleware/gameAccess");
 const repairDuplicateSupportThreads = require("./db/repairSupportThreads");
@@ -121,14 +123,17 @@ const pushService = {
         webPushService.start();
         androidPushService.start();
         chessScheduleReminders.start();
+        adminAnnouncementReminders.start();
     },
     stop: function () {
         webPushService.stop();
         androidPushService.stop();
         chessScheduleReminders.stop();
+        adminAnnouncementReminders.stop();
     }
 };
 const chessScheduleReminders = createChessScheduleReminders(pool, pushService);
+const adminAnnouncementReminders = createAdminAnnouncementReminders(pool, pushService);
 
 authenticateToken.setPool(pool);
 
@@ -852,12 +857,17 @@ app.use("/api/payments", mpesaC2b.router);
 
 app.use(
     "/api/chat",
-    chatRoutes(pool, authenticateToken, getOnlineUserIds)
+    chatRoutes(pool, authenticateToken, getOnlineUserIds, pushService)
+);
+
+app.use(
+    "/api/companion",
+    companionRoutes(pool, authenticateToken)
 );
 
 app.use(
     "/api/admin",
-    adminRoutes(pool, authenticateToken, getOnlineUserIds)
+    adminRoutes(pool, authenticateToken, getOnlineUserIds, pushService)
 );
 
 app.use(
@@ -878,8 +888,13 @@ app.use(
 app.get("/api/announcements/current", authenticateToken, async function(req, res) {
     try {
         const r = await pool.query(
-            `SELECT a.id,a.message,a.created_at FROM admin_announcements a
-             WHERE a.active=TRUE AND a.created_at >= NOW() - INTERVAL '30 days'
+            `SELECT a.id,a.message,a.created_at,a.event_name,a.event_at,a.event_time_zone FROM admin_announcements a
+             JOIN users recipient ON recipient.id=$1 AND recipient.account_status='active'
+             WHERE a.active=TRUE AND a.published_at IS NOT NULL AND a.published_at<=NOW()
+               AND a.created_at >= NOW() - INTERVAL '30 days'
+               AND (a.audience='all'
+                    OR (a.audience='chess' AND recipient.game IN ('chess','both'))
+                    OR (a.audience='konami' AND recipient.game IN ('konami','both')))
                AND NOT EXISTS (
                    SELECT 1 FROM admin_announcement_dismissals d
                    WHERE d.announcement_id=a.id AND d.user_id=$1
@@ -903,7 +918,11 @@ app.post("/api/announcements/:id/dismiss", authenticateToken, async function(req
         const r = await pool.query(
             `INSERT INTO admin_announcement_dismissals(announcement_id,user_id)
              SELECT a.id,$2 FROM admin_announcements a
-             WHERE a.id=$1 AND a.active=TRUE
+             JOIN users recipient ON recipient.id=$2 AND recipient.account_status='active'
+             WHERE a.id=$1 AND a.active=TRUE AND a.published_at IS NOT NULL AND a.published_at<=NOW()
+               AND (a.audience='all'
+                    OR (a.audience='chess' AND recipient.game IN ('chess','both'))
+                    OR (a.audience='konami' AND recipient.game IN ('konami','both')))
              ON CONFLICT(announcement_id,user_id)
              DO UPDATE SET dismissed_at=NOW()
              RETURNING announcement_id`,

@@ -7,7 +7,7 @@ const multer = require("multer");
 const { getImageType, safeStoragePath, storePrivateImage } = require("../services/privateEvidence");
 const router = express.Router();
 
-module.exports = function(pool, authenticateToken, getOnlineUserIds) {
+module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
     const complaintEvidenceDirectory = path.join(__dirname, "..", "uploads", "complaint-evidence");
     const complaintUpload = multer({
         storage: multer.memoryStorage(),
@@ -41,8 +41,9 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
     // Support threads use user_two_id=NULL. PostgreSQL UNIQUE constraints do
     // not treat NULL values as equal, so support threads must be found/created
     // explicitly instead of relying on ON CONFLICT.
-    async function getOrCreateSupportThread(userId) {
-        const created = await pool.query(
+    async function getOrCreateSupportThread(userId, queryable) {
+        const db = queryable || pool;
+        const created = await db.query(
             `INSERT INTO chat_threads(thread_type,user_one_id,user_two_id)
              VALUES('support',$1,NULL)
              ON CONFLICT (user_one_id)
@@ -54,7 +55,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
 
         if (created.rows.length) return created.rows[0].id;
 
-        const existing = await pool.query(
+        const existing = await db.query(
             `SELECT id FROM chat_threads
              WHERE thread_type='support' AND user_one_id=$1 AND user_two_id IS NULL
              ORDER BY id ASC LIMIT 1`,
@@ -66,6 +67,19 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         }
 
         return existing.rows[0].id;
+    }
+
+    async function enqueueSupportPush(client, userId, notification) {
+        if (!pushService || typeof pushService.enqueueNotification !== "function") return;
+        await client.query("SAVEPOINT support_push");
+        try {
+            await pushService.enqueueNotification(client, userId, notification);
+            await client.query("RELEASE SAVEPOINT support_push");
+        } catch (_) {
+            await client.query("ROLLBACK TO SAVEPOINT support_push").catch(function(){});
+            await client.query("RELEASE SAVEPOINT support_push").catch(function(){});
+            console.error("Support chat push could not be queued.");
+        }
     }
 
     // =========================================================
@@ -289,7 +303,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const me=Number(req.user.userId);
         try {
             const threadId = await getOrCreateSupportThread(me);
-            const thread=await pool.query(`SELECT user_cleared_at FROM chat_threads WHERE id=$1`,[threadId]);
+            const thread=await pool.query(`SELECT user_cleared_at,support_category,support_subject FROM chat_threads WHERE id=$1 AND user_one_id=$2`,[threadId,me]);
             const clearedAt=thread.rows[0]&&thread.rows[0].user_cleared_at;
             await pool.query(
                 `UPDATE chat_messages SET read_at=NOW()
@@ -298,11 +312,13 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                 [threadId,me,clearedAt]
             );
             const messages=await pool.query(
-                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,u.username
+                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,m.client_message_id,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
                  WHERE m.thread_id=$1 AND ($2::timestamptz IS NULL OR m.created_at>$2)
                  ORDER BY m.created_at ASC LIMIT 500`,[threadId,clearedAt]);
-            res.json({success:true,threadId,messages:messages.rows});
+            res.set("Cache-Control","private, no-store");
+            res.json({success:true,threadId,category:thread.rows[0]&&thread.rows[0].support_category,
+                subject:thread.rows[0]&&thread.rows[0].support_subject,messages:messages.rows});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load support chat."});
@@ -323,31 +339,87 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
 
     router.post("/support", authenticateToken, async (req,res) => {
         const me=Number(req.user.userId), message=String(req.body.message||"").trim();
+        const clientMessageId=String(req.body.clientMessageId||"").trim();
+        const category=String(req.body.category||"").trim().toLowerCase();
+        const subject=String(req.body.subject||"").trim();
+        const categories=new Set(["suggestion","technical","match_room_code","account","general","important"]);
         if(!message||message.length>2000)
             return res.status(400).json({success:false,message:"Message must be 1-2000 characters."});
+        if(clientMessageId&&(!/^[a-zA-Z0-9_-]{12,80}$/.test(clientMessageId)))
+            return res.status(400).json({success:false,message:"Invalid message reference."});
+        if(category&&!categories.has(category))
+            return res.status(400).json({success:false,message:"Choose a valid support category."});
+        if(subject.length>160)
+            return res.status(400).json({success:false,message:"Subject must be 160 characters or fewer."});
+        const client=await pool.connect();
+        let shouldDispatch=false;
         try {
-            const threadId = await getOrCreateSupportThread(me);
-            const m=await pool.query(
-                `INSERT INTO chat_messages(thread_id,sender_id,message)
-                 VALUES($1,$2,$3)
-                 RETURNING id,sender_id,message,created_at,read_at`,[threadId,me,message]);
-            await pool.query(`UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1`,[threadId]);
+            await client.query("BEGIN");
+            const account=await client.query("SELECT id,username,account_status FROM users WHERE id=$1",[me]);
+            if(!account.rows.length||account.rows[0].account_status!=="active"){
+                await client.query("ROLLBACK");
+                return res.status(403).json({success:false,message:"Your account cannot use support chat."});
+            }
+            const threadId = await getOrCreateSupportThread(me,client);
+            const m=clientMessageId
+                ? await client.query(
+                    `INSERT INTO chat_messages(thread_id,sender_id,message,client_message_id)
+                     VALUES($1,$2,$3,$4)
+                     ON CONFLICT(sender_id,client_message_id) WHERE client_message_id IS NOT NULL DO NOTHING
+                     RETURNING id,sender_id,message,created_at,read_at,client_message_id`,
+                    [threadId,me,message,clientMessageId])
+                : await client.query(
+                    `INSERT INTO chat_messages(thread_id,sender_id,message)
+                     VALUES($1,$2,$3)
+                     RETURNING id,sender_id,message,created_at,read_at,client_message_id`,[threadId,me,message]);
+            let saved=m.rows[0];
+            if(!saved&&clientMessageId){
+                const existing=await client.query(
+                    `SELECT id,sender_id,message,created_at,read_at,client_message_id
+                       FROM chat_messages WHERE sender_id=$1 AND client_message_id=$2`,[me,clientMessageId]);
+                saved=existing.rows[0];
+                if(!saved){
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({success:false,message:"This message reference is already in use."});
+                }
+                await client.query("COMMIT");
+                return res.json({success:true,duplicate:true,message:saved});
+            }
+            await client.query(
+                `UPDATE chat_threads SET admin_cleared_at=NULL,support_status='open',
+                    support_category=COALESCE($2,support_category),
+                    support_subject=COALESCE($3,support_subject)
+                  WHERE id=$1 AND user_one_id=$4`,
+                [threadId,category||null,subject||null,me]);
 
-            const admins = await pool.query(
+            const admins = await client.query(
                 `SELECT id FROM users WHERE role='admin' AND account_status='active'`
             );
             for (const admin of admins.rows) {
-                await pool.query(
+                await client.query(
                     `INSERT INTO system_notifications(user_id,type,title,message)
                      VALUES($1,'support_message',$2,$3)`,
-                    [admin.id, `Support message from ${req.user.username}`, message]
+                    [admin.id, `Support message from ${req.user.username}`, "A player sent a support message. Open the admin inbox to read it."]
                 );
+                await enqueueSupportPush(client,Number(admin.id),{
+                    eventKey:"support-message:"+threadId+":"+saved.id,
+                    title:"GOAL$GAMBIT — New support message",
+                    body:"A player sent a support message. Open the GOAL$GAMBIT Companion support chat.",
+                    page:"match-hub"
+                });
             }
 
-            res.json({success:true,message:m.rows[0]});
+            await client.query("COMMIT");
+            shouldDispatch=true;
+            res.status(201).json({success:true,message:saved});
         } catch(e) {
+            await client.query("ROLLBACK").catch(function(){});
             console.error(e);
             res.status(500).json({success:false,message:"Could not send support message."});
+        } finally {
+            client.release();
+            if(shouldDispatch&&pushService&&typeof pushService.sendPendingJobs==="function")
+                pushService.sendPendingJobs().catch(function(){});
         }
     });
 
@@ -399,14 +471,19 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const me=Number(req.user.userId);
         try {
             const r=await pool.query(
-                `SELECT a.id,a.message,a.created_at,a.admin_id,
+                `SELECT a.id,a.message,a.created_at,a.published_at,a.admin_id,
+                        a.event_name,a.event_at,a.event_time_zone,a.audience,
                         u.username AS admin_username,
                         CASE WHEN ar.user_id IS NULL THEN FALSE ELSE TRUE END AS is_read
                  FROM admin_announcements a
                  JOIN users u ON u.id=a.admin_id
+                 JOIN users recipient ON recipient.id=$1 AND recipient.account_status='active'
                  LEFT JOIN admin_announcement_reads ar
                    ON ar.announcement_id=a.id AND ar.user_id=$1
-                 WHERE a.active=TRUE
+                 WHERE a.active=TRUE AND a.published_at IS NOT NULL AND a.published_at<=NOW()
+                   AND (a.audience='all'
+                        OR (a.audience='chess' AND recipient.game IN ('chess','both'))
+                        OR (a.audience='konami' AND recipient.game IN ('konami','both')))
                  ORDER BY a.created_at DESC,a.id DESC
                  LIMIT 50`,[me]);
             const unread=r.rows.filter(x=>!x.is_read).length;
@@ -423,7 +500,12 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
             return res.status(400).json({success:false,message:"Invalid announcement."});
         try {
             const exists=await pool.query(
-                `SELECT id FROM admin_announcements WHERE id=$1 AND active=TRUE`,[id]);
+                `SELECT a.id FROM admin_announcements a
+                   JOIN users recipient ON recipient.id=$2 AND recipient.account_status='active'
+                  WHERE a.id=$1 AND a.active=TRUE AND a.published_at IS NOT NULL AND a.published_at<=NOW()
+                    AND (a.audience='all'
+                         OR (a.audience='chess' AND recipient.game IN ('chess','both'))
+                         OR (a.audience='konami' AND recipient.game IN ('konami','both')))`,[id,me]);
             if(!exists.rows.length)
                 return res.status(404).json({success:false,message:"Announcement not found."});
             await pool.query(
@@ -444,7 +526,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
             await pool.query(
                 `INSERT INTO admin_announcement_reads(announcement_id,user_id)
                  SELECT a.id,$1 FROM admin_announcements a
-                 WHERE a.active=TRUE
+                 JOIN users recipient ON recipient.id=$1 AND recipient.account_status='active'
+                 WHERE a.active=TRUE AND a.published_at IS NOT NULL AND a.published_at<=NOW()
+                   AND (a.audience='all'
+                        OR (a.audience='chess' AND recipient.game IN ('chess','both'))
+                        OR (a.audience='konami' AND recipient.game IN ('konami','both')))
                  ON CONFLICT(announcement_id,user_id)
                  DO UPDATE SET read_at=NOW()`,[me]);
             res.json({success:true});

@@ -797,9 +797,15 @@ CREATE TABLE IF NOT EXISTS chat_threads (
     user_two_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     admin_cleared_at TIMESTAMPTZ,
+    support_category VARCHAR(40),
+    support_subject VARCHAR(160),
+    support_status VARCHAR(20) NOT NULL DEFAULT 'open',
     UNIQUE(thread_type, user_one_id, user_two_id)
 );
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS support_category VARCHAR(40);
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS support_subject VARCHAR(160);
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS support_status VARCHAR(20) NOT NULL DEFAULT 'open';
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_one_cleared_at TIMESTAMPTZ;
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_two_cleared_at TIMESTAMPTZ;
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS user_cleared_at TIMESTAMPTZ;
@@ -810,10 +816,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     message TEXT NOT NULL CHECK (length(trim(message)) BETWEEN 1 AND 2000),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    read_at TIMESTAMPTZ
+    read_at TIMESTAMPTZ,
+    client_message_id VARCHAR(80)
 );
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS client_message_id VARCHAR(80);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_sender_client_id
+    ON chat_messages(sender_id,client_message_id) WHERE client_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS complaints (
     id BIGSERIAL PRIMARY KEY,
@@ -981,8 +991,31 @@ CREATE TABLE IF NOT EXISTS admin_announcements (
     admin_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     message     TEXT NOT NULL CHECK (length(trim(message)) BETWEEN 1 AND 2000),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    active      BOOLEAN NOT NULL DEFAULT TRUE
+    active      BOOLEAN NOT NULL DEFAULT TRUE,
+    event_name  VARCHAR(160),
+    event_at    TIMESTAMPTZ,
+    event_time_zone VARCHAR(64) NOT NULL DEFAULT 'Africa/Nairobi',
+    audience    VARCHAR(20) NOT NULL DEFAULT 'all' CHECK (audience IN ('all','chess','konami')),
+    publish_at  TIMESTAMPTZ,
+    published_at TIMESTAMPTZ,
+    reminder_24h_sent_at TIMESTAMPTZ,
+    reminder_1h_sent_at TIMESTAMPTZ,
+    reminder_start_sent_at TIMESTAMPTZ
 );
+
+-- Additive announcement fields for existing installations. Existing messages
+-- remain published at their original creation time and remain visible.
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS event_name VARCHAR(160);
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS event_at TIMESTAMPTZ;
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS event_time_zone VARCHAR(64) NOT NULL DEFAULT 'Africa/Nairobi';
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS audience VARCHAR(20) NOT NULL DEFAULT 'all';
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS publish_at TIMESTAMPTZ;
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS reminder_24h_sent_at TIMESTAMPTZ;
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS reminder_1h_sent_at TIMESTAMPTZ;
+ALTER TABLE admin_announcements ADD COLUMN IF NOT EXISTS reminder_start_sent_at TIMESTAMPTZ;
+UPDATE admin_announcements SET published_at=created_at
+ WHERE published_at IS NULL AND publish_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS admin_announcement_reads (
     announcement_id BIGINT NOT NULL REFERENCES admin_announcements(id) ON DELETE CASCADE,
@@ -1013,6 +1046,10 @@ CREATE INDEX IF NOT EXISTS idx_general_chat_messages_created
 
 CREATE INDEX IF NOT EXISTS idx_admin_announcements_created
     ON admin_announcements(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_announcements_publish_due
+    ON admin_announcements(publish_at,id) WHERE active=TRUE AND published_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_admin_announcements_event_due
+    ON admin_announcements(event_at,id) WHERE active=TRUE AND published_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_admin_announcement_reads_user
     ON admin_announcement_reads(user_id, announcement_id);

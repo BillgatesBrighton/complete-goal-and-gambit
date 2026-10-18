@@ -167,17 +167,25 @@ test("Android sender alert offers inline code reply and persists until successfu
     const androidRoot = path.join(__dirname, "..", "..", "android", "app", "src", "main");
     const notificationSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "Notifications.kt"), "utf8");
     const replySource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeReplyReceiver.kt"), "utf8");
+    const workerSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeSendWorker.kt"), "utf8");
     const manifest = fs.readFileSync(path.join(androidRoot, "AndroidManifest.xml"), "utf8");
     assert.match(notificationSource, /RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
     assert.match(notificationSource, /\.setLabel\("Paste room code"\)/);
-    assert.match(notificationSource, /Builder\(android\.R\.drawable\.ic_menu_send, "REPLY", pendingIntent\)/);
+    assert.match(notificationSource, /Builder\(android\.R\.drawable\.ic_menu_send, "SEND", pendingIntent\)/);
     assert.match(notificationSource, /\.setAutoCancel\(!persistent\)/);
     assert.match(notificationSource, /NotificationManager\.IMPORTANCE_DEFAULT/);
+    assert.match(notificationSource, /ROOM_CODE_CHANNEL_ID[\s\S]*?NotificationManager\.IMPORTANCE_HIGH/);
+    assert.match(notificationSource, /Notification\.PRIORITY_HIGH/);
+    assert.match(replySource, /WorkManager\.getInstance\(app\)\.enqueueUniqueWork/);
     assert.match(replySource, /Notifications\.showReplySending/);
-    assert.match(replySource, /Notifications\.showReplySuccess/);
+    assert.match(replySource, /TokenStore\.protect\(app, code\)/);
+    assert.match(workerSource, /Api\.sendRoomCode\(matchId, code, bearer\)/);
+    assert.match(workerSource, /if \(response\.ok\(\)\) \{[\s\S]*?Notifications\.showReplySuccess/);
+    assert.match(workerSource, /Result\.retry\(\)/);
     assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Sent/);
     assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Not Sent/);
     assert.match(replySource, /Regex\("\^\[A-Za-z0-9 _-\]\{1,50\}\$"\)\.matches\(code\)/);
+    assert.match(manifest, /android\.permission\.POST_NOTIFICATIONS/);
     assert.doesNotMatch(manifest, /SYSTEM_ALERT_WINDOW|TYPE_APPLICATION_OVERLAY/);
 });
 

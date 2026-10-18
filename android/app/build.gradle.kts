@@ -35,8 +35,8 @@ android {
         applicationId = "com.goalgambit.companion"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 5
+        versionName = "1.0.4"
         buildConfigField("String", "API_BASE_URL", "\"$configuredApiBase\"")
     }
 
@@ -84,4 +84,5 @@ tasks.configureEach {
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:35.0.0"))
     implementation("com.google.firebase:firebase-messaging")
+    implementation("androidx.work:work-runtime:2.10.5")
 }

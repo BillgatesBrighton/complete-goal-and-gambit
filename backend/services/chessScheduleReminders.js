@@ -23,10 +23,7 @@ function createChessScheduleReminders(pool, pushService, options) {
         try {
             await client.query("BEGIN");
             const result = await client.query(
-                `SELECT s.*,h.username AS host_username,g.username AS guest_username
-                   FROM chess_scheduled_matches s
-                   JOIN users h ON h.id=s.host_user_id
-                   JOIN users g ON g.id=s.guest_user_id
+                `SELECT s.* FROM chess_scheduled_matches s
                   WHERE s.id=$1 FOR UPDATE OF s`,
                 [scheduleId]
             );
@@ -61,17 +58,14 @@ function createChessScheduleReminders(pool, pushService, options) {
             const title = phase === "start" ? "Your Chess match is ready to start"
                 : phase === "10m" ? "Your Chess match starts in 10 minutes"
                 : "Your Chess match is coming up";
-            const userPairs = [
-                { id: Number(schedule.host_user_id), opponent: schedule.guest_username },
-                { id: Number(schedule.guest_user_id), opponent: schedule.host_username }
-            ];
-            for (const player of userPairs) {
+            const userIds = [Number(schedule.host_user_id), Number(schedule.guest_user_id)];
+            for (const userId of userIds) {
                 const body = phase === "start"
-                    ? "It's time for your Chess match with " + player.opponent + " (" + timestamp + "). Open Chess on the website and both players can mark themselves ready to start."
+                    ? "Your Chess game is scheduled for " + timestamp + ". Open GOAL$GAMBIT and check your Match Hub."
                     : phase === "10m"
-                        ? "Your Chess match with " + player.opponent + " starts at " + timestamp + ". Open Chess on the website and get ready."
-                        : "Your Chess match with " + player.opponent + " starts in about an hour, at " + timestamp + ".";
-                await pushService.enqueueNotification(client, player.id, {
+                        ? "You have a Chess game coming up at " + timestamp + ". Open GOAL$GAMBIT to check your Match Hub."
+                        : "You have an upcoming Chess game at " + timestamp + ". Open GOAL$GAMBIT and check your Match Hub.";
+                await pushService.enqueueNotification(client, userId, {
                     eventKey: "chess-schedule-reminder-" + phase + ":" + schedule.id,
                     title: title,
                     body: body,

@@ -37,37 +37,40 @@ final class Api {
         connection.setReadTimeout(12000);
         connection.setUseCaches(false);
         connection.setRequestProperty("Accept", "application/json");
-        if (bearer != null && !bearer.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + bearer);
-        }
-        if (body != null) {
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            try (java.io.OutputStream output = connection.getOutputStream()) {
-                output.write(body.toString().getBytes(StandardCharsets.UTF_8));
-            }
-        }
-        int status = connection.getResponseCode();
-        InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-        String text = "";
-        if (stream != null) {
-            try (InputStream input = stream) {
-                ByteArrayOutputStream output = new ByteArrayOutputStream();
-                byte[] buffer = new byte[4096];
-                int read;
-                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
-                text = new String(output.toByteArray(), StandardCharsets.UTF_8);
-            }
-        }
-        connection.disconnect();
-        JSONObject json;
         try {
-            json = new JSONObject(text);
-        } catch (Exception ignored) {
-            json = new JSONObject();
-            json.put("message", status >= 500 ? "The GOAL$GAMBIT server could not complete the request." : "The server returned an unreadable response.");
+            if (bearer != null && !bearer.isEmpty()) {
+                connection.setRequestProperty("Authorization", "Bearer " + bearer);
+            }
+            if (body != null) {
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                try (java.io.OutputStream output = connection.getOutputStream()) {
+                    output.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            int status = connection.getResponseCode();
+            InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            String text = "";
+            if (stream != null) {
+                try (InputStream input = stream) {
+                    ByteArrayOutputStream output = new ByteArrayOutputStream();
+                    byte[] buffer = new byte[4096];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+                    text = new String(output.toByteArray(), StandardCharsets.UTF_8);
+                }
+            }
+            JSONObject json;
+            try {
+                json = new JSONObject(text);
+            } catch (Exception ignored) {
+                json = new JSONObject();
+                json.put("message", status >= 500 ? "The GOAL$GAMBIT server could not complete the request." : "The server returned an unreadable response.");
+            }
+            return new Result(status, json);
+        } finally {
+            connection.disconnect();
         }
-        return new Result(status, json);
     }
 
     static Result login(String username, String password) throws Exception {
@@ -108,5 +111,30 @@ final class Api {
 
     static Result testAndroidNotification(String bearer) throws Exception {
         return request("POST", "/api/push/android/test", bearer, new JSONObject());
+    }
+
+    static Result getAnnouncements(String bearer) throws Exception {
+        return request("GET", "/api/chat/announcements", bearer, null);
+    }
+
+    static Result markAnnouncementRead(long announcementId, String bearer) throws Exception {
+        if (announcementId <= 0) throw new IllegalArgumentException("Invalid announcement id.");
+        return request("POST", "/api/chat/announcements/" + announcementId + "/read", bearer, new JSONObject());
+    }
+
+    static Result getUpcomingGameStatus(String bearer) throws Exception {
+        return request("GET", "/api/companion/upcoming", bearer, null);
+    }
+
+    static Result getCompanionProfile(String bearer) throws Exception {
+        return request("GET", "/api/companion/profile", bearer, null);
+    }
+
+    static Result getSupportMessages(String bearer) throws Exception {
+        return request("GET", "/api/chat/support", bearer, null);
+    }
+
+    static Result sendSupportMessage(JSONObject payload, String bearer) throws Exception {
+        return request("POST", "/api/chat/support", bearer, payload);
     }
 }

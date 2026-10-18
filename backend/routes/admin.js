@@ -5,11 +5,13 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
 const router = express.Router();
 
-module.exports = function(pool, authenticateToken, getOnlineUserIds) {
-    async function getOrCreateSupportThread(userId) {
-        const created = await pool.query(
+module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
+    async function getOrCreateSupportThread(userId, queryable) {
+        const db = queryable || pool;
+        const created = await db.query(
             `INSERT INTO chat_threads(thread_type,user_one_id,user_two_id)
              VALUES('support',$1,NULL)
              ON CONFLICT (user_one_id)
@@ -20,7 +22,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         );
         if (created.rows.length) return created.rows[0].id;
 
-        const existing = await pool.query(
+        const existing = await db.query(
             `SELECT id FROM chat_threads
              WHERE thread_type='support' AND user_one_id=$1 AND user_two_id IS NULL
              ORDER BY id ASC LIMIT 1`,
@@ -754,13 +756,15 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const includeCleared = String(req.query.includeCleared || "").toLowerCase() === "true";
         try {
             const r = await pool.query(
-                `SELECT ct.id, ct.admin_cleared_at, u.id AS user_id, u.username,
+                `SELECT ct.id, ct.admin_cleared_at, ct.support_category,ct.support_subject,ct.support_status,
+                        u.id AS user_id, u.username,
                         (SELECT message FROM chat_messages m WHERE m.thread_id=ct.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                         (SELECT created_at FROM chat_messages m WHERE m.thread_id=ct.id ORDER BY m.created_at DESC LIMIT 1) AS last_at,
                         (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=ct.id AND m.sender_id <> $1 AND m.read_at IS NULL)::int AS unread
                  FROM chat_threads ct
                  JOIN users u ON u.id=ct.user_one_id
-                 WHERE ct.thread_type='support' AND ($2::boolean OR ct.admin_cleared_at IS NULL)
+                 WHERE ct.thread_type='support'
+                   AND ($2::boolean OR (ct.admin_cleared_at IS NULL AND COALESCE(ct.support_status,'open')<>'resolved'))
                  ORDER BY last_at DESC NULLS LAST`,
                 [req.user.userId, includeCleared]
             );
@@ -824,6 +828,29 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         }
     });
 
+    router.post("/support/:userId/status", authenticateToken, adminOnly, async (req, res) => {
+        const userId = Number(req.params.userId);
+        const status = String(req.body.status || "").trim().toLowerCase();
+        if (!Number.isSafeInteger(userId) || userId <= 0 || !["open", "resolved"].includes(status)) {
+            return res.status(400).json({success:false,message:"Choose open or resolved for this support conversation."});
+        }
+        try {
+            const result = await pool.query(
+                `UPDATE chat_threads SET support_status=$1,
+                        admin_cleared_at=CASE WHEN $1='open' THEN NULL ELSE admin_cleared_at END
+                  WHERE thread_type='support' AND user_one_id=$2 AND user_two_id IS NULL
+                  RETURNING support_status`,
+                [status,userId]
+            );
+            if (!result.rows.length) return res.status(404).json({success:false,message:"Support conversation not found."});
+            res.json({success:true,status:result.rows[0].support_status,
+                message:status==='resolved'?"Support conversation marked resolved.":"Support conversation reopened."});
+        } catch (error) {
+            console.error("Admin support status update failed.");
+            res.status(500).json({success:false,message:"Could not update support status."});
+        }
+    });
+
     router.get("/support/:userId", authenticateToken, adminOnly, async (req, res) => {
         const userId = Number(req.params.userId);
         try {
@@ -839,7 +866,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
                 [t.rows[0].id,userId]
             );
             const messages = await pool.query(
-                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,u.username
+                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,m.client_message_id,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
                  WHERE m.thread_id=$1 ORDER BY m.created_at ASC`,
                 [t.rows[0].id]
@@ -856,25 +883,56 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const message = String(req.body.message || "").trim();
         if (!message || message.length > 2000)
             return res.status(400).json({success:false,message:"Message must be 1-2000 characters."});
+        const client=await pool.connect();
+        let shouldDispatch=false;
         try {
-            const threadId = await getOrCreateSupportThread(userId);
-            const m = await pool.query(
+            await client.query("BEGIN");
+            const target=await client.query("SELECT id,username,account_status FROM users WHERE id=$1",[userId]);
+            if(!target.rows.length||target.rows[0].account_status!=='active'){
+                await client.query("ROLLBACK");
+                return res.status(404).json({success:false,message:"Player account is not available."});
+            }
+            const threadId = await getOrCreateSupportThread(userId,client);
+            const m = await client.query(
                 `INSERT INTO chat_messages(thread_id,sender_id,message) VALUES($1,$2,$3)
-                 RETURNING id,sender_id,message,created_at`,
+                 RETURNING id,sender_id,message,created_at,client_message_id`,
                 [threadId,req.user.userId,message]
             );
-            await pool.query(`UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1`,[threadId]);
+            await client.query(`UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1`,[threadId]);
 
-            await pool.query(
+            await client.query(
                 `INSERT INTO system_notifications(user_id,type,title,message)
                  VALUES($1,'support_reply',$2,$3)`,
-                [userId, `Admin reply from ${req.user.username}`, message]
+                [userId, `Admin reply from ${req.user.username}`, "An administrator replied to your support conversation. Open GOAL$GAMBIT Companion to read it."]
             );
 
+            if(pushService&&typeof pushService.enqueueNotification==="function"){
+                await client.query("SAVEPOINT support_reply_push");
+                try{
+                    await pushService.enqueueNotification(client,userId,{
+                        eventKey:"support-reply:"+threadId+":"+m.rows[0].id,
+                        title:"GOAL$GAMBIT — Admin Support Reply",
+                        body:"An administrator replied to your support conversation. Open GOAL$GAMBIT Companion to read it.",
+                        page:"match-hub"
+                    });
+                    await client.query("RELEASE SAVEPOINT support_reply_push");
+                    shouldDispatch=true;
+                }catch(_){
+                    await client.query("ROLLBACK TO SAVEPOINT support_reply_push").catch(function(){});
+                    await client.query("RELEASE SAVEPOINT support_reply_push").catch(function(){});
+                    console.error("Admin support reply push could not be queued.");
+                }
+            }
+            await client.query("COMMIT");
             res.json({success:true,message:m.rows[0]});
         } catch (e) {
+            await client.query("ROLLBACK").catch(function(){});
             console.error(e);
             res.status(500).json({success:false,message:"Failed to send support reply."});
+        } finally {
+            client.release();
+            if(shouldDispatch&&pushService&&typeof pushService.sendPendingJobs==="function")
+                pushService.sendPendingJobs().catch(function(){});
         }
     });
 
@@ -884,9 +942,13 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
     router.get("/announcements", authenticateToken, adminOnly, async (req,res) => {
         try {
             const r=await pool.query(
-                `SELECT a.id,a.message,a.created_at,a.active,
+                `SELECT a.id,a.message,a.created_at,a.active,a.event_name,a.event_at,
+                        a.event_time_zone,a.audience,a.publish_at,a.published_at,
                         u.username AS admin_username,
-                        (SELECT COUNT(*) FROM users WHERE account_status='active')::int AS active_users
+                        (SELECT COUNT(*) FROM users p WHERE p.account_status='active'
+                          AND (a.audience='all'
+                               OR (a.audience='chess' AND p.game IN ('chess','both'))
+                               OR (a.audience='konami' AND p.game IN ('konami','both'))))::int AS active_users
                  FROM admin_announcements a
                  JOIN users u ON u.id=a.admin_id
                  ORDER BY a.created_at DESC,a.id DESC
@@ -903,17 +965,65 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds) {
         const message=String(req.body.message||"").trim();
         if(!message||message.length>2000)
             return res.status(400).json({success:false,message:"Announcement must be 1-2000 characters."});
+        const eventName=String(req.body.eventName||"").trim();
+        const eventAtInput=String(req.body.eventAt||"").trim();
+        const eventTimeZone=String(req.body.eventTimeZone||"Africa/Nairobi").trim();
+        const audience=String(req.body.audience||"all").trim().toLowerCase();
+        const publishAtInput=String(req.body.publishAt||"").trim();
+        if(!["all","chess","konami"].includes(audience))
+            return res.status(400).json({success:false,message:"Choose all users, Chess players, or Konami players."});
+        if(eventName.length>160)
+            return res.status(400).json({success:false,message:"Event name must be 160 characters or fewer."});
+        if(Boolean(eventName)!==Boolean(eventAtInput))
+            return res.status(400).json({success:false,message:"Enter both the event name and its date and start time."});
+        let eventAt=null, publishAt=null;
+        const now=Date.now();
+        if(eventAtInput){
+            eventAt=new Date(eventAtInput);
+            if(Number.isNaN(eventAt.getTime())||eventAt.getTime()<=now)
+                return res.status(400).json({success:false,message:"The event start time must be in the future."});
+        }
+        if(publishAtInput){
+            publishAt=new Date(publishAtInput);
+            if(Number.isNaN(publishAt.getTime())||publishAt.getTime()<=now)
+                return res.status(400).json({success:false,message:"Choose a future delivery time, or leave it blank to publish immediately."});
+            if(eventAt&&publishAt.getTime()>=eventAt.getTime())
+                return res.status(400).json({success:false,message:"Delivery must be scheduled before the event starts."});
+        }
         try {
-            const r=await pool.query(
-                `INSERT INTO admin_announcements(admin_id,message)
-                 VALUES($1,$2)
-                 RETURNING id,message,created_at,active`,
-                [req.user.userId,message]
+            new Intl.DateTimeFormat("en",{timeZone:eventTimeZone});
+        } catch (_) {
+            return res.status(400).json({success:false,message:"Choose a valid event time zone."});
+        }
+        const client=await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const r=await client.query(
+                `INSERT INTO admin_announcements
+                    (admin_id,message,event_name,event_at,event_time_zone,audience,publish_at,published_at)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $7::timestamptz IS NULL THEN NOW() ELSE NULL END)
+                 RETURNING id,message,created_at,active,event_name,event_at,event_time_zone,
+                           audience,publish_at,published_at`,
+                [req.user.userId,message,eventName||null,eventAt,eventTimeZone,audience,publishAt]
             );
-            res.status(201).json({success:true,message:"Announcement sent to all users.",announcement:r.rows[0]});
+            let queuedUsers=0;
+            if(!publishAt) queuedUsers=await enqueueAnnouncementToAudience(client,pushService,r.rows[0],"publish");
+            await client.query("COMMIT");
+            if(!publishAt&&pushService&&typeof pushService.sendPendingJobs==="function")
+                pushService.sendPendingJobs().catch(function(){});
+            res.status(201).json({
+                success:true,
+                scheduled:Boolean(publishAt),
+                queuedUsers,
+                message:publishAt?"Announcement scheduled for delivery.":"Announcement published to its selected audience.",
+                announcement:r.rows[0]
+            });
         } catch(e) {
+            await client.query("ROLLBACK").catch(function(){});
             console.error(e);
             res.status(500).json({success:false,message:"Failed to send announcement."});
+        } finally {
+            client.release();
         }
     });
 
