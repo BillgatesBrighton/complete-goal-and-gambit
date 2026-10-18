@@ -25,7 +25,7 @@ module.exports = function gameAccess(pool, needed) {
                 return res.status(403).json({
                     success: false,
                     message: needed === "chess"
-                        ? "Your account is registered for Konami eFootball only."
+                        ? "Your account is registered for eFootball only."
                         : "Your account is registered for Chess only."
                 });
             }
@@ -35,7 +35,7 @@ module.exports = function gameAccess(pool, needed) {
                     success: false,
                     code: "ANDROID_COMPANION_REQUIRED",
                     downloadUrl: "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk",
-                    message: "Install the Android notification companion, sign in, and enable match alerts and room-code chat replies before using Konami eFootball on the website. Chess remains available for Both accounts."
+                    message: "Install the Android notification companion, sign in, and enable match alerts and room-code chat replies before using eFootball on the website. Chess remains available for Both accounts."
                 });
             }
 

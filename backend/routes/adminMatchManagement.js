@@ -248,7 +248,7 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
                     await client.query(
                         `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
                          VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
-                        [playerId, stake, ref, "Administrator cancelled " + (game === "chess" ? "Chess" : "Konami") + " match #" + matchId + "; locked stake refunded."]
+                        [playerId, stake, ref, "Administrator cancelled " + (game === "chess" ? "Chess" : "eFootball") + " match #" + matchId + "; locked stake refunded."]
                     );
                 }
             }
@@ -324,7 +324,7 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
         try {
             await client.query("BEGIN");
             const found = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
-            if (!found.rows.length) throw Object.assign(new Error("Konami match not found."), { status: 404 });
+            if (!found.rows.length) throw Object.assign(new Error("eFootball match not found."), { status: 404 });
             const match = found.rows[0];
             if (!canEditScore(Object.assign({ game: "konami" }, match))) {
                 throw Object.assign(new Error("Only an unsettled, started match can receive an administrator score."), { status: 409 });

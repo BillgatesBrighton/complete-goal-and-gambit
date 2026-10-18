@@ -1307,6 +1307,7 @@ async function findMatch() {
 
 function loadActiveMatch() {
 
+    const box = document.getElementById("activeMatch");
     const saved =
         localStorage.getItem(
             "goalGambitCurrentMatch"
@@ -1314,6 +1315,7 @@ function loadActiveMatch() {
 
 
     if (!saved) {
+        box.classList.remove("show");
         return;
     }
 
@@ -1326,18 +1328,10 @@ function loadActiveMatch() {
             );
 
 
-        if (!match) {
+        if (!match || ["completed", "cancelled", "search_expired"].includes(String(match.status || "").toLowerCase())) {
+            box.classList.remove("show");
+            localStorage.removeItem("goalGambitCurrentMatch");
             return;
-        }
-
-
-        if (
-            match.status ===
-            "completed"
-        ) {
-
-            return;
-
         }
 
 
@@ -1389,12 +1383,70 @@ function loadActiveMatch() {
             error
         );
 
-        localStorage.removeItem(
-            "goalGambitCurrentMatch"
-        );
+        localStorage.removeItem("goalGambitCurrentMatch");
+        box.classList.remove("show");
 
     }
 
+}
+
+
+/* The local copy lets the shortcut render quickly, but the backend is the
+   source of truth. This also clears it when a match is cancelled elsewhere. */
+let activeMatchSyncInFlight = false;
+
+async function syncActiveMatchFromServer() {
+    if (activeMatchSyncInFlight || !window.GG || typeof GG.api !== "function" ||
+        typeof GG.getToken !== "function" || !GG.getToken()) return;
+    activeMatchSyncInFlight = true;
+
+    try {
+        const result = await GG.api("/api/efootball/matches/active", { noRedirect: true });
+        if (!result || !result.ok) return;
+
+        const activeMatches = Array.isArray(result.data.matches)
+            ? result.data.matches
+            : result.data.match
+                ? [result.data.match]
+                : [];
+        const saved = JSON.parse(localStorage.getItem("goalGambitCurrentMatch") || "null");
+        const serverMatch = (saved && saved.backendId
+            ? activeMatches.find(item => String(item.id) === String(saved.backendId))
+            : null) || activeMatches[0];
+
+        if (!serverMatch) {
+            if (saved && saved.backendId) localStorage.removeItem("goalGambitCurrentMatch");
+            document.getElementById("activeMatch").classList.remove("show");
+            return;
+        }
+
+        const synced = {
+            id: "GG-" + serverMatch.id,
+            backendId: serverMatch.id,
+            game: "eFootball",
+            mode: serverMatch.league
+                ? serverMatch.league + " League"
+                : String(serverMatch.mode || "ranked").replace(/\b\w/g, character => character.toUpperCase()),
+            stake: Number(serverMatch.stake_amount || 0),
+            player: serverMatch.yourName || getAccount().username || "Player",
+            opponent: serverMatch.opponentFound ? serverMatch.opponentName || "Opponent" : "Opponent",
+            status: serverMatch.status || "waiting",
+            resultSubmitted: Boolean(serverMatch.youAreCreator
+                ? serverMatch.creator_submitted
+                : serverMatch.opponent_submitted),
+            createdAt: serverMatch.created_at || new Date().toISOString()
+        };
+
+        const syncedJson = JSON.stringify(synced);
+        if (localStorage.getItem("goalGambitCurrentMatch") !== syncedJson) {
+            localStorage.setItem("goalGambitCurrentMatch", syncedJson);
+        }
+        loadActiveMatch();
+    } catch (error) {
+        console.error("Could not sync the active match shortcut:", error);
+    } finally {
+        activeMatchSyncInFlight = false;
+    }
 }
 
 
@@ -1410,6 +1462,15 @@ function hideActiveMatch() {
 
 
 loadActiveMatch();
+syncActiveMatchFromServer();
+
+window.addEventListener("storage", function(event) {
+    if (event.key !== "goalGambitCurrentMatch") return;
+    loadActiveMatch();
+    syncActiveMatchFromServer();
+});
+
+setInterval(syncActiveMatchFromServer, 5000);
 
 
 /* =========================================================
@@ -1423,6 +1484,7 @@ window.addEventListener(
         updateBalanceDisplay();
 
         loadActiveMatch();
+        syncActiveMatchFromServer();
 
     }
 );
@@ -1435,6 +1497,7 @@ window.addEventListener(
         updateBalanceDisplay();
 
         loadActiveMatch();
+        syncActiveMatchFromServer();
 
     }
 );

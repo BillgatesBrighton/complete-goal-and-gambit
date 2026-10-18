@@ -98,7 +98,7 @@ registration is server-backed; the separate old Chess tournament lobby now
 explains that Chess tournament registration is not connected yet.
 
 ## 6. What changed in this update
-- **Three dashboards.** At sign up a player picks Chess, Konami eFootball or Both.
+- **Three dashboards.** At sign up a player picks Chess, eFootball or Both.
   The choice is stored on the account (not just in the browser), so login opens
   the right page on any device: `chess.html`, `konami.html` or `both.html`.
   `dashboard.html` is now just a router. Each dashboard shows the live username
@@ -119,16 +119,16 @@ explains that Chess tournament registration is not connected yet.
 Existing databases are upgraded automatically on the next `npm start`
 (or run `npm run setup-db`). Existing accounts default to the "both" dashboard.
 
-## 7. GOAL$GAMBIT Android app and required Konami access
+## 7. GOAL$GAMBIT Android app and required eFootball access
 
 The Android companion enables native Firebase Cloud Messaging (FCM) match
 alerts and notification-based room-code chat replies while eFootball stays open
 on the website. Chess and eFootball gameplay remain on the website. Players
-choosing Konami or Both must sign in to the companion and enable notifications
+choosing eFootball or Both must sign in to the companion and enable notifications
 before they can enter eFootball matches, leagues, or tournaments. Both accounts
 can use Chess while setting up the companion. The API checks for an active
 Android device registration, so acknowledging the signup notice alone does not
-unlock Konami access. The notification does not pop over the game or request
+unlock eFootball access. The notification does not pop over the game or request
 overlay permission.
 
 Install Android Studio with JDK 17 and Android SDK 36. In Firebase, register

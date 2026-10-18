@@ -259,7 +259,7 @@ document.getElementById("loginForm").addEventListener("submit", async function (
         return;
     }
 
-    // The game (Chess / Konami / Both) is stored on the account, so the
+    // The game (Chess / eFootball / Both) is stored on the account, so the
     // right dashboard opens on any device.
     GG.saveSession(result.data.token, result.data.user, result.data.user.game);
     location.replace(GG.takePostLoginDestination() || "dashboard.html");

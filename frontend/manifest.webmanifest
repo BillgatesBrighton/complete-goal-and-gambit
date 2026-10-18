@@ -2,7 +2,7 @@
   "id": "./",
   "name": "GOAL$GAMBIT",
   "short_name": "GOAL$GAMBIT",
-  "description": "Chess and Konami eFootball matches",
+  "description": "Chess and eFootball matches",
   "start_url": "pages/dashboard.html",
   "scope": "./",
   "display": "standalone",

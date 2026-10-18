@@ -180,9 +180,9 @@
         var title = document.createElement("h2");
         title.id = "gg-android-companion-title";
         title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
-        title.textContent = "Android Companion required for Konami";
+        title.textContent = "Android Companion required for eFootball";
         var explanation = document.createElement("p");
-        explanation.textContent = "Install the Android notification companion, sign in with this account, and enable match alerts and room-code chat replies. Play Chess and eFootball on the website. Konami matches and tournaments unlock after the app registers your phone. Chess remains available for Both accounts.";
+        explanation.textContent = "Install the Android notification companion, sign in with this account, and enable match alerts and room-code chat replies. Play Chess and eFootball on the website. eFootball matches and tournaments unlock after the app registers your phone. Chess remains available for Both accounts.";
         var download = document.createElement("a");
         var requestedUrl = data && typeof data.downloadUrl === "string" ? data.downloadUrl : "";
         download.href = /^https:\/\//i.test(requestedUrl) ? requestedUrl : ANDROID_COMPANION_DOWNLOAD_URL;
@@ -480,7 +480,8 @@
             activeSubscriptions: server.ok ? Number(server.data.activeSubscriptions || 0) : 0,
             androidConfigured: !!(server.ok && server.data.androidConfigured),
             activeAndroidDevices: server.ok ? Number(server.data.activeAndroidDevices || 0) : 0,
-            androidDevices: server.ok && Array.isArray(server.data.androidDevices) ? server.data.androidDevices : [],
+            canViewAndroidDeviceDetails: !!(server.ok && server.data.canViewAndroidDeviceDetails),
+            androidDevices: server.ok && server.data.canViewAndroidDeviceDetails && Array.isArray(server.data.androidDevices) ? server.data.androidDevices : [],
             thisDeviceRegistered: localSubscription,
             serverReachable: !!server.ok
         };
@@ -533,7 +534,7 @@
         if (me.ok && me.data.user && game) {
             var g = me.data.user.game;
             if (g !== "both" && g !== game) {
-                alert("Your account is registered for " + (g === "konami" ? "Konami eFootball" : "Chess") + " only.");
+                alert("Your account is registered for " + (g === "konami" ? "eFootball" : "Chess") + " only.");
                 return;
             }
         }

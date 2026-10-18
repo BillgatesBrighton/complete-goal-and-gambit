@@ -971,7 +971,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         const audience=String(req.body.audience||"all").trim().toLowerCase();
         const publishAtInput=String(req.body.publishAt||"").trim();
         if(!["all","chess","konami"].includes(audience))
-            return res.status(400).json({success:false,message:"Choose all users, Chess players, or Konami players."});
+            return res.status(400).json({success:false,message:"Choose all users, Chess players, or eFootball players."});
         if(eventName.length>160)
             return res.status(400).json({success:false,message:"Event name must be 160 characters or fewer."});
         if(Boolean(eventName)!==Boolean(eventAtInput))

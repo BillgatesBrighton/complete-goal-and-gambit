@@ -12,7 +12,7 @@
 <script src="../js/api.js?v=20261017-companion-download"></script>
 </head>
 <body>
-<header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">Konami dashboard</a></header>
+<header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">eFootball dashboard</a></header>
 <main>
   <h1>Match Results</h1>
   <p class="intro">Both players submit once. Matching scores settle the match. Only if the first reports differ do both players submit again; the selected player must attach a screenshot before their second submission. A second mismatch goes to admin with both rounds and the screenshot.</p>
@@ -51,7 +51,7 @@
     <h2>Match status</h2>
     <p id="detailStatus" class="muted">Waiting for match data…</p>
     <p id="error" class="error" role="alert"></p>
-    <div class="row"><a class="button secondary" id="roomLink" href="match-room.html">Match Room</a><a class="button secondary" href="konami.html">Konami dashboard</a></div>
+    <div class="row"><a class="button secondary" id="roomLink" href="match-room.html">Match Room</a><a class="button secondary" href="konami.html">eFootball dashboard</a></div>
   </section>
 </main>
 <script>
@@ -149,7 +149,7 @@
       document.getElementById("otherReport").textContent = "Both score rounds differed. Any locked stake is held until admin review.";
       if(!complaintRedirectScheduled){
         complaintRedirectScheduled = true;
-        document.getElementById("detailStatus").textContent = "Complaint submitted. Returning to the Konami dashboard in a few seconds.";
+        document.getElementById("detailStatus").textContent = "Complaint submitted. Returning to the eFootball dashboard in a few seconds.";
         window.setTimeout(function(){ location.replace("konami.html"); }, 3500);
       }
       return;
@@ -249,7 +249,7 @@
         else if(response.status !== 0) errorNode.textContent = response.data.message || "Could not load the match.";
       }
       if(!m){
-        statusNode.textContent = "No active match found. Start matchmaking from the Konami dashboard.";
+        statusNode.textContent = "No active match found. Start matchmaking from the eFootball dashboard.";
         return;
       }
       id = String(m.id);

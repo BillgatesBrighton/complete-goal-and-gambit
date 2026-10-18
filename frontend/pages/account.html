@@ -68,8 +68,8 @@
                     <select id="newGame" style="width:100%;min-height:46px;padding:11px 12px;border:1px solid #414141;border-radius:10px;background:#090909;color:#fff;font:inherit">
                         <option value="">Keep current selection</option>
                         <option value="chess">Chess</option>
-                        <option value="konami">Konami eFootball</option>
-                        <option value="both">Both Chess and Konami eFootball</option>
+                        <option value="konami">eFootball</option>
+                        <option value="both">Both Chess and eFootball</option>
                     </select>
                 </div>
                 <hr class="divider">
@@ -111,7 +111,7 @@
                 $("currentUsername").value=currentUsername;
                 $("currentPhone").value=String(result.data.user.phone||"");
                 currentGame=String(result.data.user.game||"both").toLowerCase();
-                $("currentGame").value=currentGame==="konami"?"Konami eFootball":currentGame==="chess"?"Chess":"Both Chess and Konami eFootball";
+                $("currentGame").value=currentGame==="konami"?"eFootball":currentGame==="chess"?"Chess":"Both Chess and eFootball";
             }
             $("accountForm").addEventListener("submit",async function(event){
                 event.preventDefault();
@@ -138,7 +138,7 @@
                 $("currentPhone").value=String(result.data.user.phone||"");
                 var changedGame=String(result.data.user.game||"both").toLowerCase()!==currentGame;
                 currentGame=String(result.data.user.game||"both").toLowerCase();
-                $("currentGame").value=currentGame==="konami"?"Konami eFootball":currentGame==="chess"?"Chess":"Both Chess and Konami eFootball";
+                $("currentGame").value=currentGame==="konami"?"eFootball":currentGame==="chess"?"Chess":"Both Chess and eFootball";
                 $("newUsername").value="";
                 $("newPhone").value="";
                 $("newGame").value="";

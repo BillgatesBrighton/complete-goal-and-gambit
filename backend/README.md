@@ -123,7 +123,7 @@ Safari on macOS supports Web Push on macOS 13 or later. These browser alerts
 use the same page-based reply fallback, not native Android direct reply.
 
 The Android companion delivers native match notifications and room-code chat
-replies from the notification shade; gameplay remains on the website. Konami
+replies from the notification shade; gameplay remains on the website.
 eFootball access requires an active companion device registration. Chess-only
 accounts do not need the app; Both accounts can use Chess while they set it up.
 Setup requires Android Studio, JDK 17, Android SDK 36, a Firebase Android app

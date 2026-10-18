@@ -12,7 +12,7 @@
 <script src="../js/api.js?v=20261017-companion-download"></script>
 </head>
 <body>
-<header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">Konami dashboard</a></header>
+<header><div class="brand">GOAL$GAMBIT</div><a href="konami.html">eFootball dashboard</a></header>
 <main>
   <h1>Match Room</h1>
   <p class="lead">Send the eFootball room code and you’ll be marked ready automatically. The receiver confirms the code and marks ready.</p>
@@ -39,10 +39,10 @@
 
   <div id="codePanel" class="code-modal hidden" role="presentation">
     <section class="code-dialog" role="dialog" aria-modal="true" aria-labelledby="codeDialogTitle" aria-describedby="codeDialogDescription">
-      <h2 id="codeDialogTitle">Send Official Konami Room Code</h2>
-      <p id="codeDialogDescription" class="muted">Copy the official room code from Konami/eFootball and paste it below. You can also use your Android keyboard’s Paste action in the field.</p>
+      <h2 id="codeDialogTitle">Send Official eFootball Room Code</h2>
+      <p id="codeDialogDescription" class="muted">Copy the official room code from eFootball and paste it below. You can also use your Android keyboard’s Paste action in the field.</p>
       <label for="roomCode">Room code</label>
-      <textarea id="roomCode" maxlength="50" rows="2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your Konami room code here..."></textarea>
+      <textarea id="roomCode" maxlength="50" rows="2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your eFootball room code here..."></textarea>
       <p id="sendStatus" class="status-line code-entry-status" role="status" aria-live="polite"></p>
       <div class="code-actions">
         <button id="pasteCodeButton" class="secondary" type="button">PASTE CODE</button>
@@ -132,7 +132,7 @@
     if(busy||submitting)return;busy=true;
     try{
       if(!matchId){var active=await GG.api("/api/efootball/matches/active",{noRedirect:true});if(active.ok&&active.data.match)matchId=String(active.data.match.id);}
-      if(!matchId){statusNode.textContent="No active match was found. Start matchmaking from the Konami dashboard.";return;}
+      if(!matchId){statusNode.textContent="No active match was found. Start matchmaking from the eFootball dashboard.";return;}
       var r=await GG.api("/api/efootball/matches/"+encodeURIComponent(matchId),{noRedirect:true});
       if(!r.ok||!r.data.match){showError(r.data.message||"Could not load this match.");return;}
       var m=r.data.match;matchId=String(m.id);

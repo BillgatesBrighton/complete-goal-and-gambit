@@ -143,12 +143,12 @@ module.exports = function(pool, authenticateToken, io) {
                 if (!["chess", "konami", "both"].includes(game)) {
                     return res.status(400).json({
                         success: false,
-                        message: "Please choose a game (Chess, Konami eFootball or Both)."
+                        message: "Please choose a game (Chess, eFootball or Both)."
                     });
                 }
 
                 // Chess rating the player declares at sign up.
-                // Konami-only players keep the default and never see it.
+                // eFootball-only players keep the default and never see it.
                 let startRating = 1200;
                 if (game === "chess" || game === "both") {
                     startRating = Number(chessRating);
@@ -723,7 +723,7 @@ module.exports = function(pool, authenticateToken, io) {
                 return res.status(400).json({ success: false, message: "Enter a valid phone number, including its country code if it is not Kenyan." });
             }
             if (gameProvided && !["chess", "konami", "both"].includes(game)) {
-                return res.status(400).json({ success: false, message: "Choose Chess, Konami eFootball, or Both games." });
+                return res.status(400).json({ success: false, message: "Choose Chess, eFootball, or Both games." });
             }
 
             try {

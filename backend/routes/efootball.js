@@ -437,7 +437,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const shownCode = match.external_room_code || null;
         const safe = { ...match };
         // room_code is an internal unique placeholder required by the legacy
-        // table. Never expose it as if it were the real Konami room code.
+        // table. Never expose it as if it were the real eFootball room code.
         const senderIsParticipant = senderId !== null && (senderId === creatorId || senderId === opponentId);
         const isSender = senderIsParticipant && senderId === Number(userId);
         const receiverId = senderIsParticipant && opponentId !== null
@@ -1606,7 +1606,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const sender = await client.query("SELECT username FROM users WHERE id=$1", [userId]);
             await createSystemNotification(
                 client, receiverId, replacingCode ? "room_code_replaced" : "room_code", "ROOM CODE RECEIVED",
-                (replacingCode ? "Your opponent sent a replacement official Konami room code for Match GG-" : "Your opponent sent the official Konami room code for Match GG-") + matchId + ". Open the match room to view it and confirm receipt.", matchId
+                (replacingCode ? "Your opponent sent a replacement official eFootball room code for Match GG-" : "Your opponent sent the official eFootball room code for Match GG-") + matchId + ". Open the match room to view it and confirm receipt.", matchId
             );
             await createSystemNotification(
                 client, senderId, "room_code_sent", "Room code delivered",

@@ -319,7 +319,7 @@ async function loadAnnouncements() {
     var all=r.data.announcements||[],list=includeInactiveAnnouncements?all:all.filter(function(a){return !!a.active;});
     $("announcementList").innerHTML=list.length?list.map(function(a){
         var delivery=a.published_at?'Published '+date(a.published_at):a.publish_at?'Scheduled '+date(a.publish_at):'Not delivered';
-        var audience=a.audience==='chess'?'Chess players':a.audience==='konami'?'Konami players':'All active users';
+        var audience=a.audience==='chess'?'Chess players':a.audience==='konami'?'eFootball players':'All active users';
         var details='<div class="meta">'+esc(date(a.created_at))+' · '+esc(delivery)+' · '+esc(audience)+' · '+(a.active?'Visible to players':'Hidden')+'</div>';
         if(a.event_name)details+='<div class="meta">'+esc(a.event_name)+' · starts '+esc(date(a.event_at))+' ('+esc(a.event_time_zone||'Africa/Nairobi')+')</div>';
         var h='<article class="announcement-row"><div><div class="announcement-message">'+esc(a.message)+'</div>'+details+'</div><div class="actions">';
@@ -419,7 +419,7 @@ async function clearAdminWalletHistory() {
     say(r.data.message||"Administrator wallet activity cleared.","ok");await loadAdminWallet();
 }
 function renderManagedMatch(m) {
-    var id=Number(m.id), game=m.game==="chess"?"Chess":"Konami", cleared=!!m.admin_cleared_at;
+    var id=Number(m.id), game=m.game==="chess"?"Chess":"eFootball", cleared=!!m.admin_cleared_at;
     var creator=m.creator_username||"Player", opponent=m.opponent_username||"Waiting for opponent";
     var matchType=String(m.match_type||"match").replace(/_/g," ");
     var mode=m.game==="konami"?(m.league?(m.league+" league"):m.mode||matchType):(m.time_control||matchType);
@@ -440,7 +440,7 @@ function renderManagedMatch(m) {
     if(m.can_edit_score&&m.game==="chess"){
         h+='<form class="form" data-chess-result-form data-match-id="'+id+'"><strong class="wide">Set verified Chess result</strong><label class="wide">Game result<select class="select" data-chess-result required><option value="">Choose a result</option><option value="white_win">White wins</option><option value="black_win">Black wins</option><option value="draw">Draw</option></select></label><label class="wide">Admin reason<input class="note" data-chess-result-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn gold" type="submit">Save result and settle</button></div><p class="foot wide">This settles the match and updates the wallet and ranked rating where applicable.</p></form>';
     } else if(m.can_edit_score){
-        h+='<form class="form" data-match-score-form data-match-id="'+id+'"><strong class="wide">Set verified Konami score</strong><label>Creator · '+esc(creator)+'<input class="score" data-score-creator type="number" min="0" max="99" step="1" required></label><label>Opponent · '+esc(opponent)+'<input class="score" data-score-opponent type="number" min="0" max="99" step="1" required></label><label class="wide">Admin reason<input class="note" data-score-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn gold" type="submit">Save score and settle</button></div><p class="foot wide">This settles the match and updates the wallet, league/tournament standings, and player notices.</p></form>';
+        h+='<form class="form" data-match-score-form data-match-id="'+id+'"><strong class="wide">Set verified eFootball score</strong><label>Creator · '+esc(creator)+'<input class="score" data-score-creator type="number" min="0" max="99" step="1" required></label><label>Opponent · '+esc(opponent)+'<input class="score" data-score-opponent type="number" min="0" max="99" step="1" required></label><label class="wide">Admin reason<input class="note" data-score-reason maxlength="1000" placeholder="Required · at least 10 characters"></label><div class="wide"><button class="btn gold" type="submit">Save score and settle</button></div><p class="foot wide">This settles the match and updates the wallet, league/tournament standings, and player notices.</p></form>';
     }
     if(m.is_terminal){
         h+='<div class="actions"><button class="btn '+(cleared?'':'gold')+'" type="button" data-match-visibility="'+(cleared?'restore':'clear')+'" data-id="'+id+'" data-game="'+esc(m.game)+'">'+(cleared?'Restore to list':'Clear from list')+'</button></div>';
@@ -456,7 +456,7 @@ async function loadMatchManagement() {
     $('matchManagementList').innerHTML=list.length?list.map(renderManagedMatch).join(''):'<div class="empty">No matches in this view.</div>';
 }
 async function clearAllMatches() {
-    await clearAdminItems($('clearAllMatches'),'/api/admin/matches/clear-terminal','Clear all completed or cancelled matches from both Chess and Konami? Active matches will stay visible. Match, wallet, and audit history will be preserved and cleared matches can be restored.',async function(){
+    await clearAdminItems($('clearAllMatches'),'/api/admin/matches/clear-terminal','Clear all completed or cancelled matches from both Chess and eFootball? Active matches will stay visible. Match, wallet, and audit history will be preserved and cleared matches can be restored.',async function(){
         includeClearedMatches=false;$('toggleClearedMatches').setAttribute('aria-pressed','false');$('toggleClearedMatches').textContent='Show cleared';await loadMatchManagement();
     },legacyClearMatches);
 }
@@ -484,7 +484,7 @@ async function cancelManagedMatch(btn) {
     var card=btn.closest('[data-managed-match]'), reason=card.querySelector('[data-match-action-reason]').value.trim();
     if(reason.length<10){say('Enter an admin reason of at least 10 characters.','error');return;}
     var game=card.dataset.game, id=btn.dataset.matchCancelRefund;
-    if(!confirm('Cancel this '+(game==='chess'?'Chess':'Konami')+' match? Any still-locked match stakes will be returned to the players. This action is recorded in the admin audit history.'))return;
+    if(!confirm('Cancel this '+(game==='chess'?'Chess':'eFootball')+' match? Any still-locked match stakes will be returned to the players. This action is recorded in the admin audit history.'))return;
     btn.disabled=true;
     var r=await GG.api('/api/admin/matches/'+encodeURIComponent(game)+'/'+encodeURIComponent(id)+'/cancel-refund',{method:'POST',body:{reason:reason}});
     if(!r.ok){btn.disabled=false;say(r.data.message||'Could not cancel and refund this match.','error');return;}
@@ -756,7 +756,7 @@ $("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=n
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 function updateAdminPage() {
-    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and Konami matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
     if(!titles[page])page="overview";
     ["results","matchManagement","complaints","support","accounts","competitions","adminWallet","announcements"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
     $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];

@@ -55,6 +55,7 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                 "SELECT device_name,updated_at FROM android_push_tokens WHERE user_id=$1 AND active=TRUE ORDER BY updated_at DESC",
                 [req.user.userId]
             );
+            const canViewAndroidDeviceDetails = req.user.role === "admin";
             const config = pushService.status();
             return res.json({
                 success: true,
@@ -63,9 +64,10 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                 permissionRequired: true,
                 activeSubscriptions: Number(result.rows[0].active_subscriptions || 0),
                 activeAndroidDevices: android.rows.length,
-                androidDevices: android.rows.map(function (device) {
+                canViewAndroidDeviceDetails: canViewAndroidDeviceDetails,
+                androidDevices: canViewAndroidDeviceDetails ? android.rows.map(function (device) {
                     return { deviceName: device.device_name || "Android build version not reported", updatedAt: device.updated_at };
-                })
+                }) : []
             });
         } catch (error) {
             console.error("Push status query failed.");
