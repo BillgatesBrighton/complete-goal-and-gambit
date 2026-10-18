@@ -6,6 +6,7 @@ const http = require("http");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const adminRoutes = require("../routes/admin");
 const companionRoutes = require("../routes/companion");
 const chatRoutes = require("../routes/chat");
@@ -191,4 +192,173 @@ test("Android notification channel settings and inline room-code RemoteInput rem
     assert.match(source, /NotificationManager\.IMPORTANCE_HIGH/);
     assert.match(source, /RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
     assert.match(source, /Notification\.Action\.Builder\(android\.R\.drawable\.ic_menu_send, "SEND"/);
+});
+
+test("companion guide acknowledgement and installation records use only the authenticated member", async (t) => {
+    let acknowledgedValues = null;
+    let registrationValues = null;
+    let heartbeatValues = null;
+    const pool = {
+        async query(sql, values) {
+            if (/SELECT onboarding_version,onboarding_acknowledged_at/.test(sql)) return { rows: [{ onboarding_version: "old-version", onboarding_acknowledged_at: null }] };
+            if (/SELECT EXISTS\(SELECT 1 FROM companion_installations/.test(sql)) return { rows: [{ ever_registered: false, currently_registered: false }] };
+            if (/SELECT MIN\(downloaded_at\)/.test(sql)) return { rows: [{ downloaded_at: null, last_downloaded_at: null }] };
+            if (/INSERT INTO companion_user_setup/.test(sql)) {
+                acknowledgedValues = values;
+                return { rows: [{ onboarding_acknowledged_at: new Date().toISOString() }] };
+            }
+            if (/UPDATE companion_installations SET last_seen_at/.test(sql)) {
+                heartbeatValues = values;
+                return { rows: [] };
+            }
+            throw new Error("Unexpected companion query: " + sql.slice(0, 100));
+        },
+        async connect() {
+            return {
+                async query(sql, values) {
+                    if (/INSERT INTO companion_installations/.test(sql)) {
+                        registrationValues = values;
+                        return { rows: [{ id: 9, registered_at: new Date().toISOString(), last_seen_at: new Date().toISOString() }] };
+                    }
+                    return { rows: [] };
+                },
+                release() {}
+            };
+        }
+    };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/companion", companionRoutes(pool, (req, res, next) => {
+        const userId = Number(req.get("x-test-user"));
+        if (!userId) return res.status(401).json({ success: false });
+        req.user = { userId };
+        next();
+    }));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const base = "http://127.0.0.1:" + server.address().port + "/api/companion";
+
+    assert.equal((await fetch(base + "/status")).status, 401, "setup state is private to an authenticated account");
+    const status = await fetch(base + "/status", { headers: { "x-test-user": "42" } });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json()).needsAcknowledgement, true);
+
+    const ack = await fetch(base + "/acknowledge", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-test-user": "42" },
+        body: JSON.stringify({ version: companionRoutes.GUIDE_VERSION, userId: 999 })
+    });
+    assert.equal(ack.status, 200);
+    assert.equal(Number(acknowledgedValues[0]), 42, "guide acknowledgement is bound to the authenticated member");
+    assert.equal(acknowledgedValues[1], companionRoutes.GUIDE_VERSION);
+
+    const registration = await fetch(base + "/register", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-test-user": "42" },
+        body: JSON.stringify({ installationId: "616f3b9c-48e4-4b89-a263-df5bc7b6144f", appVersion: "1.0.6", platform: "android", notificationPermissionStatus: "denied", userId: 999 })
+    });
+    assert.equal(registration.status, 201);
+    assert.equal(Number(registrationValues[0]), 42, "app registration is bound to the authenticated member, not the request body");
+    assert.equal(registrationValues[2], "android");
+    assert.equal(registrationValues[4], "denied");
+
+    const invalid = await fetch(base + "/register", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-test-user": "42" },
+        body: JSON.stringify({ installationId: "bad-id", appVersion: "1.0.6", platform: "android", notificationPermissionStatus: "granted" })
+    });
+    assert.equal(invalid.status, 400, "invalid installation identifiers are rejected");
+
+    const otherAccountHeartbeat = await fetch(base + "/heartbeat", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-test-user": "43" },
+        body: JSON.stringify({ installationId: "616f3b9c-48e4-4b89-a263-df5bc7b6144f", appVersion: "1.0.6" })
+    });
+    assert.equal(otherAccountHeartbeat.status, 404);
+    assert.equal(Number(heartbeatValues[0]), 43, "one member cannot heartbeat another member's installation");
+});
+
+test("companion tracker is administrator-only and reports real database aggregates", async (t) => {
+    const queries = [];
+    const pool = {
+        async query(sql, values) {
+            const query = String(sql);
+            queries.push({ query, values });
+            if (/SELECT id, username, role FROM users WHERE id = \$1/.test(query)) {
+                const id = Number(values[0]);
+                return { rows: [{ id, username: id === 1 ? "admin" : "player", role: id === 1 ? "admin" : "player" }] };
+            }
+            if (query.includes("total_members")) return { rows: [{ total_members: 3, guide_acknowledged: 2, downloaded_members: 1, anonymous_downloads: 4, registered_members: 1, recently_active_members: 1, notifications_granted: 1, notifications_denied: 0, notifications_unknown: 0 }] };
+            if (query.includes("SELECT COUNT(*)::int AS total FROM member_rows")) return { rows: [{ total: 1 }] };
+            if (query.includes("SELECT user_id,username,game,account_status")) return { rows: [{ user_id: 42, username: "player", game: "both", account_status: "active", installation_count: 1, active_installation_count: 1, app_version: "1.0.6", notification_permission_status: "granted", currently_registered: true, recently_active: true, guide_acknowledged: true }] };
+            if (query.includes("jsonb_agg(jsonb_build_object")) return { rows: [{ user_id: Number(values[0]), username: "player", game: "both", account_status: "active", downloaded: true, downloaded_at: "2026-10-18T09:00:00.000Z", installations: [{ platform: "android", appVersion: "1.0.6", notificationPermissionStatus: "granted", currentlyRegistered: true }] }] };
+            throw new Error("Unexpected tracker query: " + query.slice(0, 110));
+        }
+    };
+    const app = express();
+    app.use("/api/admin", adminRoutes(pool, (req, res, next) => {
+        const userId = Number(req.get("x-test-user"));
+        if (!userId) return res.status(401).json({ success: false });
+        req.user = { userId };
+        next();
+    }));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const url = "http://127.0.0.1:" + server.address().port + "/api/admin/companion-tracker?search=pla%25yer";
+
+    const denied = await fetch(url, { headers: { "x-test-user": "2" } });
+    assert.equal(denied.status, 403);
+    assert.equal(queries.length, 1, "a non-admin is rejected before tracker data is queried");
+
+    const response = await fetch(url, { headers: { "x-test-user": "1" } });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.stats.total_members, 3);
+    assert.equal(body.stats.downloaded_members, 1);
+    assert.equal(body.members[0].username, "player");
+    const memberQuery = queries.find((entry) => entry.query.includes("SELECT user_id,username,game,account_status"));
+    assert.match(memberQuery.query, /ILIKE \$2 ESCAPE '!'/);
+    assert.deepEqual(memberQuery.values.slice(0, 3), [companionRoutes.GUIDE_VERSION, "%pla!%yer%", "pla%yer"]);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+
+    const detail = await fetch("http://127.0.0.1:" + server.address().port + "/api/admin/companion-tracker/42", { headers: { "x-test-user": "1" } });
+    assert.equal(detail.status, 200);
+    const detailBody = await detail.json();
+    assert.equal(detailBody.member.username, "player");
+    assert.equal(detailBody.member.installations[0].appVersion, "1.0.6");
+});
+
+test("authenticated companion downloads serve the real APK and record only completed delivery", async (t) => {
+    let recorded = null;
+    let recordedAnonymous = null;
+    const apkPath = path.join(__dirname, "../../frontend/downloads/goal-gambit-companion.apk");
+    const expected = fs.readFileSync(apkPath);
+    const expectedHash = crypto.createHash("sha256").update(expected).digest("hex");
+    const app = express();
+    app.use("/api/companion", companionRoutes({
+        async query(sql, values) {
+            if (/INSERT INTO companion_download_events/.test(sql)) recorded = { sql, values };
+            else if (/INSERT INTO companion_anonymous_download_events/.test(sql)) recordedAnonymous = { sql, values };
+            else throw new Error("Unexpected download record query: " + sql);
+            return { rows: [] };
+        }
+    }, (req, res, next) => {
+        if (req.get("x-test-user") !== "42") return res.status(401).json({ success: false });
+        req.user = { userId: 42 };
+        next();
+    }));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const url = "http://127.0.0.1:" + server.address().port + "/api/companion/download";
+    assert.equal((await fetch(url)).status, 401, "APK delivery requires an authenticated account");
+    const response = await fetch(url, { headers: { "x-test-user": "42" } });
+    const downloaded = Buffer.from(await response.arrayBuffer());
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /application\/vnd\.android\.package-archive/);
+    assert.equal(response.headers.get("x-companion-sha256"), expectedHash);
+    assert.equal(crypto.createHash("sha256").update(downloaded).digest("hex"), expectedHash);
+    assert.equal(Number(recorded.values[0]), 42, "download events are attributed to the authenticated member only");
+    assert.equal(recorded.values[1], expectedHash);
+
+    const publicResponse = await fetch("http://127.0.0.1:" + server.address().port + "/api/companion/public-download");
+    const publicApk = Buffer.from(await publicResponse.arrayBuffer());
+    assert.equal(publicResponse.status, 200, "the public sign-up download remains available");
+    assert.equal(crypto.createHash("sha256").update(publicApk).digest("hex"), expectedHash);
+    assert.deepEqual(recordedAnonymous.values, [expectedHash], "public downloads are counted anonymously without user or device identifiers");
 });

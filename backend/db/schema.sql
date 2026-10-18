@@ -225,6 +225,14 @@ ALTER TABLE chess_matches
 CREATE INDEX IF NOT EXISTS idx_chess_matches_white  ON chess_matches (player_white_id);
 CREATE INDEX IF NOT EXISTS idx_chess_matches_black  ON chess_matches (player_black_id);
 CREATE INDEX IF NOT EXISTS idx_chess_matches_status ON chess_matches (status);
+-- Keep ranked searches fast as many players wait in the same rating,
+-- time-control, and stake queue. The partial index stores waiting rows only.
+CREATE INDEX IF NOT EXISTS idx_chess_ranked_waiting_queue
+    ON chess_matches (time_control, stake_amount, id)
+    WHERE match_type='ranked' AND status='waiting' AND player_black_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_active_chess_users_by_rating
+    ON users (rating, id)
+    WHERE account_status='active' AND game IN ('chess','both');
 CREATE INDEX IF NOT EXISTS idx_chess_matches_admin_history
     ON chess_matches (admin_cleared_at, finished_at DESC, id DESC);
 
@@ -356,6 +364,11 @@ CREATE INDEX IF NOT EXISTS idx_admin_match_management_events_recent
 CREATE INDEX IF NOT EXISTS idx_efootball_waiting_search_activity
     ON efootball_matches(search_last_seen_at, created_at)
     WHERE status='waiting' AND opponent_id IS NULL;
+-- Ranked eFootball queues are split by stake and oldest search first. This
+-- avoids scanning every mode's waiting matches as the ranked pool grows.
+CREATE INDEX IF NOT EXISTS idx_efootball_ranked_waiting_queue
+    ON efootball_matches (stake_amount, created_at, id)
+    WHERE mode='ranked' AND status='waiting' AND opponent_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS efootball_leagues (
     id                  SERIAL PRIMARY KEY,
@@ -610,6 +623,63 @@ CREATE TABLE IF NOT EXISTS android_push_delivery_attempts (
     attempted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(job_id, attempt_number)
 );
+
+-- The account-level setup guide acknowledgement is versioned so the owner can
+-- require an existing member to review updated instructions.
+CREATE TABLE IF NOT EXISTS companion_user_setup (
+    user_id                     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    onboarding_version          VARCHAR(40) NOT NULL,
+    onboarding_acknowledged_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- A random app-generated installation id is HMACed server-side. This keeps a
+-- stable installation record without retaining the raw id or device model.
+CREATE TABLE IF NOT EXISTS companion_installations (
+    id                              BIGSERIAL PRIMARY KEY,
+    user_id                         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    installation_id_hash            CHAR(64) NOT NULL,
+    device_platform                 VARCHAR(24) NOT NULL DEFAULT 'android'
+                                    CHECK (device_platform IN ('android')),
+    app_version                     VARCHAR(40) NOT NULL,
+    registered_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    unregistered_at                 TIMESTAMPTZ,
+    notification_permission_status  VARCHAR(10) NOT NULL DEFAULT 'unknown'
+                                    CHECK (notification_permission_status IN ('granted','denied','unknown')),
+    notification_permission_checked_at TIMESTAMPTZ,
+    created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, installation_id_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_companion_installations_user_activity
+    ON companion_installations(user_id, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_companion_installations_hash_active
+    ON companion_installations(installation_id_hash, unregistered_at);
+
+-- Downloads are recorded after the APK response completes. The unique key
+-- counts a member once per APK checksum while retaining the latest download.
+CREATE TABLE IF NOT EXISTS companion_download_events (
+    id                  BIGSERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    apk_sha256          CHAR(64) NOT NULL,
+    downloaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_downloaded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, apk_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_companion_download_events_user
+    ON companion_download_events(user_id, downloaded_at DESC);
+
+-- Public sign-up-page downloads are counted anonymously and are never
+-- attributed to a registered member or correlated with an IP/device.
+CREATE TABLE IF NOT EXISTS companion_anonymous_download_events (
+    id          BIGSERIAL PRIMARY KEY,
+    apk_sha256  CHAR(64) NOT NULL,
+    downloaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_companion_anonymous_downloads_created
+    ON companion_anonymous_download_events(downloaded_at DESC);
 
 
 -- ======================================================

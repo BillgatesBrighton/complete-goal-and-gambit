@@ -170,7 +170,7 @@ test("Android sender alert offers inline code reply and persists until successfu
     const workerSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "RoomCodeSendWorker.kt"), "utf8");
     const manifest = fs.readFileSync(path.join(androidRoot, "AndroidManifest.xml"), "utf8");
     assert.match(notificationSource, /RemoteInput\.Builder\(REMOTE_CODE_KEY\)/);
-    assert.match(notificationSource, /\.setLabel\("Paste room code"\)/);
+    assert.match(notificationSource, /\.setLabel\("Type or paste room code"\)/);
     assert.match(notificationSource, /Builder\(android\.R\.drawable\.ic_menu_send, "SEND", pendingIntent\)/);
     assert.match(notificationSource, /\.setAutoCancel\(!persistent\)/);
     assert.match(notificationSource, /NotificationManager\.IMPORTANCE_DEFAULT/);

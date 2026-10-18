@@ -154,7 +154,7 @@ object Notifications {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
-            val replyBuilder = Notification.Action.Builder(android.R.drawable.ic_menu_send, "REPLY", pendingIntent)
+            val replyBuilder = Notification.Action.Builder(android.R.drawable.ic_menu_send, "SEND", pendingIntent)
                 .addRemoteInput(input)
                 .setAllowGeneratedReplies(false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

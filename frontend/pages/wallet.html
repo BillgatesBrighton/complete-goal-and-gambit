@@ -571,7 +571,7 @@ No transactions yet.
 
 </main>
 
-<script src="../js/api.js?v=20261017-companion-download"></script>
+<script src="../js/api.js?v=20261018-companion-welcome"></script>
 
 <script>
 
@@ -881,15 +881,17 @@ async function loadTransactions(trackedReference) {
                     t.type;
 
 
-                var status =
-                    t.status &&
-                    t.status !== "completed"
-                        ? " (" + t.status + ")"
-                        : "";
+                var status = t.status === "pending"
+                    ? " · Processing"
+                    : t.status === "failed"
+                        ? " · Not completed"
+                        : t.status === "completed"
+                            ? " · Complete"
+                            : "";
 
                 var failureNote =
                     t.type === "deposit" && t.status === "failed" && t.description
-                        ? '<small class="transaction-note">Safaricom result: ' + GG.escapeHTML(t.description) + '</small>'
+                        ? '<small class="transaction-note">Payment was not completed. Your wallet was not credited.</small>'
                         : "";
 
 
@@ -1071,10 +1073,10 @@ async function deposit() {
     button.disabled = true;
 
     button.textContent =
-        "Waiting for STK push...";
+        "Sending payment prompt...";
 
 
-    showDepositStatus("pending", "Waiting for STK push…");
+    showDepositStatus("pending", "Sending your payment request…");
 
 
     try {
@@ -1095,17 +1097,14 @@ async function deposit() {
 
         if (!result.ok) {
 
-            var reason = result.data && result.data.message
-                ? result.data.message
-                : "M-Pesa could not accept the payment request.";
-            showDepositStatus("error", "Failed transaction: " + reason);
+            showDepositStatus("error", "We couldn't start your payment. Please try again. If the problem continues, contact support.");
 
             return;
 
         }
 
 
-        showDepositStatus("pending", "STK push sent. Check your phone and enter your M-Pesa PIN. Your wallet updates after Safaricom confirms payment.");
+        showDepositStatus("pending", "Check your phone for the STK prompt.");
 
 
         amountInput.value = "";
@@ -1142,9 +1141,7 @@ async function deposit() {
 
                     if (transaction && transaction.status === "failed") {
                         clearInterval(refreshTimer);
-                        showDepositStatus("error", "Failed transaction: " +
-                            (transaction.description || "Safaricom declined or cancelled the payment; no reason was provided.") +
-                            " Your wallet was not credited.");
+                        showDepositStatus("error", "Payment wasn't completed, and your wallet wasn't credited. Check your M-Pesa messages before trying again.");
                         return;
                     }
 
@@ -1154,7 +1151,7 @@ async function deposit() {
                             refreshTimer
                         );
 
-                        showDepositStatus("pending", "Waiting for STK confirmation. Check your M-Pesa messages and transaction history before retrying.");
+                        showDepositStatus("pending", "Still waiting for payment confirmation. Check your M-Pesa messages before trying again.");
 
                     }
 
@@ -1171,7 +1168,7 @@ async function deposit() {
         );
 
 
-        showDepositStatus("error", "Failed transaction request: the payment service could not be reached. Check your wallet history and phone before retrying.");
+        showDepositStatus("error", "We couldn't reach the payment service. Check your M-Pesa messages and wallet history before trying again.");
 
     } finally {
 

@@ -1,6 +1,10 @@
 package com.goalgambit.companion;
 
 import android.os.Build;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.Manifest;
 
 import org.json.JSONObject;
 
@@ -78,6 +82,43 @@ final class Api {
         body.put("username", username);
         body.put("password", password);
         return request("POST", "/api/auth/login", null, body);
+    }
+
+    static Result registerCompanion(Context context, String bearer) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("installationId", TokenStore.deviceId(context));
+        body.put("appVersion", BuildConfig.VERSION_NAME);
+        body.put("platform", "android");
+        body.put("notificationPermissionStatus", notificationPermissionStatus(context));
+        return request("POST", "/api/companion/register", bearer, body);
+    }
+
+    static Result heartbeatCompanion(Context context, String bearer) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("installationId", TokenStore.deviceId(context));
+        body.put("appVersion", BuildConfig.VERSION_NAME);
+        return request("POST", "/api/companion/heartbeat", bearer, body);
+    }
+
+    static Result updateCompanionNotificationStatus(Context context, String bearer) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("installationId", TokenStore.deviceId(context));
+        body.put("status", notificationPermissionStatus(context));
+        return request("POST", "/api/companion/notification-status", bearer, body);
+    }
+
+    static Result unregisterCompanion(Context context, String bearer) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("installationId", TokenStore.deviceId(context));
+        return request("POST", "/api/companion/unregister", bearer, body);
+    }
+
+    private static String notificationPermissionStatus(Context context) {
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return "denied";
+        }
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        return manager != null && manager.areNotificationsEnabled() ? "granted" : "denied";
     }
 
     static Result registerDevice(String token, String deviceId, String bearer) throws Exception {

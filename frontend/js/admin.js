@@ -4,6 +4,7 @@ if (!GG.requireLogin()) return;
 var $ = function (id) { return document.getElementById(id); };
 var esc = GG.escapeHTML;
 var adminId = null, selectedUser = null, selectedName = "", messageSig = null, urls = [], complaintUrls = [], busy = false, timer = null, walletAdjustTimer = null, users = [], walletAdjustmentUsers = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, includeClearedMatches = false, includeInactiveAnnouncements = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
+var companionPage = 1, companionPages = 1, companionSearch = "", companionTrackerBusy = false;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
 function updateAccountPresence(ids) {
@@ -58,10 +59,10 @@ function concealDashboard(message, clearData) {
     if (gate) { gate.textContent = message || "Checking administrator access…"; gate.hidden = false; }
     if (!clearData) return;
     if (accessTimer) { clearInterval(accessTimer); accessTimer = null; }
-    ["accountDialog", "complaintDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
+    ["accountDialog", "complaintDialog", "companionDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
     urls.concat(complaintUrls).forEach(function(url) { URL.revokeObjectURL(url); });
     urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = null; users = [];
-    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "manualWithdrawalsList", "userList", "announcementList", "threads", "messages", "accountView"].forEach(function(id) {
+    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "manualWithdrawalsList", "userList", "announcementList", "companionTrackerList", "companionView", "threads", "messages", "accountView"].forEach(function(id) {
         var node = $(id); if (node) node.replaceChildren();
     });
     if ($("adminName")) $("adminName").textContent = "Admin";
@@ -328,6 +329,65 @@ async function loadAnnouncements() {
         return h;
     }).join(""):'<div class="empty">'+(includeInactiveAnnouncements?"No announcements in the archive.":"No active announcements.")+'</div>';
 }
+function renderCompanionTrackerRow(member) {
+    var id = Number(member.user_id), acknowledged = !!member.guide_acknowledged;
+    var downloaded = !!member.downloaded_at;
+    var active = !!member.currently_registered;
+    var recent = !!member.recently_active;
+    var permission = String(member.notification_permission_status || "unknown");
+    var registration = active ? (recent ? "Registered · recently active" : "Registered · stale") : member.installation_count ? "Previously registered · inactive" : "Not detected";
+    return '<tr><td><strong>' + esc(member.username || "Member") + '</strong><div class="user-meta">User ID ' + id + '</div></td>' +
+        '<td>' + (acknowledged ? 'Acknowledged<br><span class="user-meta">' + esc(date(member.onboarding_acknowledged_at)) + '</span>' : 'Not acknowledged') + '</td>' +
+        '<td>' + (downloaded ? 'Downloaded<br><span class="user-meta">' + esc(date(member.last_downloaded_at || member.downloaded_at)) + '</span>' : 'Not detected') + '</td>' +
+        '<td>' + esc(registration) + (member.last_seen_at ? '<br><span class="user-meta">Last seen ' + esc(date(member.last_seen_at)) + '</span>' : '') + '</td>' +
+        '<td>' + esc(permission) + (member.notification_permission_checked_at ? '<br><span class="user-meta">Checked ' + esc(date(member.notification_permission_checked_at)) + '</span>' : '') + '</td>' +
+        '<td>' + esc(member.app_version || 'Unknown') + '</td>' +
+        '<td>' + esc(member.registered_at ? date(member.registered_at) : '—') + '</td>' +
+        '<td><button class="btn" type="button" data-companion-member="' + id + '">Details</button></td></tr>';
+}
+async function loadCompanionTracker() {
+    if (companionTrackerBusy) return;
+    companionTrackerBusy = true;
+    var params = new URLSearchParams({ filter: $("companionFilter").value, search: companionSearch, page: String(companionPage), pageSize: "40" });
+    var r = await GG.api("/api/admin/companion-tracker?" + params.toString());
+    companionTrackerBusy = false;
+    if (!r.ok) {
+        $("companionTrackerList").innerHTML = '<div class="empty">' + esc(r.data.message || "Could not load companion records.") + '</div>';
+        return;
+    }
+    var stats = r.data.stats || {};
+    [["companionStatMembers", "total_members"], ["companionStatAcknowledged", "guide_acknowledged"], ["companionStatDownloads", "downloaded_members"], ["companionStatAnonymousDownloads", "anonymous_downloads"], ["companionStatRegistered", "registered_members"], ["companionStatRecent", "recently_active_members"], ["companionStatGranted", "notifications_granted"], ["companionStatDenied", "notifications_denied"], ["companionStatUnknown", "notifications_unknown"]].forEach(function(pair) {
+        $(pair[0]).textContent = (Number(stats[pair[1]]) || 0).toLocaleString();
+    });
+    var members = r.data.members || [];
+    $("companionTrackerList").innerHTML = members.length
+        ? '<div style="max-width:100%;overflow:auto"><table style="width:100%;min-width:980px;border-collapse:collapse"><thead><tr>' + ["Member", "Guide", "APK download", "Companion", "Notifications", "App version", "Registered", ""].map(function(label) { return '<th scope="col" style="padding:9px;text-align:left;border-bottom:1px solid #3b3b37;color:#e9c547">' + label + '</th>'; }).join("") + '</tr></thead><tbody>' + members.map(renderCompanionTrackerRow).join("") + '</tbody></table></div>'
+        : '<div class="empty">No members match this filter.</div>';
+    companionPages = Math.max(1, Math.ceil(Number(r.data.total || 0) / Number(r.data.pageSize || 40)));
+    companionPage = Number(r.data.page) || 1;
+    $("companionPageLabel").textContent = "Page " + companionPage + " of " + companionPages + " · " + Number(r.data.total || 0).toLocaleString() + " members";
+    $("companionPrev").disabled = companionPage <= 1;
+    $("companionNext").disabled = companionPage >= companionPages;
+    $("companionTrackerMessage").textContent = "A download record means the APK was served. It does not confirm installation; only a signed-in app registration does.";
+}
+async function openCompanionMember(userId) {
+    $("companionView").innerHTML = '<div class="empty">Loading companion details…</div>';
+    $("companionDialog").showModal();
+    var r = await GG.api("/api/admin/companion-tracker/" + encodeURIComponent(userId));
+    if (!r.ok) { $("companionView").innerHTML = '<div class="empty">' + esc(r.data.message || "Could not load companion details.") + '</div>'; return; }
+    var member = r.data.member || {}, installations = member.installations || [];
+    var html = '<h3>' + esc(member.username || "Member") + ' · User ID ' + Number(member.user_id) + '</h3><div class="account-grid">' +
+        caseTile("Account game", member.game) + caseTile("Account status", member.account_status) +
+        caseTile("Guide version", member.onboarding_version || "Not acknowledged") + caseTile("Guide acknowledgement", date(member.onboarding_acknowledged_at)) +
+        caseTile("APK downloaded", member.downloaded ? "Yes" : "Not detected") + caseTile("First download", date(member.downloaded_at)) + '</div><h3>Companion installations</h3>';
+    html += installations.length ? installations.map(function(item, index) {
+        return '<article class="activity-block"><strong>Installation ' + (index + 1) + ' · ' + esc(item.platform || "Android") + ' · v' + esc(item.appVersion || "unknown") + '</strong>' +
+            '<div class="activity-item">Registration: ' + esc(date(item.registeredAt)) + '<br>Last activity: ' + esc(date(item.lastSeenAt)) +
+            '<br>Notifications: ' + esc(item.notificationPermissionStatus || "unknown") + (item.notificationPermissionCheckedAt ? ' · checked ' + esc(date(item.notificationPermissionCheckedAt)) : "") +
+            (item.unregisteredAt ? '<br>Signed out: ' + esc(date(item.unregisteredAt)) : '<br>Currently registered') + '</div></article>';
+    }).join("") : '<div class="empty">No companion installation has been detected for this account.</div>';
+    $("companionView").innerHTML = html;
+}
 async function loadCompetitionList() {
     var response=await GG.api("/api/admin/competitions");
     if(!response.ok){$("competitionTable").innerHTML='<div class="empty">'+esc(response.data.message||"Could not load competition tables.")+'</div>';return;}
@@ -535,6 +595,7 @@ async function refresh(force) {
         if(force||!editing("adminWallet")){if($("walletAdjustmentSearch").value.trim())tasks.push(loadWalletAdjustmentUsers());}
         if(force||!editing("competitionSelect"))tasks.push(loadCompetitionList());
         if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
+        if(location.hash==="#companionTracker"&&(force||!editing("companionTracker")))tasks.push(loadCompanionTracker());
         tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
         $("live").textContent="Live · "+new Date().toLocaleTimeString();
     } catch(_){$("live").textContent="Some data could not refresh.";}
@@ -736,6 +797,13 @@ $("announcementList").addEventListener("click",function(e){var b=e.target.closes
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-delete-announcement]");if(b)deleteAnnouncement(b);});
 $("clearAllAnnouncements").addEventListener("click",clearAllAnnouncements);
 $("toggleHiddenAnnouncements").addEventListener("click",function(){includeInactiveAnnouncements=!includeInactiveAnnouncements;this.setAttribute("aria-pressed",String(includeInactiveAnnouncements));this.textContent=includeInactiveAnnouncements?"Hide hidden":"Show hidden";loadAnnouncements();});
+$("searchCompanion").addEventListener("click",function(){companionSearch=$("companionSearch").value.trim();companionPage=1;loadCompanionTracker();});
+$("companionSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();$("searchCompanion").click();}});
+$("companionFilter").addEventListener("change",function(){companionPage=1;loadCompanionTracker();});
+$("companionPrev").addEventListener("click",function(){if(companionPage>1){companionPage--;loadCompanionTracker();}});
+$("companionNext").addEventListener("click",function(){if(companionPage<companionPages){companionPage++;loadCompanionTracker();}});
+$("companionTrackerList").addEventListener("click",function(e){var button=e.target.closest("[data-companion-member]");if(button)openCompanionMember(button.dataset.companionMember);});
+$("companionDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-companion]"))this.close();});
 $("announcementForm").addEventListener("submit",async function(e){e.preventDefault();var input=$("announcementMessage"),message=input.value.trim(),eventName=$("announcementEventName").value.trim(),eventValue=$("announcementEventAt").value,publishValue=$("announcementPublishAt").value;if(!message)return;if(Boolean(eventName)!==Boolean(eventValue)){say("Enter both the event name and its date and start time.","error");return;}function toIso(value){return value?new Date(value).toISOString():null;}$("sendAnnouncement").disabled=true;var r=await GG.api("/api/admin/announcements",{method:"POST",body:{message:message,eventName:eventName,eventAt:toIso(eventValue),eventTimeZone:Intl.DateTimeFormat().resolvedOptions().timeZone||"Africa/Nairobi",publishAt:toIso(publishValue),audience:$("announcementAudience").value}});$("sendAnnouncement").disabled=false;if(!r.ok){say(r.data.message||"Announcement was not published.","error");return;}input.value="";$("announcementEventName").value="";$("announcementEventAt").value="";$("announcementPublishAt").value="";$("announcementAudience").value="all";say(r.data.message||"Announcement published.","ok");await loadAnnouncements();});
 $("adminWalletWithdrawForm").addEventListener("submit",async function(e){e.preventDefault();var form=this,amount=Number(form.elements.amount.value),phone=form.elements.phone.value.trim();if(!Number.isSafeInteger(amount)||amount<1||amount>1000000||!phone){$("adminWalletMessage").textContent="Enter a whole KSh amount and valid M-Pesa number.";return;}var fee=Math.round(amount*0.05),payout=amount-fee;if(payout<1){$("adminWalletMessage").textContent="Withdrawal amount is too small after the 5% fee.";return;}if(!confirm("Withdraw KSh "+amount+" from your administrator wallet to "+phone+"? The 5% fee is KSh "+fee+"; estimated payout is KSh "+payout+"."))return;var button=$("adminWalletWithdrawButton");button.disabled=true;$("adminWalletMessage").textContent="Submitting withdrawal to Daraja…";var r=await GG.api("/api/admin/wallet/withdraw",{method:"POST",body:{amount:amount,phone:phone}});button.disabled=false;$("adminWalletMessage").textContent=r.data.message||(r.ok?"Withdrawal submitted.":"Withdrawal was not submitted.");$("adminWalletMessage").className="notice "+(r.ok?"ok":"error");if(r.ok){form.elements.amount.value="";await loadAdminWallet();}});
 $("accountDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-account]"))this.close();});
@@ -756,11 +824,12 @@ $("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=n
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 function updateAdminPage() {
-    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."]};
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."],companionTracker:["Companion App Tracker","Review guide acknowledgement, APK downloads, registered Companion apps, recent activity, and notification permission."]};
     if(!titles[page])page="overview";
-    ["results","matchManagement","complaints","support","accounts","competitions","adminWallet","announcements"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
+    ["results","matchManagement","complaints","support","accounts","competitions","adminWallet","announcements","companionTracker"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
     $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];
     Array.from(document.querySelectorAll("[data-admin-page]")).forEach(function(link){if(link.dataset.adminPage===page)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
+    if(page==="companionTracker"&&adminAuthorized)loadCompanionTracker();
 }
 window.addEventListener("hashchange",updateAdminPage);
 updateAdminPage();

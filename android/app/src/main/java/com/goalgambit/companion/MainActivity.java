@@ -75,6 +75,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         String bearer = TokenStore.read(this);
         if (bearer != null) {
+            syncCompanionInstallation();
             if (!SupportQueueStore.pending(this, TokenStore.accountUserId(bearer)).isEmpty()) enqueueSupportSync();
             refreshCompanionData();
         }
@@ -180,6 +181,7 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     TokenStore.save(this, token);
+                    syncCompanionInstallation();
                     runOnUiThread(() -> {
                         Toast.makeText(this, "Signed in to GOAL$GAMBIT.", Toast.LENGTH_SHORT).show();
                         renderAccountState();
@@ -538,6 +540,7 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
             return;
         }
+        syncCompanionInstallation();
         registerFirebaseToken();
     }
 
@@ -546,10 +549,30 @@ public final class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_NOTIFICATIONS) return;
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            syncCompanionInstallation();
             registerFirebaseToken();
         } else {
+            syncCompanionInstallation();
             statusView.setText("Notification permission was denied. Allow notifications for GOAL$GAMBIT Companion in Android Settings, then try again.");
         }
+    }
+
+    private void syncCompanionInstallation() {
+        String bearer = TokenStore.read(this);
+        if (bearer == null || bearer.trim().isEmpty()) return;
+        CompanionHeartbeatWorker.schedule(this);
+        API_EXECUTOR.execute(() -> {
+            try {
+                Api.Result registered = Api.registerCompanion(this, bearer);
+                if (registered.status == 401) return;
+                if (!registered.ok()) {
+                    Api.Result heartbeat = Api.heartbeatCompanion(this, bearer);
+                    if (heartbeat.ok()) Api.updateCompanionNotificationStatus(this, bearer);
+                }
+            } catch (Exception ignored) {
+                // A failed or offline registration is retried on the next app open or background check.
+            }
+        });
     }
 
     private void registerFirebaseToken() {
@@ -564,6 +587,7 @@ public final class MainActivity extends Activity {
                 API_EXECUTOR.execute(() -> {
                     try {
                         Api.Result result = Api.registerDevice(fcmToken, TokenStore.deviceId(this), TokenStore.read(this));
+                        if (result.ok()) Api.registerCompanion(this, TokenStore.read(this));
                         runOnUiThread(() -> statusView.setText(result.ok()
                             ? (BuildConfig.DEBUG ? "Trial build" : "Release build") + " v" + BuildConfig.VERSION_NAME + " is registered for GOAL$GAMBIT notifications."
                             : result.message("Could not register this Android device.")));
@@ -588,7 +612,11 @@ public final class MainActivity extends Activity {
                         try {
                             Api.unregisterDevice(fcmToken, bearer);
                         } catch (Exception ignored) {}
-                        if (signOut) TokenStore.clear(this);
+                        if (signOut) {
+                            try { Api.unregisterCompanion(this, bearer); } catch (Exception ignored) {}
+                            CompanionHeartbeatWorker.cancel(this);
+                            TokenStore.clear(this);
+                        }
                         try { FirebaseMessaging.getInstance().deleteToken(); } catch (Exception ignored) {}
                         runOnUiThread(() -> {
                             statusView.setText(signOut ? "Signed out. This device's push subscription was disabled where the server was reachable."
@@ -599,7 +627,11 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception ignored) {
                 try {
-                    if (signOut) TokenStore.clear(this);
+                    if (signOut) {
+                        try { Api.unregisterCompanion(this, bearer); } catch (Exception ignoredUnregister) {}
+                        CompanionHeartbeatWorker.cancel(this);
+                        TokenStore.clear(this);
+                    }
                     FirebaseMessaging.getInstance().deleteToken();
                 } catch (Exception ignoredAgain) {}
                 runOnUiThread(() -> {

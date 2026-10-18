@@ -6,9 +6,10 @@ const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
-const router = express.Router();
+const companionGuideVersion = require("./companion").GUIDE_VERSION;
 
 module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
+    const router = express.Router();
     async function getOrCreateSupportThread(userId, queryable) {
         const db = queryable || pool;
         const created = await db.query(
@@ -1070,6 +1071,161 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         } catch(e) {
             console.error(e);
             return res.status(500).json({success:false,message:"Failed to delete announcement."});
+        }
+    });
+
+    const companionTrackerCte = `
+        WITH installation_rollup AS (
+            SELECT user_id,
+                   COUNT(*)::int AS installation_count,
+                   COUNT(*) FILTER (WHERE unregistered_at IS NULL)::int AS active_installation_count,
+                   MIN(registered_at) AS registered_at,
+                   MAX(last_seen_at) AS last_seen_at,
+                   MAX(last_seen_at) FILTER (WHERE unregistered_at IS NULL) AS active_last_seen_at,
+                   (ARRAY_AGG(app_version ORDER BY (unregistered_at IS NULL) DESC,updated_at DESC,id DESC))[1] AS app_version,
+                   (ARRAY_AGG(device_platform ORDER BY (unregistered_at IS NULL) DESC,updated_at DESC,id DESC))[1] AS device_platform,
+                   (ARRAY_AGG(notification_permission_checked_at ORDER BY (unregistered_at IS NULL) DESC,updated_at DESC,id DESC))[1] AS notification_permission_checked_at,
+                   BOOL_OR(unregistered_at IS NULL AND notification_permission_status='granted') AS has_granted_permission,
+                   BOOL_OR(unregistered_at IS NULL AND notification_permission_status='denied') AS has_denied_permission,
+                   BOOL_OR(unregistered_at IS NULL AND notification_permission_status='unknown') AS has_unknown_permission
+              FROM companion_installations
+             GROUP BY user_id
+        ), download_rollup AS (
+            SELECT user_id,MIN(downloaded_at) AS downloaded_at,MAX(last_downloaded_at) AS last_downloaded_at
+              FROM companion_download_events GROUP BY user_id
+        ), member_rows AS (
+            SELECT u.id AS user_id,u.username,u.game,u.account_status,
+                   s.onboarding_version,s.onboarding_acknowledged_at,
+                   d.downloaded_at,d.last_downloaded_at,
+                   i.installation_count,i.active_installation_count,i.registered_at,i.last_seen_at,
+                   i.active_last_seen_at,i.app_version,i.device_platform,i.notification_permission_checked_at,
+                   CASE WHEN COALESCE(i.has_granted_permission,FALSE) THEN 'granted'
+                        WHEN COALESCE(i.has_denied_permission,FALSE) THEN 'denied'
+                        WHEN COALESCE(i.has_unknown_permission,FALSE) THEN 'unknown'
+                        ELSE 'unknown' END AS notification_permission_status,
+                   (COALESCE(i.active_installation_count,0)>0) AS currently_registered,
+                   (COALESCE(i.active_installation_count,0)>0 AND i.active_last_seen_at>=NOW()-INTERVAL '7 days') AS recently_active,
+                   (COALESCE(i.installation_count,0)>0 AND
+                       (COALESCE(i.active_installation_count,0)=0 OR i.active_last_seen_at<NOW()-INTERVAL '30 days')) AS stale_or_inactive,
+                   (s.onboarding_version=$1) AS guide_acknowledged
+              FROM users u
+              LEFT JOIN companion_user_setup s ON s.user_id=u.id
+              LEFT JOIN download_rollup d ON d.user_id=u.id
+              LEFT JOIN installation_rollup i ON i.user_id=u.id
+        )`;
+
+    router.get("/companion-tracker", authenticateToken, adminOnly, async (req, res) => {
+        const allowedFilters = new Set([
+            "all", "guide_not_acknowledged", "download_not_detected", "registration_not_detected",
+            "registered", "recently_active", "stale", "notifications_denied", "notifications_unknown"
+        ]);
+        const filter = String(req.query.filter || "all");
+        const search = String(req.query.search || "").trim().slice(0, 80);
+        const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
+        const pageSize = Math.max(1, Math.min(100, Number.parseInt(req.query.pageSize, 10) || 50));
+        if (!allowedFilters.has(filter)) return res.status(400).json({ success: false, message: "Invalid companion tracker filter." });
+
+        const where = [];
+        const params = [companionGuideVersion];
+        if (search) {
+            params.push("%" + search.replace(/!/g, "!!").replace(/%/g, "!%").replace(/_/g, "!_") + "%");
+            const searchPatternIndex = params.length;
+            params.push(search);
+            const searchExactIndex = params.length;
+            where.push(`(username ILIKE $${searchPatternIndex} ESCAPE '!' OR user_id::text=$${searchExactIndex})`);
+        }
+        const filterSql = {
+            guide_not_acknowledged: "NOT guide_acknowledged",
+            download_not_detected: "downloaded_at IS NULL",
+            registration_not_detected: "installation_count IS NULL",
+            registered: "currently_registered",
+            recently_active: "recently_active",
+            stale: "stale_or_inactive",
+            notifications_denied: "currently_registered AND notification_permission_status='denied'",
+            notifications_unknown: "currently_registered AND notification_permission_status='unknown'"
+        };
+        if (filterSql[filter]) where.push(filterSql[filter]);
+        const whereSql = where.length ? " WHERE " + where.join(" AND ") : "";
+        const countParams = params.slice();
+        params.push(pageSize, (page - 1) * pageSize);
+
+        try {
+            const [stats, count, members] = await Promise.all([
+                pool.query(
+                    `SELECT COUNT(*)::int AS total_members,
+                            COUNT(*) FILTER (WHERE s.onboarding_version=$1)::int AS guide_acknowledged,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_download_events) AS downloaded_members,
+                            (SELECT COUNT(*)::int FROM companion_anonymous_download_events) AS anonymous_downloads,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations WHERE unregistered_at IS NULL) AS registered_members,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations
+                              WHERE unregistered_at IS NULL AND last_seen_at>=NOW()-INTERVAL '7 days') AS recently_active_members,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations
+                              WHERE unregistered_at IS NULL AND notification_permission_status='granted') AS notifications_granted,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations
+                              WHERE unregistered_at IS NULL AND notification_permission_status='denied') AS notifications_denied,
+                            (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations
+                              WHERE unregistered_at IS NULL AND notification_permission_status='unknown') AS notifications_unknown
+                       FROM users u LEFT JOIN companion_user_setup s ON s.user_id=u.id`,
+                    [companionGuideVersion]
+                ),
+                pool.query(`${companionTrackerCte} SELECT COUNT(*)::int AS total FROM member_rows${whereSql}`, countParams),
+                pool.query(
+                    `${companionTrackerCte}
+                     SELECT user_id,username,game,account_status,onboarding_version,onboarding_acknowledged_at,
+                            downloaded_at,last_downloaded_at,installation_count,active_installation_count,
+                            registered_at,last_seen_at,active_last_seen_at,app_version,device_platform,
+                            notification_permission_status,notification_permission_checked_at,
+                            currently_registered,recently_active,stale_or_inactive,guide_acknowledged
+                       FROM member_rows${whereSql}
+                      ORDER BY user_id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+                    params
+                )
+            ]);
+            res.set("Cache-Control", "private, no-store");
+            return res.json({
+                success: true,
+                stats: stats.rows[0],
+                members: members.rows,
+                page,
+                pageSize,
+                total: Number(count.rows[0] && count.rows[0].total || 0),
+                guideVersion: companionGuideVersion,
+                recentlyActiveDays: 7,
+                staleAfterDays: 30
+            });
+        } catch (error) {
+            console.error("Admin companion tracker query failed.");
+            return res.status(500).json({ success: false, message: "Could not load companion installation records." });
+        }
+    });
+
+    router.get("/companion-tracker/:userId", authenticateToken, adminOnly, async (req, res) => {
+        const userId = Number(req.params.userId);
+        if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ success: false, message: "Invalid member reference." });
+        try {
+            const result = await pool.query(
+                `SELECT u.id AS user_id,u.username,u.game,u.account_status,
+                        s.onboarding_version,s.onboarding_acknowledged_at,
+                        EXISTS(SELECT 1 FROM companion_download_events d WHERE d.user_id=u.id) AS downloaded,
+                        (SELECT MIN(downloaded_at) FROM companion_download_events d WHERE d.user_id=u.id) AS downloaded_at,
+                        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                            'platform',i.device_platform,'appVersion',i.app_version,
+                            'registeredAt',i.registered_at,'lastSeenAt',i.last_seen_at,
+                            'unregisteredAt',i.unregistered_at,
+                            'notificationPermissionStatus',i.notification_permission_status,
+                            'notificationPermissionCheckedAt',i.notification_permission_checked_at,
+                            'currentlyRegistered',i.unregistered_at IS NULL
+                         ) ORDER BY i.updated_at DESC,i.id DESC)
+                           FROM companion_installations i WHERE i.user_id=u.id),'[]'::jsonb) AS installations
+                   FROM users u LEFT JOIN companion_user_setup s ON s.user_id=u.id
+                  WHERE u.id=$1`, [userId]
+            );
+            if (!result.rows.length) return res.status(404).json({ success: false, message: "Member not found." });
+            res.set("Cache-Control", "private, no-store");
+            return res.json({ success: true, member: result.rows[0] });
+        } catch (error) {
+            console.error("Admin companion member detail query failed.");
+            return res.status(500).json({ success: false, message: "Could not load this member's companion details." });
         }
     });
 
