@@ -744,17 +744,24 @@
         banner.style.cssText = [
             "box-sizing:border-box",
             "display:none",
-            "position:sticky",
+            "position:fixed",
             "top:0",
-            "z-index:2147483000",
-            "width:100%",
-            "padding:11px 16px",
+            "right:0",
+            "bottom:0",
+            "left:0",
+            "z-index:2147483647",
+            "width:100vw",
+            "min-height:100vh",
+            "min-height:100dvh",
+            "padding:24px",
+            "align-items:center",
+            "justify-content:center",
             "text-align:center",
-            "font:600 14px/1.45 Arial,Helvetica,sans-serif",
-            "color:#fff7ed",
-            "background:#2b1710",
-            "border-bottom:2px solid #f4bd20",
-            "box-shadow:0 3px 12px rgba(0,0,0,.3)"
+            "font:700 24px/1.35 Arial,Helvetica,sans-serif",
+            "color:#111",
+            "background:#fff",
+            "border:0",
+            "box-shadow:none"
         ].join(";");
 
         // Put the status at the top of the page so it stays visible while scrolling.
@@ -772,26 +779,26 @@
             window.clearTimeout(recoveryTimer);
             wasOffline = true;
             banner.textContent = "Server offline";
-            banner.style.background = "#2b1710";
-            banner.style.color = "#fff7ed";
-            banner.style.borderBottomColor = "#f4bd20";
+            banner.style.background = "#fff";
+            banner.style.color = "#111";
+            banner.style.border = "0";
             banner.setAttribute("role", "alert");
             banner.setAttribute("aria-live", "assertive");
             banner.hidden = false;
-            banner.style.display = "block";
+            banner.style.display = "flex";
         }
 
         function showOnline() {
             if (wasOffline) {
                 wasOffline = false;
                 banner.textContent = "Server connection restored.";
-                banner.style.background = "#123021";
-                banner.style.color = "#e9fff1";
-                banner.style.borderBottomColor = "#56c781";
+                banner.style.background = "#fff";
+                banner.style.color = "#111";
+                banner.style.border = "0";
                 banner.setAttribute("role", "status");
                 banner.setAttribute("aria-live", "polite");
                 banner.hidden = false;
-                banner.style.display = "block";
+                banner.style.display = "flex";
                 recoveryTimer = window.setTimeout(function () {
                     banner.hidden = true;
                     banner.style.display = "none";
