@@ -1627,6 +1627,132 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             client.release();
         }
     }
+
+    async function sendRoomCodeAppNotification(req, res) {
+        const userId = Number(req.user.userId);
+        const matchId = Number(req.params.id);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid match ID." });
+        }
+        if (!pushService || typeof pushService.enqueueNotification !== "function" ||
+            typeof pushService.status !== "function" || !pushService.status().androidConfigured) {
+            return res.status(503).json({ success: false, message: "Android companion notifications are not available right now." });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            if (!result.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({ success: false, message: "Match not found." });
+            }
+
+            const match = result.rows[0];
+            const participantIds = [Number(match.creator_id), Number(match.opponent_id)];
+            if (!participantIds.includes(userId)) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "You are not part of this match." });
+            }
+            const senderId = match.code_sender_id == null ? null : Number(match.code_sender_id);
+            if (!senderId || !participantIds.includes(senderId)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This match has no valid room-code sender." });
+            }
+            if (senderId !== userId) {
+                await client.query("ROLLBACK");
+                return res.status(403).json({ success: false, message: "Only the selected room-code sender can notify the companion app." });
+            }
+            if (!match.opponent_id || !["waiting", "ready"].includes(match.status) || match.started_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Room-code alerts are only available before the match starts." });
+            }
+            const replacementNeeded = Boolean(
+                match.code_sent && match.code_correction_requested_at &&
+                Number(match.code_correction_requested_by) !== senderId
+            );
+            if (match.code_sent && !replacementNeeded) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "The room code has already been sent. Wait for your opponent or a replacement request." });
+            }
+
+            const activeDevice = await client.query(
+                "SELECT 1 FROM android_push_tokens WHERE user_id=$1 AND active=TRUE LIMIT 1",
+                [userId]
+            );
+            if (!activeDevice.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Open the GOAL$GAMBIT Companion on Android and enable notifications first." });
+            }
+
+            const reminderPrefix = "efootball-match:" + matchId + ":room-code-needed:manual:%";
+            const recentReminder = await client.query(
+                `SELECT created_at FROM push_notification_events
+                  WHERE user_id=$1 AND match_id=$2 AND event_key LIKE $3
+                    AND created_at > NOW()-INTERVAL '60 seconds'
+                  ORDER BY created_at DESC LIMIT 1`,
+                [userId, matchId, reminderPrefix]
+            );
+            if (recentReminder.rows.length) {
+                const createdAt = new Date(recentReminder.rows[0].created_at).getTime();
+                const retryAfterSeconds = Math.max(1, 60 - Math.floor((Date.now() - createdAt) / 1000));
+                await client.query("COMMIT");
+                return res.status(429).json({
+                    success: false,
+                    retryAfterSeconds,
+                    message: "A room-code notification was just requested. Please wait before sending another."
+                });
+            }
+
+            const queued = await queuePush(client, userId, {
+                eventKey: "efootball-match:" + matchId + ":room-code-needed:manual:" +
+                    Number(match.room_code_revision || 0) + ":" + randomUUID(),
+                matchId,
+                title: "GOAL$GAMBIT — Match Room Code",
+                body: "Your opponent is waiting. Open this notification, reply with the room code, then tap Send.",
+                page: "match-room",
+                androidOnly: true
+            });
+            if (!queued) {
+                await client.query("ROLLBACK");
+                return res.status(503).json({ success: false, message: "The companion notification could not be queued. Please try again." });
+            }
+
+            const androidJob = await client.query(
+                `SELECT 1
+                   FROM android_push_delivery_jobs j
+                   JOIN android_push_tokens t ON t.id=j.token_id
+                  WHERE j.event_id=$1 AND t.user_id=$2 AND t.active=TRUE
+                  LIMIT 1`,
+                [queued.id, userId]
+            );
+            if (!androidJob.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(503).json({ success: false, message: "The companion notification could not be queued. Please check that Android notifications are enabled." });
+            }
+
+            await client.query("COMMIT");
+            wakePushQueue();
+            return res.json({
+                success: true,
+                retryAfterSeconds: 60,
+                message: "Room-code notification queued for your Android Companion."
+            });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Room-code companion notification failed.");
+            return res.status(500).json({ success: false, message: "Unable to send a room-code notification to the Companion app." });
+        } finally {
+            client.release();
+        }
+    }
+
+    router.post(
+        "/matches/:id/room-code-notification",
+        authenticateToken,
+        sendRoomCodeAppNotification
+    );
+
     router.post(
         "/matches/:id/send-code",
         authenticateToken,

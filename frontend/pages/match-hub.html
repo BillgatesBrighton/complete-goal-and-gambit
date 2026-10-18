@@ -880,6 +880,9 @@ button{
             <p class="description" style="margin-top:12px;">
                 Create the room in eFootball, then send its official code to your matched opponent from this Match Hub.
             </p>
+            <p class="description">Your Companion sends an alert when you are selected. If it did not appear, request another replyable alert here.</p>
+            <button class="secondary-btn hidden" id="sendRoomCodeNotificationButton" type="button">SEND ALERT TO COMPANION APP</button>
+            <p class="room-code-entry-status hidden" id="roomCodeNotificationStatus" role="status" aria-live="polite"></p>
             <button class="primary-btn hidden" id="openRoomCodeDialog" type="button">SEND ROOM CODE</button>
             <div class="role-banner hidden" id="senderCodeStatus" role="status" aria-live="polite"></div>
         </div>
@@ -1474,6 +1477,9 @@ let pollingTimer = null;
 let lastQueueHeartbeatAt = 0;
 let lastTournamentHeartbeatAt = 0;
 let roomCodeSubmitting = false;
+let roomCodeNotificationSubmitting = false;
+let roomCodeNotificationCooldownUntil = 0;
+let roomCodeNotificationStatusMatchId = "";
 let roomCodePreviousFocus = null;
 let authoritativeMatchState = null;
 
@@ -1828,10 +1834,27 @@ function isSender(){
 
 function updateRoomCodeForm(){
     const button = document.getElementById("openRoomCodeDialog");
+    const notificationButton = document.getElementById("sendRoomCodeNotificationButton");
+    const notificationStatus = document.getElementById("roomCodeNotificationStatus");
     const status = document.getElementById("senderCodeStatus");
+    const matchId = currentMatch && currentMatch.backendId ? String(currentMatch.backendId) : "";
+    if(notificationStatus && roomCodeNotificationStatusMatchId !== matchId){
+        roomCodeNotificationStatusMatchId = matchId;
+        roomCodeNotificationCooldownUntil = 0;
+        notificationStatus.textContent = "";
+        notificationStatus.classList.remove("error", "success");
+        notificationStatus.classList.add("hidden");
+    }
     const canSend = !!(currentMatch && currentMatch.backendId && isSender() &&
         ["waiting", "ready"].includes(currentMatch.status) && !currentMatch.matchStarted &&
         (!currentMatch.codeSent || currentMatch.codeCorrectionRequested));
+    if(notificationButton){
+        notificationButton.classList.toggle("hidden", !canSend);
+        notificationButton.disabled = roomCodeNotificationSubmitting || roomCodeNotificationCooldownUntil > Date.now();
+        notificationButton.textContent = currentMatch && currentMatch.codeCorrectionRequested
+            ? "SEND REPLACEMENT ALERT TO COMPANION APP"
+            : "SEND ALERT TO COMPANION APP";
+    }
     if(button){
         button.classList.toggle("hidden", !canSend);
         button.textContent = currentMatch && currentMatch.codeCorrectionRequested ? "SEND REPLACEMENT ROOM CODE" : "SEND ROOM CODE";
@@ -1845,6 +1868,47 @@ function updateRoomCodeForm(){
         status.textContent = senderWithCode
             ? (currentMatch.codeReceived ? "CODE RECEIVED BY OPPONENT · YOU ARE READY" : "ROOM CODE SENT · YOU ARE READY · WAITING FOR OPPONENT")
             : "";
+    }
+}
+
+async function sendRoomCodeAppNotification(){
+    if(roomCodeNotificationSubmitting || !currentMatch || !currentMatch.backendId || !isSender() ||
+        !["waiting", "ready"].includes(currentMatch.status) || currentMatch.matchStarted ||
+        (currentMatch.codeSent && !currentMatch.codeCorrectionRequested)) return;
+    const button = document.getElementById("sendRoomCodeNotificationButton");
+    const status = document.getElementById("roomCodeNotificationStatus");
+    if(!button || !status) return;
+    roomCodeNotificationSubmitting = true;
+    button.disabled = true;
+    status.classList.remove("hidden");
+    status.textContent = "Sending a room-code alert to your Android Companion…";
+    status.classList.remove("error", "success");
+    try{
+        const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/room-code-notification", {
+            method: "POST", noRedirect: true
+        });
+        if(!result.ok){
+            status.textContent = result.data.message || "The Companion notification could not be sent.";
+            status.classList.add("error");
+            const retryAfterSeconds = Number(result.data.retryAfterSeconds);
+            if(Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0){
+                roomCodeNotificationCooldownUntil = Date.now() + retryAfterSeconds * 1000;
+                status.textContent += " You can try again in " + retryAfterSeconds + " seconds.";
+                window.setTimeout(updateRoomCodeForm, retryAfterSeconds * 1000);
+            }
+            return;
+        }
+        status.textContent = result.data.message || "Room-code notification queued for your Android Companion.";
+        status.classList.add("success");
+        const cooldownSeconds = Math.max(1, Number(result.data.retryAfterSeconds) || 60);
+        roomCodeNotificationCooldownUntil = Date.now() + cooldownSeconds * 1000;
+        window.setTimeout(updateRoomCodeForm, cooldownSeconds * 1000);
+    }catch(error){
+        status.textContent = (error && error.message ? error.message + " " : "") + "Check your connection, then try again.";
+        status.classList.add("error");
+    }finally{
+        roomCodeNotificationSubmitting = false;
+        updateRoomCodeForm();
     }
 }
 
@@ -3369,6 +3433,7 @@ async function sendRoomCode(){
 }
 
 document.getElementById("openRoomCodeDialog").addEventListener("click", openRoomCodeEntry);
+document.getElementById("sendRoomCodeNotificationButton").addEventListener("click", sendRoomCodeAppNotification);
 document.getElementById("cancelRoomCodeButton").addEventListener("click", closeRoomCodeEntry);
 document.getElementById("pasteRoomCodeButton").addEventListener("click", pasteRoomCode);
 document.getElementById("sendRoomCodeButton").addEventListener("click", sendRoomCode);

@@ -76,7 +76,7 @@ async function enqueueNotification(client, userId, notification) {
         eventId = existing.rows[0] && Number(existing.rows[0].id);
     }
     if (!eventId) throw new Error("Push notification event could not be saved.");
-    if (inserted.rows.length) {
+    if (inserted.rows.length && notification.androidOnly !== true) {
         await client.query(
             `INSERT INTO push_delivery_jobs (event_id, subscription_id)
              SELECT $1, s.id FROM push_subscriptions s
