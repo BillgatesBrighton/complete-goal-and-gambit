@@ -5,12 +5,15 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const { recordJournal } = require("../services/financialLedger");
 const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
+const financialRateLimit = require("../middleware/financialRateLimit");
 const companionGuideVersion = require("./companion").GUIDE_VERSION;
 const companionTermsVersion = require("./companion").TERMS_VERSION;
 
 module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
     const router = express.Router();
+    const walletAdjustmentLimit = financialRateLimit("admin-wallet-adjustment", { windowMs: 10 * 60 * 1000, max: 30 });
     async function getOrCreateSupportThread(userId, queryable) {
         const db = queryable || pool;
         const created = await db.query(
@@ -359,7 +362,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
 
     // Adjust only available balance; locked match/competition stakes are never
     // touched. The wallet, user transaction, and detailed audit are atomic.
-    router.post("/users/:id/wallet-adjustment", authenticateToken, adminOnly, async (req, res) => {
+    router.post("/users/:id/wallet-adjustment", authenticateToken, adminOnly, walletAdjustmentLimit, async (req, res) => {
         const userId = Number(req.params.id);
         const amount = Number(req.body && req.body.amount);
         const reason = String(req.body && req.body.reason || "").trim().slice(0, 1000);
@@ -400,6 +403,22 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                  VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
                 [req.user.userId, userId, target.rows[0].username, amount, previous, updated.rows[0].balance, reason, reference]
             );
+            await recordJournal(client, {
+                reference: `ADMIN-ADJUST-JOURNAL-${reference}`,
+                transactionType: amount > 0 ? "admin_adjustment_credit" : "admin_adjustment_debit",
+                amount: Math.abs(amount),
+                description: "Audited administrator wallet adjustment: " + reason,
+                context: { adminId: Number(req.user.userId), userId, adjustmentReference: reference },
+                postings: amount > 0
+                    ? [
+                        { accountType: "admin_adjustment_expense", accountId: Number(req.user.userId), debit: amount },
+                        { accountType: "user_wallet_available", accountId: userId, credit: amount }
+                    ]
+                    : [
+                        { accountType: "user_wallet_available", accountId: userId, debit: Math.abs(amount) },
+                        { accountType: "admin_adjustment_recovery", accountId: Number(req.user.userId), credit: Math.abs(amount) }
+                    ]
+            });
             await client.query("COMMIT");
             return res.json({success:true,message:"Available wallet balance adjusted. Locked stakes were left unchanged.",wallet:updated.rows[0]});
         } catch (error) {
@@ -582,8 +601,8 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 await client.query("ROLLBACK");
                 return res.status(409).json({success:false,message:"Administrator accounts cannot be permanently deleted from this desk."});
             }
-            const wallet = await client.query("SELECT balance,locked_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [id]);
-            if (wallet.rows.length && (Number(wallet.rows[0].balance) !== 0 || Number(wallet.rows[0].locked_balance) !== 0)) {
+            const wallet = await client.query("SELECT balance,locked_balance,withdrawal_reserved_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [id]);
+            if (wallet.rows.length && (Number(wallet.rows[0].balance) !== 0 || Number(wallet.rows[0].locked_balance) !== 0 || Number(wallet.rows[0].withdrawal_reserved_balance || 0) !== 0)) {
                 await client.query("ROLLBACK");
                 return res.status(409).json({success:false,message:"Settle or withdraw the remaining wallet funds before deleting this account."});
             }

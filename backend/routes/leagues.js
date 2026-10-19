@@ -1,7 +1,10 @@
 "use strict";
 const express = require("express");
+const { randomUUID } = require("crypto");
 const gameAccess = require("../middleware/gameAccess");
 const { ensureLeagueRound, recordLeagueFixtureResult } = require("../services/efootballtournament");
+const { creditPlatform, refundReservedPlatformFee } = require("../services/adminWalletAccounting");
+const { recordJournal } = require("../services/financialLedger");
 
 const MAX_LEAGUE_PLAYERS = 20;
 
@@ -150,7 +153,7 @@ module.exports = function (pool, authenticateToken) {
         res.json({ success: true, league: l, standings: s.rows });
     });
 
-    // Joining charges the entry stake from the wallet. No balance = no entry.
+    // League entry fees move to the platform wallet atomically with membership.
     router.post("/:id/join", authenticateToken, requireKonamiCompanion, async (req, res) => {
         const uid = Number(req.user.userId);
         const client = await pool.connect();
@@ -188,9 +191,10 @@ module.exports = function (pool, authenticateToken) {
             if (!Number.isFinite(fee) || fee < 0) {
                 throw Object.assign(new Error("This league has an invalid entry fee and cannot accept entries."), { status: 500 });
             }
+            let entryReference = null;
             if (fee > 0) {
                 const w = await client.query(
-                    `UPDATE wallets SET balance = balance - $1, locked_balance = locked_balance + $1, updated_at = NOW()
+                    `UPDATE wallets SET balance = balance - $1, updated_at = NOW()
                       WHERE user_id = $2 AND balance >= $1 RETURNING balance`, [fee, uid]);
                 if (!w.rows.length) {
                     throw Object.assign(
@@ -198,15 +202,26 @@ module.exports = function (pool, authenticateToken) {
                         { status: 402 }
                     );
                 }
+                entryReference = `LEAGUE-${league.id}-${uid}-${randomUUID()}`;
                 await client.query(
                     `INSERT INTO transactions(user_id, transaction_type, amount, currency, status, reference, description)
                      VALUES($1, 'league_entry', $2, 'KES', 'completed', $3, $4)`,
-                    [uid, fee, `LEAGUE-${league.id}-${uid}-${Date.now()}`, league.name + " League entry fee"]);
+                    [uid, fee, entryReference, league.name + " League entry fee"]);
+                await creditPlatform(client, {
+                    amount: fee,
+                    reference: entryReference,
+                    transactionType: "league_entry_fee",
+                    description: league.name + " League entry fee",
+                    context: { competitionType: "league", competitionId: Number(league.id), userId: uid },
+                    reserve: true,
+                    debitPostings: [{ accountType: "user_wallet_available", accountId: uid, debit: fee }]
+                });
             }
 
             await client.query(
-                "INSERT INTO efootball_league_members(league_id, user_id, fee_paid) VALUES($1, $2, $3)",
-                [league.id, uid, fee]);
+                `INSERT INTO efootball_league_members(league_id, user_id, fee_paid, fee_transferred, entry_reference)
+                 VALUES($1,$2,$3,$4,$5)`,
+                [league.id, uid, fee, fee > 0, entryReference]);
             await client.query("COMMIT");
             res.json({ success: true, message: "Joined the " + league.name + " League.", entryFee: fee });
         } catch (e) {
@@ -253,17 +268,34 @@ module.exports = function (pool, authenticateToken) {
 
             const fee = Math.max(0, Number(member.fee_paid || 0));
             if (fee > 0) {
-                const refund = await client.query(
-                    `UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$1,updated_at=NOW()
-                      WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
-                    [fee, uid]
-                );
-                if (!refund.rows.length) throw new Error("The locked league stake could not be refunded safely.");
-                await client.query(
-                    `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
-                     VALUES($1,'league_refund',$2,'KES','completed',$3,$4)`,
-                    [uid, fee, `LEAGUE-CANCEL-${league.id}-${uid}-${crypto.randomUUID()}`, league.name + " League entry refunded"]
-                );
+                const reference = `LEAGUE-CANCEL-${league.id}-${uid}-${crypto.randomUUID()}`;
+                if (member.fee_transferred && member.entry_reference) {
+                    await refundReservedPlatformFee(client, {
+                        entryReference: member.entry_reference, amount: fee, userId: uid, reference,
+                        transactionType: "league_entry_refund", description: league.name + " League entry refunded",
+                        context: { competitionType: "league", competitionId: Number(league.id), userId: uid }
+                    });
+                } else {
+                    const refund = await client.query(
+                        `UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$1,updated_at=NOW()
+                          WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`, [fee, uid]);
+                    if (!refund.rows.length) throw new Error("The locked league stake could not be refunded safely.");
+                    await client.query(
+                        `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                         VALUES($1,'league_refund',$2,'KES','completed',$3,$4)`,
+                        [uid, fee, reference, league.name + " League entry refunded"]);
+                    await recordJournal(client, {
+                        reference: `LEAGUE-LEGACY-REFUND-${league.id}-${uid}-${randomUUID()}`,
+                        transactionType: "legacy_league_entry_refund",
+                        amount: fee,
+                        description: league.name + " legacy League entry fee returned",
+                        context: { competitionType: "league", competitionId: Number(league.id), userId: uid },
+                        postings: [
+                            { accountType: "user_wallet_locked", accountId: uid, debit: fee },
+                            { accountType: "user_wallet_available", accountId: uid, credit: fee }
+                        ]
+                    });
+                }
             }
             await client.query(
                 `DELETE FROM efootball_league_fixtures
@@ -331,10 +363,11 @@ module.exports = function (pool, authenticateToken) {
 
             const fee = Math.max(0, Number(member.fee_paid || 0));
             if (!Number.isFinite(fee)) throw Object.assign(new Error("The league stake is invalid."), { status: 500 });
-            const admins = fee > 0
+            const legacyLockedFee = fee > 0 && !member.fee_transferred;
+            const admins = legacyLockedFee
                 ? await client.query("SELECT id FROM users WHERE role='admin' ORDER BY id FOR UPDATE")
                 : { rows: [] };
-            if (fee > 0 && admins.rows.length < 2) {
+            if (legacyLockedFee && admins.rows.length < 2) {
                 throw Object.assign(new Error("Both administrator accounts must be available before this stake can be forfeited."), { status: 409 });
             }
 
@@ -352,34 +385,29 @@ module.exports = function (pool, authenticateToken) {
                 await client.query("UPDATE efootball_league_fixtures SET match_id=NULL WHERE id=$1", [fixture.id]);
             }
 
-            if (fee > 0) {
+            if (legacyLockedFee) {
                 const transfer = await client.query(
                     `UPDATE wallets SET locked_balance=locked_balance-$1,updated_at=NOW()
                       WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
                     [fee, uid]
                 );
                 if (!transfer.rows.length) throw new Error("The locked league stake could not be transferred safely.");
-                const totalCents = Math.round(fee * 100);
-                const baseCents = Math.floor(totalCents / admins.rows.length);
-                let remainder = totalCents - baseCents * admins.rows.length;
                 const reference = `LEAGUE-FORFEIT-${league.id}-${uid}-${crypto.randomUUID()}`;
-                for (const admin of admins.rows) {
-                    const cents = baseCents + (remainder > 0 ? 1 : 0);
-                    if (remainder > 0) remainder -= 1;
-                    const share = (cents / 100).toFixed(2);
-                    await client.query("INSERT INTO admin_wallets(admin_id) VALUES($1) ON CONFLICT(admin_id) DO NOTHING", [admin.id]);
-                    await client.query("UPDATE admin_wallets SET balance=balance+$1,updated_at=NOW() WHERE admin_id=$2", [share, admin.id]);
-                    await client.query(
-                        `INSERT INTO admin_wallet_transactions(admin_id,transaction_type,amount,currency,status,reference,description)
-                         VALUES($1,'league_forfeit_stake',$2,'KES','completed',$3,$4)`,
-                        [admin.id, share, `${reference}-${admin.id}`, league.name + " League forfeited stake share"]
-                    );
-                }
+                await creditPlatform(client, {
+                    amount: fee, reference, transactionType: "league_forfeit_stake",
+                    description: league.name + " League forfeited entry fee",
+                    context: { competitionType: "league", competitionId: Number(league.id), userId: uid, forfeiture: true },
+                    reserve: true,
+                    debitPostings: [{ accountType: "user_wallet_locked", accountId: uid, debit: fee }]
+                });
                 await client.query(
                     `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
                      VALUES($1,'league_forfeit',$2,'KES','completed',$3,$4)`,
                     [uid, fee, reference, league.name + " League stake forfeited to both administrator wallets"]
                 );
+                await client.query(
+                    "UPDATE efootball_league_members SET fee_transferred=TRUE,entry_reference=$1 WHERE league_id=$2 AND user_id=$3",
+                    [reference, league.id, uid]);
             }
 
             const userIsHome = Number(fixture.home_id) === uid;

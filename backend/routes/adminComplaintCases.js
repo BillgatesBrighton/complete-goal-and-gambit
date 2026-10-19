@@ -4,6 +4,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const { recordJournal } = require("../services/financialLedger");
 const { safeStoragePath } = require("../services/privateEvidence");
 
 const CASE_STATUSES = new Set(["open", "investigating", "awaiting_player", "awaiting_evidence", "escalated", "resolved", "dismissed"]);
@@ -544,6 +545,17 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
                     [playerId, stakeAmount, reference, "eFootball dispute resolved; locked stake returned to player · " + complaint.complaint_ref]
                 );
             }
+            await recordJournal(client, {
+                reference: "EF-DISPUTE-REFUND-JOURNAL-" + match.id,
+                transactionType: "efootball_dispute_stake_refund",
+                amount: Number(totalAmount),
+                description: "Administrator resolved a disputed eFootball match by returning both locked stakes",
+                context: { matchId: Number(match.id), complaintId: Number(id), participants },
+                postings: participants.flatMap((playerId) => [
+                    { accountType: "efootball_match_locked", accountId: playerId, debit: Number(stakeAmount) },
+                    { accountType: "user_wallet_available", accountId: playerId, credit: Number(stakeAmount) }
+                ])
+            });
             await client.query(
                 "UPDATE efootball_matches SET status='cancelled',result_status='admin_refunded',settled_at=NOW(),finished_at=COALESCE(finished_at,NOW()),winner_id=NULL,submitted_by=$1 WHERE id=$2",
                 [req.user.userId, match.id]

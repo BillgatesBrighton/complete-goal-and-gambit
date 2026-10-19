@@ -453,10 +453,41 @@ async function loadOverview() {
     $("statRestricted").textContent=((Number(u.suspended)||0)+(Number(u.closed)||0)).toLocaleString();
 }
 async function loadAdminWallet() {
-    var r=await GG.api("/api/admin/wallet");
+    var search=$("adminFinanceSearch");
+    var term=search?search.value.trim():"";
+    var r=await GG.api("/api/admin/wallet"+(term?"?q="+encodeURIComponent(term):""));
     if(!r.ok){$("adminWalletBalance").textContent="Unavailable";$("adminWalletTransactions").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load administrator wallet.")+'</div>';return;}
-    var wallet=r.data.wallet||{},items=r.data.transactions||[];
+    var wallet=r.data.wallet||{},platform=r.data.platform||{},items=r.data.transactions||[];
     $("adminWalletBalance").textContent=GG.formatMoney(wallet.balance||0);
+    var financeValues={
+        platformTotalReceived:platform.totalFundsReceived,
+        platformEntryFees:platform.entryFeesCollected,
+        platformLeagueFees:platform.leagueEntryFees,
+        platformTournamentFees:platform.tournamentEntryFees,
+        platformRankedFees:platform.rankedMatchDeductions,
+        platformPrizesPaid:platform.prizesPaid,
+        platformRetainedRevenue:platform.retainedPrizePoolRevenue,
+        platformOtherRevenue:platform.otherPlatformRevenue,
+        platformAvailable:platform.availableFunds,
+        platformReserved:platform.competitionReserved,
+        platformPendingWithdrawals:platform.pendingWithdrawalReservations,
+        platformRefunds:platform.refundsAndReversals,
+        platformWithdrawals:platform.withdrawals
+    };
+    if(!$("platformEntryFees")){
+        var entryFeeCard=document.createElement("div");entryFeeCard.className="stat";entryFeeCard.appendChild(document.createTextNode("Total entry fees collected"));
+        var entryFeeValue=document.createElement("strong");entryFeeValue.id="platformEntryFees";entryFeeValue.textContent="KSh —";entryFeeCard.appendChild(entryFeeValue);
+        var summaryGrid=$("adminPlatformSummary");if(summaryGrid)summaryGrid.prepend(entryFeeCard);
+    }
+    Object.keys(financeValues).forEach(function(id){var el=$(id);if(el)el.textContent=GG.formatMoney(financeValues[id]||0);});
+    var reconciliation=r.data.reconciliation||{};
+    var issues=Object.keys(reconciliation).reduce(function(sum,key){return sum+(Number(reconciliation[key])||0);},0);
+    var reconciliationEl=$("financeReconciliation");
+    if(reconciliationEl){
+        reconciliationEl.textContent=issues===0?"Ledger reconciliation passed: wallet balances match the financial ledger and all journals balance.":"Ledger reconciliation found "+issues+" issue(s). Review wallet balances and ledger journals before approving financial adjustments.";
+        reconciliationEl.classList.toggle("error",issues>0);
+        reconciliationEl.classList.toggle("ok",issues===0);
+    }
     $("adminWalletTransactions").innerHTML=items.length?items.map(function(t){
         return '<article class="activity-item"><strong>'+esc(String(t.transaction_type||"wallet activity").replace(/_/g," "))+' · '+esc(GG.formatMoney(t.amount))+'</strong><br>'+esc(t.status||"completed")+' · '+esc(date(t.created_at))+(t.reference?'<br>Ref: '+esc(t.reference):"")+(t.description?'<br>'+esc(t.description):"")+'</article>';
     }).join(""):'<div class="empty">No administrator wallet activity is visible.</div>';
@@ -472,25 +503,29 @@ async function loadManualWithdrawals() {
     list.innerHTML=items.length?items.map(function(item){
         var id=Number(item.id), completed=item.status==="completed";
         var h='<article class="withdrawal-row" data-manual-withdrawal="'+id+'"><div class="withdrawal-row-head"><div><strong>'+esc(item.username||"Player")+' · '+esc(item.recipient_phone)+'</strong><div class="user-meta">Request '+esc(item.reference)+' · '+esc(date(item.requested_at))+'</div></div><span class="badge '+(completed?'good':'wait')+'">'+(completed?'Paid manually':'Awaiting manual payout')+'</span></div>';
-        h+='<div class="withdrawal-amounts"><span>Wallet deduction after confirmation <strong>'+esc(GG.formatMoney(item.total_amount))+'</strong></span><span>Fee included <strong>'+esc(GG.formatMoney(item.fee_amount))+'</strong></span><span>Send to player <strong>'+esc(GG.formatMoney(item.payout_amount))+'</strong></span><span>Current wallet balance <strong>'+esc(GG.formatMoney(item.current_balance))+'</strong></span></div>';
+        h+='<div class="withdrawal-amounts"><span>Reserved from wallet <strong>'+esc(GG.formatMoney(item.funds_reserved?item.total_amount:0))+'</strong></span><span>Fee included <strong>'+esc(GG.formatMoney(item.fee_amount))+'</strong></span><span>Send to player <strong>'+esc(GG.formatMoney(item.payout_amount))+'</strong></span><span>Current available wallet <strong>'+esc(GG.formatMoney(item.current_balance))+'</strong></span></div>';
         if(completed){
             h+='<div class="actions"><button class="btn gold" type="button" data-manual-withdrawal-clear="'+id+'">Clear completed withdrawal</button></div>';
         }else{
-            h+='<div class="actions"><button class="btn gold" type="button" data-manual-withdrawal-complete="'+id+'">Confirm payment sent · deduct '+esc(GG.formatMoney(item.total_amount))+'</button></div><div class="foot">Send the listed net amount to the player first. Confirming here then deducts the gross amount (including the fee) from the wallet.</div>';
+            h+='<div class="actions"><button class="btn gold" type="button" data-manual-withdrawal-complete="'+id+'"'+(!item.funds_reserved?' disabled':'')+'>Confirm payment sent</button><button class="btn" type="button" data-manual-withdrawal-cancel="'+id+'">Cancel request'+(item.funds_reserved?' and return reserved funds':'')+'</button></div><div class="foot">Send the listed net amount only after confirming the request is valid. Funds were reserved at request time; cancel only if payment has not been sent.'+(!item.funds_reserved?' This older request has no safe reserve and must be cancelled or reconciled before payment.':'')+'</div>';
         }
         return h+'</article>';
     }).join(""):'<div class="empty">No player withdrawals need manual handling.</div>';
 }
 async function manualWithdrawalAction(button) {
-    var id=button.dataset.manualWithdrawalComplete||button.dataset.manualWithdrawalClear;
+    var id=button.dataset.manualWithdrawalComplete||button.dataset.manualWithdrawalCancel||button.dataset.manualWithdrawalClear;
     var completing=!!button.dataset.manualWithdrawalComplete;
+    var cancelling=!!button.dataset.manualWithdrawalCancel;
     var card=button.closest("[data-manual-withdrawal]");
     var prompt=completing
-        ? "Confirm you have manually sent the listed M-Pesa payout. This will mark the withdrawal successful and deduct its gross amount from the player’s wallet."
+        ? "Confirm you have manually sent the listed M-Pesa payout. The player’s wallet funds were already reserved when the request was made."
+        : cancelling
+        ? "Cancel this withdrawal only if you have not sent the M-Pesa payout. The reserved funds will be returned to the player’s available wallet balance."
         : "Clear this completed withdrawal from the admin queue? The wallet and transaction records remain saved.";
     if(!confirm(prompt))return;
     button.disabled=true;
-    var path="/api/admin/wallet/manual-withdrawals/"+encodeURIComponent(id)+(completing?"/complete":"/clear");
+    var action=completing?"complete":cancelling?"cancel":"clear";
+    var path="/api/admin/wallet/manual-withdrawals/"+encodeURIComponent(id)+"/"+action;
     var r=await GG.api(path,{method:"POST",body:{}});
     if(!r.ok){button.disabled=false;say(r.data.message||"Could not update this withdrawal.","error");return;}
     say(r.data.message||"Withdrawal updated.","ok");
@@ -815,7 +850,8 @@ $("walletAdjustmentSearchButton").addEventListener("click",loadWalletAdjustmentU
 $("walletAdjustmentSearch").addEventListener("input",function(){clearTimeout(walletAdjustTimer);walletAdjustTimer=setTimeout(loadWalletAdjustmentUsers,250);});
 $("walletAdjustmentSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadWalletAdjustmentUsers();}});
 $("clearAdminWalletHistory").addEventListener("click",clearAdminWalletHistory);
-$("manualWithdrawalsList").addEventListener("click",function(e){var complete=e.target.closest("[data-manual-withdrawal-complete]");if(complete){manualWithdrawalAction(complete);return;}var clear=e.target.closest("[data-manual-withdrawal-clear]");if(clear)manualWithdrawalAction(clear);});
+$("manualWithdrawalsList").addEventListener("click",function(e){var complete=e.target.closest("[data-manual-withdrawal-complete]");if(complete){manualWithdrawalAction(complete);return;}var cancel=e.target.closest("[data-manual-withdrawal-cancel]");if(cancel){manualWithdrawalAction(cancel);return;}var clear=e.target.closest("[data-manual-withdrawal-clear]");if(clear)manualWithdrawalAction(clear);});
+if($("adminFinanceSearchButton"))$("adminFinanceSearchButton").addEventListener("click",loadAdminWallet);
 $("competitionSelect").addEventListener("change",loadCompetitionTable);
 $("competitionTable").addEventListener("submit",function(e){var form=e.target.closest("[data-competition-type]");if(!form)return;e.preventDefault();saveCompetitionEdit(form);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});

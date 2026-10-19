@@ -3,6 +3,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const daraja = require("../routes/mpesa");
+const { recordJournal } = require("./financialLedger");
 
 const MAX_C2B_AMOUNT = 1000000;
 const router = express.Router();
@@ -315,6 +316,17 @@ module.exports = function createMpesaC2b(pool, authenticateToken) {
                 "UPDATE wallets SET balance=balance+$1, updated_at=NOW() WHERE user_id=$2",
                 [payment.amount, payment.userId]
             );
+            await recordJournal(client, {
+                reference: "MPESAC2B-" + payment.transId,
+                transactionType: "verified_mpesa_deposit",
+                amount: payment.amount,
+                description: "Verified M-Pesa C2B receipt credited to player wallet",
+                context: { userId: Number(payment.userId), providerTransactionId: payment.transId },
+                postings: [
+                    { accountType: "external_mpesa_float", accountId: null, debit: payment.amount },
+                    { accountType: "user_wallet_available", accountId: Number(payment.userId), credit: payment.amount }
+                ]
+            });
             await client.query(
                 `UPDATE mpesa_c2b_payments
                  SET user_id=$1, status='credited', unmatched_reason=NULL, processed_at=NOW()

@@ -2,6 +2,9 @@
 
 const express = require("express");
 const { Chess } = require("chess.js");
+const { creditPlatform } = require("../services/adminWalletAccounting");
+const { rankedMatchPayout } = require("../services/rankedMatchPayout");
+const { recordJournal } = require("../services/financialLedger");
 
 // ======================================================
 // GOAL$GAMBIT CHESS ROUTES
@@ -566,6 +569,18 @@ await client.query(
     ]
 );
 
+await recordJournal(client, {
+    reference: `CHESS-STAKE-LOCK-${reference}`,
+    transactionType: "chess_stake_lock",
+    amount,
+    description: "Chess match stake moved to locked player funds",
+    context: { userId: Number(userId), transactionReference: reference },
+    postings: [
+        { accountType: "user_wallet_available", accountId: Number(userId), debit: amount },
+        { accountType: "chess_match_locked", accountId: Number(userId), credit: amount }
+    ]
+});
+
 }
 
 // ======================================================
@@ -639,6 +654,18 @@ await client.query(
         description
     ]
 );
+
+await recordJournal(client, {
+    reference: `CHESS-STAKE-UNLOCK-${reference}`,
+    transactionType: "chess_stake_refund",
+    amount,
+    description: description || "Chess match stake returned to player wallet",
+    context: { userId: Number(userId), transactionReference: reference },
+    postings: [
+        { accountType: "chess_match_locked", accountId: Number(userId), debit: amount },
+        { accountType: "user_wallet_available", accountId: Number(userId), credit: amount }
+    ]
+});
 
 }
 
@@ -1032,6 +1059,8 @@ try {
 
     if (result === "draw") {
 
+        rankedMatchPayout(stake, "draw");
+
         await unlockStake(
             client,
             whiteId,
@@ -1069,6 +1098,8 @@ try {
             );
         }
 
+        const payout = rankedMatchPayout(stake, "win");
+
         await client.query(
             `
             UPDATE wallets
@@ -1085,8 +1116,7 @@ try {
             ]
         );
 
-        const prizePool =
-            stake * 2;
+        const prizePool = payout.winner;
 
         await client.query(
             `
@@ -1101,6 +1131,21 @@ try {
                 winner
             ]
         );
+
+        if (payout.platform > 0) {
+            await creditPlatform(client, {
+                amount: payout.platform,
+                reference: `CHESS-FEE-${matchId}`,
+                transactionType: "ranked_match_deduction",
+                description: `Ranked Chess match ${matchId} platform deduction`,
+                context: { game: "chess", matchId: Number(matchId), stake, winnerId: winner },
+                debitPostings: [
+                    { accountType: "chess_match_locked", accountId: whiteId, debit: stake },
+                    { accountType: "chess_match_locked", accountId: blackId, debit: stake },
+                    { accountType: "user_wallet_available", accountId: winner, credit: prizePool }
+                ]
+            });
+        }
 
         await client.query(
             `

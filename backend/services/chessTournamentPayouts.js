@@ -1,9 +1,9 @@
 "use strict";
 
 const crypto = require("crypto");
-const { allocateCents } = require("./efootballpayouts");
-
-const WEIGHTS = [5, 4, 3];
+const { distributePrizePoolCents } = require("./efootballpayouts");
+const { creditPlatform } = require("./adminWalletAccounting");
+const { recordJournal } = require("./financialLedger");
 
 async function settleChessTournamentGroup(pool, seasonKey, timeControl, stakeAmount) {
     const client = await pool.connect();
@@ -101,14 +101,10 @@ async function settleChessTournamentGroup(pool, seasonKey, timeControl, stakeAmo
         }
         const poolCents = Array.from(contributions.values()).reduce((total,value)=>total+value,0);
         const eligible = standings.rows.filter(row=>Number(row.played)>0).slice(0,3);
-        const targetCents = Math.round(Number(stakeAmount)*100)*eligible.reduce((total,_,index)=>total+WEIGHTS[index],0);
-        const awardCents = Math.min(poolCents,targetCents);
-        const awards = allocateCents(awardCents,eligible.map((_,index)=>WEIGHTS[index]));
+        const distribution = distributePrizePoolCents(poolCents,eligible.length);
+        const awards = distribution.awards;
         const payoutByUser = new Map(eligible.map((row,index)=>[Number(row.user_id),awards[index]||0]));
-        const refundableCents = poolCents-awardCents;
         const contributionEntries = Array.from(contributions.entries());
-        const refunds = allocateCents(refundableCents,contributionEntries.map(([,amount])=>amount));
-        const refundByUser = new Map(contributionEntries.map(([userId],index)=>[userId,refunds[index]||0]));
         const userIds = contributionEntries.map(([userId])=>userId).sort((a,b)=>a-b);
         const wallets = await client.query(
             "SELECT user_id,balance,locked_balance FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE",
@@ -121,42 +117,71 @@ async function settleChessTournamentGroup(pool, seasonKey, timeControl, stakeAmo
         }
 
         const standingsRank = new Map(standings.rows.map((row,index)=>[Number(row.user_id),index+1]));
+        const journalPostings = [];
         for (const [userId,contributedCents] of contributions.entries()) {
             const row=standings.rows.find(item=>Number(item.user_id)===userId);
             const username=row?String(row.username):"Player";
             const prizeCents=payoutByUser.get(userId)||0;
-            const refundCents=refundByUser.get(userId)||0;
             const reference=`CHESS-COMP-${crypto.randomUUID()}`;
             await client.query(
-                `UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$2,updated_at=NOW() WHERE user_id=$3`,
-                [contributedCents/100,(prizeCents+refundCents)/100,userId]
+                `UPDATE wallets SET locked_balance=locked_balance-$1,balance=balance+$2,updated_at=NOW()
+                  WHERE user_id=$3 AND locked_balance >= $1`,
+                [contributedCents/100,prizeCents/100,userId]
             );
+            journalPostings.push({accountType:"chess_match_locked",accountId:userId,debit:contributedCents/100});
+            if(prizeCents>0) journalPostings.push({accountType:"user_wallet_available",accountId:userId,credit:prizeCents/100});
             await client.query(
                 `INSERT INTO chess_competition_settlements
-                    (season_key,time_control,stake_amount,user_id,username,final_rank,contributed,prize_amount,refund_amount,reference)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+                    (season_key,time_control,stake_amount,user_id,username,final_rank,contributed,prize_amount,refund_amount,retained_revenue,reference)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,0,$9)`,
                 [seasonKey,timeControl,stakeAmount,userId,username,standingsRank.get(userId)||null,
-                    contributedCents/100,prizeCents/100,refundCents/100,reference]
+                    contributedCents/100,prizeCents/100,reference]
             );
             if(prizeCents>0) await client.query(
                 `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
                  VALUES($1,'competition_prize',$2,'KES','completed',$3,$4)`,
                 [userId,prizeCents/100,`${reference}-P`,`Chess ${timeControl} KSh ${stakeAmount} tournament prize · place ${standingsRank.get(userId)||"—"}`]
             );
-            if(refundCents>0) await client.query(
-                `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
-                 VALUES($1,'competition_refund',$2,'KES','completed',$3,$4)`,
-                [userId,refundCents/100,`${reference}-R`,`Chess ${timeControl} tournament unused pool returned`]
-            );
             await client.query(
                 `INSERT INTO system_notifications(user_id,type,title,message)
                  VALUES($1,'competition_settlement','Chess tournament settled',$2)`,
-                [userId,`Your ${timeControl} KSh ${stakeAmount} chess tournament season has settled. Prize: KSh ${(prizeCents/100).toFixed(2)}; pool return: KSh ${(refundCents/100).toFixed(2)}.`]
+                [userId,`Your ${timeControl} KSh ${stakeAmount} chess tournament season has settled. Prize: KSh ${(prizeCents/100).toFixed(2)}.`]
             );
+        }
+        const retainedCents = distribution.retainedCents;
+        if (poolCents > 0) {
+            const settlementReference = `CHESS-POOL-${crypto.randomUUID()}`;
+            if (retainedCents > 0) {
+                await creditPlatform(client, {
+                    amount: retainedCents/100,
+                    reference: settlementReference,
+                    transactionType: "chess_competition_retained_revenue",
+                    description: `Chess ${timeControl} KSh ${stakeAmount} tournament retained pool revenue`,
+                    context: {seasonKey,timeControl,stakeAmount,pool:poolCents/100,retainedRevenue:retainedCents/100},
+                    debitPostings: journalPostings
+                });
+            } else {
+                await recordJournal(client, {
+                    reference: settlementReference,
+                    transactionType: "chess_competition_prize_pool_settlement",
+                    amount: poolCents/100,
+                    description: `Chess ${timeControl} KSh ${stakeAmount} tournament prize pool settlement`,
+                    context: {seasonKey,timeControl,stakeAmount,pool:poolCents/100},
+                    postings: journalPostings
+                });
+            }
+            if (contributionEntries.length && retainedCents > 0) {
+                await client.query(
+                    `UPDATE chess_competition_settlements SET retained_revenue=$1
+                      WHERE season_key=$2 AND time_control=$3 AND stake_amount=$4 AND user_id=$5`,
+                    [retainedCents/100,seasonKey,timeControl,stakeAmount,contributionEntries[0][0]]
+                );
+            }
         }
         await client.query("UPDATE chess_matches SET payout_status='competition_paid' WHERE id=ANY($1::bigint[])",[matchIds]);
         await client.query("COMMIT");
-        return {alreadySettled:false,players:contributions.size,pool:poolCents/100};
+        return {alreadySettled:false,players:contributions.size,pool:poolCents/100,retainedRevenue:retainedCents/100,
+            awards:eligible.map((row,index)=>({userId:Number(row.user_id),rank:index+1,amount:(awards[index]||0)/100}))};
     } catch(error) {
         await client.query("ROLLBACK").catch(()=>{});
         throw error;

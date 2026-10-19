@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const { recordJournal } = require("../services/financialLedger");
 
 // Daraja responses contain phone numbers, callback payloads, and token metadata.
 // Keep operational logs to constant labels; never dump request/response values.
@@ -1472,6 +1473,18 @@ module.exports = function (
                                 userId
                             );
                         }
+
+                        await recordJournal(client, {
+                            reference: `STK-RECEIPT-${reference}`,
+                            transactionType: "verified_mpesa_stk_deposit",
+                            amount,
+                            description: "M-Pesa STK deposit credited after verified callback",
+                            context: { userId: Number(userId), checkoutReference: reference, receipt: receipt || null },
+                            postings: [
+                                { accountType: "external_mpesa_float", accountId: null, debit: amount },
+                                { accountType: "user_wallet_available", accountId: Number(userId), credit: amount }
+                            ]
+                        });
 
                         // ------------------------------------------
                         // COMPLETE TRANSACTION

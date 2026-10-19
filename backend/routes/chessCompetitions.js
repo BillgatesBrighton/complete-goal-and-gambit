@@ -3,6 +3,8 @@
 const express = require("express");
 const crypto = require("crypto");
 const { settleClosedChessTournamentSeasons } = require("../services/chessTournamentPayouts");
+const { creditPlatform } = require("../services/adminWalletAccounting");
+const { recordJournal } = require("../services/financialLedger");
 
 const SUPPORTED_TIME_CONTROLS = new Set(["10+5", "3+2", "1+1"]);
 
@@ -270,11 +272,23 @@ module.exports = function (pool, authenticateToken) {
                         [amount,userId]
                     );
                     if (!wallet.rows.length) throw new Error("The locked tournament stake could not be refunded safely.");
+                    const reference = `CHESS-TOURN-CANCEL-${match.id}-${crypto.randomUUID()}`;
                     await client.query(
                         `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
                          VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
-                        [userId,amount,`CHESS-TOURN-CANCEL-${match.id}-${crypto.randomUUID()}`,`Chess ${timeControl} tournament search cancelled and stake refunded`]
+                        [userId,amount,reference,`Chess ${timeControl} tournament search cancelled and stake refunded`]
                     );
+                    await recordJournal(client, {
+                        reference: `CHESS-TOURN-CANCEL-JOURNAL-${match.id}`,
+                        transactionType: "chess_tournament_search_refund",
+                        amount,
+                        description: `Chess ${timeControl} tournament search cancelled and stake refunded`,
+                        context: { userId, matchId: Number(match.id), seasonKey: season },
+                        postings: [
+                            { accountType: "chess_match_locked", accountId: userId, debit: amount },
+                            { accountType: "user_wallet_available", accountId: userId, credit: amount }
+                        ]
+                    });
                     refunded += amount;
                 }
                 await client.query(
@@ -376,33 +390,21 @@ module.exports = function (pool, authenticateToken) {
             forfeitedAmount = Math.round(forfeitedAmount * 100) / 100;
 
             if (forfeitedAmount > 0) {
-                const admins = await client.query("SELECT id FROM users WHERE role='admin' ORDER BY id FOR UPDATE");
-                if (admins.rows.length < 2) {
-                    const error = Object.assign(new Error("Both administrator accounts must be available before this stake can be forfeited."), { status: 409 });
-                    throw error;
-                }
                 const locked = await client.query(
                     `UPDATE wallets SET locked_balance=locked_balance-$1,updated_at=NOW()
                       WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
                     [forfeitedAmount,userId]
                 );
                 if (!locked.rows.length) throw new Error("The locked tournament stake could not be transferred safely.");
-                const totalCents = Math.round(forfeitedAmount * 100);
-                const baseCents = Math.floor(totalCents / admins.rows.length);
-                let remainder = totalCents - baseCents * admins.rows.length;
                 const reference = `CHESS-TOURN-FORFEIT-${season}-${userId}-${crypto.randomUUID()}`;
-                for (const admin of admins.rows) {
-                    const cents = baseCents + (remainder > 0 ? 1 : 0);
-                    if (remainder > 0) remainder -= 1;
-                    const share = (cents / 100).toFixed(2);
-                    await client.query("INSERT INTO admin_wallets(admin_id) VALUES($1) ON CONFLICT(admin_id) DO NOTHING", [admin.id]);
-                    await client.query("UPDATE admin_wallets SET balance=balance+$1,updated_at=NOW() WHERE admin_id=$2", [share,admin.id]);
-                    await client.query(
-                        `INSERT INTO admin_wallet_transactions(admin_id,transaction_type,amount,currency,status,reference,description)
-                         VALUES($1,'chess_tournament_forfeit_stake',$2,'KES','completed',$3,$4)`,
-                        [admin.id,share,`${reference}-${admin.id}`,`Chess ${timeControl} KSh ${stake} tournament forfeited stake share`]
-                    );
-                }
+                await creditPlatform(client, {
+                    amount: forfeitedAmount,
+                    reference,
+                    transactionType: "chess_tournament_forfeit_stake",
+                    description: `Chess ${timeControl} KSh ${stake} tournament forfeited stake`,
+                    context: { userId, seasonKey: season, timeControl, stake, forfeiture: true },
+                    debitPostings: [{ accountType: "chess_match_locked", accountId: userId, debit: forfeitedAmount }]
+                });
                 await client.query(
                     `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
                      VALUES($1,'chess_tournament_forfeit',$2,'KES','completed',$3,$4)`,

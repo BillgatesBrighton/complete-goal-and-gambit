@@ -1,5 +1,9 @@
 "use strict";
 
+const { creditPlatform } = require("./adminWalletAccounting");
+const { rankedMatchPayout } = require("./rankedMatchPayout");
+const { recordJournal } = require("./financialLedger");
+
 /*
  * GOAL$GAMBIT
  * eFootball settlement service
@@ -49,6 +53,9 @@ async function settleEfootballMatch(client, match, scores, submittedBy) {
     let payout = 0;
 
     if (amount > 0) {
+        const isRanked = !match.league && !match.tournament_id && (!match.mode || String(match.mode) === "ranked");
+        const rankedPayout = isRanked && winnerId ? rankedMatchPayout(amount, "win") : null;
+        if (isRanked && !winnerId) rankedMatchPayout(amount, "draw");
         const locked = await client.query(
             `UPDATE wallets
              SET locked_balance = locked_balance - $1,
@@ -64,7 +71,7 @@ async function settleEfootballMatch(client, match, scores, submittedBy) {
         }
 
         if (winnerId) {
-            payout = amount * 2;
+            payout = rankedPayout ? rankedPayout.winner : amount * 2;
 
             await client.query(
                 `UPDATE wallets
@@ -86,6 +93,34 @@ async function settleEfootballMatch(client, match, scores, submittedBy) {
                     `EF-WIN-${match.id}-${winnerId}`
                 ]
             );
+            if (rankedPayout && rankedPayout.platform > 0) {
+                await creditPlatform(client, {
+                    amount: rankedPayout.platform,
+                    reference: `EF-FEE-${match.id}`,
+                    transactionType: "ranked_match_deduction",
+                    description: `Ranked eFootball match ${match.id} platform deduction`,
+                    matchId: match.id,
+                    context: { game: "efootball", matchId: Number(match.id), stake: amount, winnerId },
+                    debitPostings: [
+                        { accountType: "efootball_match_locked", accountId: creatorId, debit: amount },
+                        { accountType: "efootball_match_locked", accountId: opponentId, debit: amount },
+                        { accountType: "user_wallet_available", accountId: winnerId, credit: payout }
+                    ]
+                });
+            } else {
+                await recordJournal(client, {
+                    reference: `EF-WIN-${match.id}-${winnerId}`,
+                    transactionType: "efootball_ranked_payout",
+                    amount: payout,
+                    description: "eFootball winner payout",
+                    context: { game: "efootball", matchId: Number(match.id), winnerId },
+                    postings: [
+                        { accountType: "efootball_match_locked", accountId: creatorId, debit: amount },
+                        { accountType: "efootball_match_locked", accountId: opponentId, debit: amount },
+                        { accountType: "user_wallet_available", accountId: winnerId, credit: payout }
+                    ]
+                });
+            }
         } else {
             for (const playerId of [creatorId, opponentId]) {
                 await client.query(
@@ -109,6 +144,19 @@ async function settleEfootballMatch(client, match, scores, submittedBy) {
                     ]
                 );
             }
+            await recordJournal(client, {
+                reference: `EF-DRAW-${match.id}`,
+                transactionType: "efootball_draw_refund",
+                amount: amount * 2,
+                description: "eFootball draw refunds",
+                context: { game: "efootball", matchId: Number(match.id) },
+                postings: [
+                    { accountType: "efootball_match_locked", accountId: creatorId, debit: amount },
+                    { accountType: "efootball_match_locked", accountId: opponentId, debit: amount },
+                    { accountType: "user_wallet_available", accountId: creatorId, credit: amount },
+                    { accountType: "user_wallet_available", accountId: opponentId, credit: amount }
+                ]
+            });
         }
     }
 

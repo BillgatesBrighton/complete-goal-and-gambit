@@ -2,6 +2,7 @@
 
 const express = require("express");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const { recordJournal } = require("../services/financialLedger");
 const chessRouteFactory = require("./chess");
 const settleChessMatch = chessRouteFactory.settleMatch;
 
@@ -219,6 +220,7 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
             const stake = Number(match.stake_amount || 0);
             if (!Number.isFinite(stake) || stake < 0) throw new Error("The match stake is invalid.");
             if (stake > 0) {
+                const postings = [];
                 const wallets = await client.query(
                     "SELECT user_id,locked_balance FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE",
                     [participants]
@@ -250,7 +252,17 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
                          VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
                         [playerId, stake, ref, "Administrator cancelled " + (game === "chess" ? "Chess" : "eFootball") + " match #" + matchId + "; locked stake refunded."]
                     );
+                    postings.push({ accountType: game === "chess" ? "chess_match_locked" : "efootball_match_locked", accountId: playerId, debit: stake });
+                    postings.push({ accountType: "user_wallet_available", accountId: playerId, credit: stake });
                 }
+                await recordJournal(client, {
+                    reference: `ADMIN-MATCH-REFUND-${game}-${matchId}`,
+                    transactionType: "admin_match_stake_refund",
+                    amount: stake * participants.length,
+                    description: "Administrator cancelled the unsettled match and returned locked stakes",
+                    context: { game, matchId: Number(matchId), participants },
+                    postings
+                });
             }
 
             if (game === "chess") {

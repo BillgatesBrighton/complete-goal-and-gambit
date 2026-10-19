@@ -75,6 +75,9 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
                         currentMatch.admin_cleared_at = params[0];
                         return { rows: [] };
                     }
+                    if (text.startsWith("INSERT INTO financial_ledger_transactions")) return { rows: [{ id: 900 }] };
+                    if (text.startsWith("INSERT INTO financial_ledger_entries")) return { rows: [] };
+                    if (text.startsWith("UPDATE financial_ledger_transactions SET posted_at")) return { rows: [{ id: params[0] }], rowCount: 1 };
                     return { rows: [] };
                 },
                 release() {}

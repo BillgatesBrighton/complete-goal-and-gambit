@@ -3,6 +3,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const daraja = require("../routes/mpesa");
+const { recordJournal } = require("./financialLedger");
 
 const CALLBACK_TOKEN_BYTES = 32;
 const TOKEN_EXPIRY_SKEW_MS = 60000;
@@ -227,12 +228,34 @@ function createMpesaB2c(pool) {
             const ledgerTable = walletType === "admin" ? "admin_wallet_transactions" : "transactions";
             const payoutTable = walletType === "admin" ? "admin_mpesa_payouts" : "mpesa_payouts";
             await client.query(`UPDATE ${ledgerTable} SET status=$1 WHERE reference IN ($2, $3) AND status='pending'`, [newStatus, reference, reference + "-FEE"]);
+            const payoutAmount = Number(payout.payout_amount);
+            const feeAmount = Number(payout.fee_amount || 0);
+            const gross = payoutAmount + feeAmount;
             if (!successful) {
-                const gross = Number(payout.payout_amount) + Number(payout.fee_amount || 0);
                 const walletTable = walletType === "admin" ? "admin_wallets" : "wallets";
                 const ownerColumn = walletType === "admin" ? "admin_id" : "user_id";
                 await client.query(`UPDATE ${walletTable} SET balance=balance + $1, updated_at=NOW() WHERE ${ownerColumn}=$2`, [gross, payout.user_id]);
             }
+            const journalRef = `${walletType === "admin" ? "ADM" : "PLAYER"}-WD-${successful ? "PAID" : "RESTORED"}-${reference}`;
+            const debitAccount = walletType === "admin" ? "admin_withdrawal_pending" : "player_withdrawal_pending";
+            const returnAccount = walletType === "admin" ? "admin_wallet_available" : "user_wallet_available";
+            await recordJournal(client, {
+                reference: journalRef,
+                transactionType: successful ? "verified_mpesa_withdrawal" : "failed_mpesa_withdrawal_restoration",
+                amount: gross,
+                description: successful ? "M-Pesa B2C payout confirmed by verified provider callback" : "Failed M-Pesa B2C payout returned to originating wallet",
+                context: { walletType, ownerId: Number(payout.user_id), withdrawalReference: reference, resultCode: outcome.resultCode || null },
+                postings: successful
+                    ? [
+                        { accountType: debitAccount, accountId: Number(payout.user_id), debit: gross },
+                        { accountType: "external_mpesa_payout", accountId: null, credit: payoutAmount },
+                        ...(feeAmount > 0 ? [{ accountType: "external_provider_fee", accountId: null, credit: feeAmount }] : [])
+                    ]
+                    : [
+                        { accountType: debitAccount, accountId: Number(payout.user_id), debit: gross },
+                        { accountType: returnAccount, accountId: Number(payout.user_id), credit: gross }
+                    ]
+            });
             await client.query(
                 `UPDATE ${payoutTable} SET status=$1, provider_status=$2, result_code=$3, result_description=$4, receipt=$5, conversation_id=COALESCE($6, conversation_id), updated_at=NOW(), settled_at=NOW() WHERE reference=$7`,
                 [

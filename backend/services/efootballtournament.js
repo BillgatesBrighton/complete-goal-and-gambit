@@ -60,7 +60,7 @@ async function finishTournament(client, tournament, finalRound) {
     const result = await client.query(
         `UPDATE efootball_tournaments SET status='completed',completed_at=COALESCE(completed_at,NOW())
           WHERE id=$1 AND status<>'completed'
-          RETURNING id,name,entry_fee`,
+          RETURNING id,name,entry_fee,status`,
         [tournament.id]
     );
     if (result.rows.length) {
@@ -77,7 +77,7 @@ async function finishLeague(client, league, finalRound) {
     const result = await client.query(
         `UPDATE efootball_leagues SET status='completed',completed_at=COALESCE(completed_at,NOW())
           WHERE id=$1 AND status<>'completed'
-          RETURNING id,name,entry_stake`,
+          RETURNING id,name,entry_stake,status`,
         [league.id]
     );
     if (result.rows.length) {

@@ -46,10 +46,16 @@ CREATE TABLE IF NOT EXISTS wallets (
     user_id         INTEGER       NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     balance         NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (balance >= 0),
     locked_balance  NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (locked_balance >= 0),
+    withdrawal_reserved_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
     currency        VARCHAR(3)    NOT NULL DEFAULT 'KES',
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS withdrawal_reserved_balance NUMERIC(12,2) NOT NULL DEFAULT 0;
+DO $$ BEGIN
+    ALTER TABLE wallets ADD CONSTRAINT wallets_withdrawal_reserved_nonnegative CHECK (withdrawal_reserved_balance >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS transactions (
     id                BIGSERIAL PRIMARY KEY,
@@ -77,12 +83,14 @@ CREATE TABLE IF NOT EXISTS manual_withdrawal_requests (
     payout_amount       NUMERIC(12,2) NOT NULL CHECK (payout_amount > 0),
     status              VARCHAR(20) NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','completed','cancelled')),
+    funds_reserved      BOOLEAN NOT NULL DEFAULT FALSE,
     requested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at        TIMESTAMPTZ,
     resolved_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
     admin_cleared_at    TIMESTAMPTZ,
     admin_cleared_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
+ALTER TABLE manual_withdrawal_requests ADD COLUMN IF NOT EXISTS funds_reserved BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_withdrawal_one_pending_per_user
     ON manual_withdrawal_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS idx_manual_withdrawal_admin_queue
@@ -294,10 +302,12 @@ CREATE TABLE IF NOT EXISTS chess_competition_settlements (
     contributed     NUMERIC(12,2) NOT NULL DEFAULT 0,
     prize_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
     refund_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+    retained_revenue NUMERIC(12,2) NOT NULL DEFAULT 0,
     reference       VARCHAR(120) NOT NULL UNIQUE,
     settled_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(season_key,time_control,stake_amount,username)
 );
+ALTER TABLE chess_competition_settlements ADD COLUMN IF NOT EXISTS retained_revenue NUMERIC(12,2) NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_chess_competition_settlements_season
     ON chess_competition_settlements(season_key,time_control,stake_amount,final_rank);
 
@@ -395,6 +405,8 @@ CREATE TABLE IF NOT EXISTS efootball_league_members (
     goal_difference     INTEGER NOT NULL DEFAULT 0,
     goals_for           INTEGER NOT NULL DEFAULT 0,
     goals_against       INTEGER NOT NULL DEFAULT 0,
+    fee_transferred     BOOLEAN NOT NULL DEFAULT FALSE,
+    entry_reference     VARCHAR(120),
     UNIQUE(league_id, user_id)
 );
 
@@ -444,10 +456,14 @@ CREATE TABLE IF NOT EXISTS efootball_tournament_members (
     user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     joined_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     group_code           VARCHAR(2),
+    fee_transferred      BOOLEAN NOT NULL DEFAULT FALSE,
+    entry_reference      VARCHAR(120),
     UNIQUE(tournament_id, user_id)
 );
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS first_match_at TIMESTAMPTZ;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS forfeited_at TIMESTAMPTZ;
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_transferred BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS entry_reference VARCHAR(120);
 
 -- Tournament rounds have a shared 20-minute result window. Fixtures are
 -- generated once per round and retain their opponent assignment even when
@@ -743,6 +759,8 @@ ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_id BIGINT REFE
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE efootball_tournament_members ADD COLUMN IF NOT EXISTS group_code VARCHAR(2);
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS fee_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS fee_transferred BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS entry_reference VARCHAR(120);
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS forfeited_at TIMESTAMPTZ;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_for INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE efootball_league_members ADD COLUMN IF NOT EXISTS goals_against INTEGER NOT NULL DEFAULT 0;
@@ -776,8 +794,8 @@ ALTER TABLE efootball_tournament_members ALTER COLUMN group_code SET NOT NULL;
 CREATE INDEX IF NOT EXISTS efootball_tournament_members_group_idx
     ON efootball_tournament_members(tournament_id, group_code, user_id);
 
--- Season-end awards and player-funded entry-pool refunds. The per-player
--- row makes payout execution idempotent and keeps a readable audit trail.
+-- Finalized season awards from collected entry pools. The per-player row
+-- makes payout execution idempotent and keeps a readable audit trail.
 CREATE TABLE IF NOT EXISTS efootball_competition_settlements (
     id                  BIGSERIAL PRIMARY KEY,
     competition_type    VARCHAR(20) NOT NULL CHECK (competition_type IN ('league','tournament')),
@@ -789,10 +807,12 @@ CREATE TABLE IF NOT EXISTS efootball_competition_settlements (
     entry_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
     prize_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
     refund_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+    retained_revenue    NUMERIC(12,2) NOT NULL DEFAULT 0,
     reference           VARCHAR(120) NOT NULL UNIQUE,
     settled_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(competition_type, competition_id, season_key, user_id)
 );
+ALTER TABLE efootball_competition_settlements ADD COLUMN IF NOT EXISTS retained_revenue NUMERIC(12,2) NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_efootball_competition_settlements_season
     ON efootball_competition_settlements(competition_type, competition_id, season_key, final_rank);
 
@@ -1039,10 +1059,16 @@ CREATE INDEX IF NOT EXISTS idx_efootball_result_corrections_match
 CREATE TABLE IF NOT EXISTS admin_wallets (
     admin_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
     balance     NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (balance >= 0),
+    reserved_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
     currency    VARCHAR(3) NOT NULL DEFAULT 'KES',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE admin_wallets ADD COLUMN IF NOT EXISTS reserved_balance NUMERIC(12,2) NOT NULL DEFAULT 0;
+DO $$ BEGIN
+    ALTER TABLE admin_wallets ADD CONSTRAINT admin_wallets_reserved_valid CHECK (reserved_balance >= 0 AND reserved_balance <= balance);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS admin_wallet_transactions (
     id              BIGSERIAL PRIMARY KEY,
@@ -1085,6 +1111,188 @@ CREATE TABLE IF NOT EXISTS admin_mpesa_payouts (
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     settled_at                 TIMESTAMPTZ
 );
+
+-- Balanced journal for auditable transfers. The two-sided entries are stored
+-- together under one immutable reference and are written atomically with the
+-- wallet changes they describe.
+CREATE TABLE IF NOT EXISTS financial_ledger_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    reference VARCHAR(160) NOT NULL UNIQUE,
+    transaction_type VARCHAR(50) NOT NULL,
+    amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+    currency VARCHAR(3) NOT NULL DEFAULT 'KES',
+    description TEXT NOT NULL DEFAULT '',
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    posted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE financial_ledger_transactions ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS financial_ledger_entries (
+    id BIGSERIAL PRIMARY KEY,
+    transaction_id BIGINT NOT NULL REFERENCES financial_ledger_transactions(id) ON DELETE RESTRICT,
+    account_type VARCHAR(50) NOT NULL,
+    account_id BIGINT,
+    debit NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (debit >= 0),
+    credit NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (credit >= 0),
+    CHECK ((debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0))
+);
+CREATE INDEX IF NOT EXISTS idx_financial_ledger_transactions_recent
+    ON financial_ledger_transactions(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_ledger_entries_account
+    ON financial_ledger_entries(account_type, account_id, transaction_id);
+CREATE INDEX IF NOT EXISTS idx_financial_ledger_transactions_context
+    ON financial_ledger_transactions USING GIN(context);
+
+DO $$ BEGIN
+    ALTER TABLE efootball_league_members
+        ADD CONSTRAINT efootball_league_fee_reference_required
+        CHECK (fee_transferred=FALSE OR entry_reference IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE efootball_tournament_members
+        ADD CONSTRAINT efootball_tournament_fee_reference_required
+        CHECK (fee_transferred=FALSE OR entry_reference IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE OR REPLACE FUNCTION gg_guard_financial_ledger_header() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP='DELETE' THEN
+        RAISE EXCEPTION 'Financial ledger transactions cannot be deleted';
+    END IF;
+    IF OLD.posted_at IS NULL AND NEW.posted_at IS NOT NULL
+       AND NEW.reference=OLD.reference AND NEW.transaction_type=OLD.transaction_type
+       AND NEW.amount=OLD.amount AND NEW.currency=OLD.currency
+       AND NEW.description=OLD.description AND NEW.context=OLD.context
+       AND NEW.created_at=OLD.created_at THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Financial ledger transactions are immutable after posting';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION gg_guard_financial_ledger_entry() RETURNS trigger AS $$
+DECLARE
+    parent_posted_at TIMESTAMPTZ;
+BEGIN
+    IF TG_OP='INSERT' THEN
+        SELECT posted_at INTO parent_posted_at FROM financial_ledger_transactions WHERE id=NEW.transaction_id;
+        IF parent_posted_at IS NOT NULL THEN
+            RAISE EXCEPTION 'Entries cannot be added to a posted financial ledger transaction';
+        END IF;
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Financial ledger entries are immutable';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION gg_validate_financial_ledger_transaction() RETURNS trigger AS $$
+DECLARE
+    target_id BIGINT;
+    expected NUMERIC(14,2);
+    posted TIMESTAMPTZ;
+    debit_total NUMERIC(14,2);
+    credit_total NUMERIC(14,2);
+BEGIN
+    target_id := CASE WHEN TG_OP='DELETE' THEN OLD.transaction_id ELSE NEW.transaction_id END;
+    IF TG_TABLE_NAME='financial_ledger_transactions' THEN
+        target_id := CASE WHEN TG_OP='DELETE' THEN OLD.id ELSE NEW.id END;
+    END IF;
+    SELECT amount,posted_at INTO expected,posted FROM financial_ledger_transactions WHERE id=target_id;
+    IF NOT FOUND OR posted IS NULL THEN
+        RAISE EXCEPTION 'Financial ledger transaction % was not posted', target_id;
+    END IF;
+    SELECT COALESCE(SUM(debit),0)::numeric(14,2),COALESCE(SUM(credit),0)::numeric(14,2)
+      INTO debit_total,credit_total
+      FROM financial_ledger_entries WHERE transaction_id=target_id;
+    IF debit_total<=0 OR debit_total<>credit_total OR debit_total<>expected THEN
+        RAISE EXCEPTION 'Financial ledger transaction % is unbalanced (debits %, credits %, amount %)', target_id,debit_total,credit_total,expected;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_financial_ledger_header_immutable' AND NOT tgisinternal) THEN
+        CREATE TRIGGER gg_financial_ledger_header_immutable BEFORE UPDATE OR DELETE ON financial_ledger_transactions
+            FOR EACH ROW EXECUTE FUNCTION gg_guard_financial_ledger_header();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_financial_ledger_entry_immutable' AND NOT tgisinternal) THEN
+        CREATE TRIGGER gg_financial_ledger_entry_immutable BEFORE INSERT OR UPDATE OR DELETE ON financial_ledger_entries
+            FOR EACH ROW EXECUTE FUNCTION gg_guard_financial_ledger_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_financial_ledger_header_balanced' AND NOT tgisinternal) THEN
+        CREATE CONSTRAINT TRIGGER gg_financial_ledger_header_balanced AFTER INSERT OR UPDATE ON financial_ledger_transactions
+            DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gg_validate_financial_ledger_transaction();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_financial_ledger_entries_balanced' AND NOT tgisinternal) THEN
+        CREATE CONSTRAINT TRIGGER gg_financial_ledger_entries_balanced AFTER INSERT ON financial_ledger_entries
+            DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gg_validate_financial_ledger_transaction();
+    END IF;
+END $$;
+
+-- Seed one-time opening balances for wallets that predate the financial
+-- journal. This is idempotent and does not alter any wallet balance.
+WITH source AS (
+    SELECT 'OPENING-USER-'||w.user_id AS reference,w.user_id::bigint AS user_id,
+           w.balance::numeric(14,2) AS available,
+           w.locked_balance::numeric(14,2) AS locked,
+           w.withdrawal_reserved_balance::numeric(14,2) AS withdrawal_reserved,
+           (w.balance+w.locked_balance+w.withdrawal_reserved_balance)::numeric(14,2) AS total
+      FROM wallets w
+     WHERE w.balance+w.locked_balance+w.withdrawal_reserved_balance>0
+), inserted AS (
+    INSERT INTO financial_ledger_transactions(reference,transaction_type,amount,currency,description,context)
+    SELECT reference,'wallet_opening_balance',total,'KES','One-time wallet opening balance imported for ledger reconciliation',
+           jsonb_build_object('userId',user_id,'source','schema_migration')
+      FROM source
+    ON CONFLICT(reference) DO NOTHING
+    RETURNING id,reference
+), postings AS (
+    SELECT i.id,'wallet_opening_equity'::varchar AS account_type,NULL::bigint AS account_id,s.total AS debit,0::numeric AS credit
+      FROM inserted i JOIN source s USING(reference)
+    UNION ALL
+    SELECT i.id,'user_wallet_available'::varchar,s.user_id,0::numeric,s.available FROM inserted i JOIN source s USING(reference) WHERE s.available>0
+    UNION ALL
+    SELECT i.id,'user_wallet_locked'::varchar,s.user_id,0::numeric,s.locked FROM inserted i JOIN source s USING(reference) WHERE s.locked>0
+    UNION ALL
+    SELECT i.id,'user_wallet_withdrawal_reserved'::varchar,s.user_id,0::numeric,s.withdrawal_reserved FROM inserted i JOIN source s USING(reference) WHERE s.withdrawal_reserved>0
+)
+INSERT INTO financial_ledger_entries(transaction_id,account_type,account_id,debit,credit)
+SELECT id,account_type,account_id,debit,credit FROM postings;
+UPDATE financial_ledger_transactions t SET posted_at=NOW()
+ WHERE t.posted_at IS NULL AND t.reference LIKE 'OPENING-USER-%'
+   AND EXISTS (SELECT 1 FROM financial_ledger_entries e WHERE e.transaction_id=t.id);
+
+WITH source AS (
+    SELECT 'OPENING-ADMIN-'||w.admin_id AS reference,w.admin_id::bigint AS admin_id,
+           (w.balance-w.reserved_balance)::numeric(14,2) AS available,
+           w.reserved_balance::numeric(14,2) AS reserved,
+           w.balance::numeric(14,2) AS total
+      FROM admin_wallets w
+     WHERE w.balance>0
+), inserted AS (
+    INSERT INTO financial_ledger_transactions(reference,transaction_type,amount,currency,description,context)
+    SELECT reference,'admin_wallet_opening_balance',total,'KES','One-time administrator wallet opening balance imported for ledger reconciliation',
+           jsonb_build_object('adminId',admin_id,'source','schema_migration')
+      FROM source
+    ON CONFLICT(reference) DO NOTHING
+    RETURNING id,reference
+), postings AS (
+    SELECT i.id,'admin_wallet_opening_equity'::varchar AS account_type,NULL::bigint AS account_id,s.total AS debit,0::numeric AS credit
+      FROM inserted i JOIN source s USING(reference)
+    UNION ALL
+    SELECT i.id,'admin_wallet_available'::varchar,s.admin_id,0::numeric,s.available FROM inserted i JOIN source s USING(reference) WHERE s.available>0
+    UNION ALL
+    SELECT i.id,'admin_wallet_reserved'::varchar,s.admin_id,0::numeric,s.reserved FROM inserted i JOIN source s USING(reference) WHERE s.reserved>0
+)
+INSERT INTO financial_ledger_entries(transaction_id,account_type,account_id,debit,credit)
+SELECT id,account_type,account_id,debit,credit FROM postings;
+UPDATE financial_ledger_transactions t SET posted_at=NOW()
+ WHERE t.posted_at IS NULL AND t.reference LIKE 'OPENING-ADMIN-%'
+   AND EXISTS (SELECT 1 FROM financial_ledger_entries e WHERE e.transaction_id=t.id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_mpesa_payout_one_pending
     ON admin_mpesa_payouts(admin_id)
     WHERE status='pending';

@@ -2,7 +2,7 @@
 
 // Simple in-memory rate limiter. Fine for a single server process.
 // For multiple servers later, swap this for express-rate-limit + Redis.
-function rateLimit({ windowMs, max, message }) {
+function rateLimit({ windowMs, max, message, keyGenerator, onLimit }) {
     const hits = new Map();
 
     setInterval(function () {
@@ -13,7 +13,9 @@ function rateLimit({ windowMs, max, message }) {
     }, 60 * 1000).unref();
 
     return function (req, res, next) {
-        const key = req.ip + "|" + req.baseUrl + req.path;
+        const key = typeof keyGenerator === "function"
+            ? String(keyGenerator(req))
+            : req.ip + "|" + req.baseUrl + req.path;
         const now = Date.now();
         let entry = hits.get(key);
 
@@ -25,6 +27,10 @@ function rateLimit({ windowMs, max, message }) {
         entry.count++;
 
         if (entry.count > max) {
+            if (!entry.alerted && typeof onLimit === "function") {
+                entry.alerted = true;
+                try { onLimit(req, { count: entry.count, max, windowMs, resetAt: entry.resetAt }); } catch (_) {}
+            }
             res.set("Retry-After", Math.ceil((entry.resetAt - now) / 1000));
             return res.status(429).json({
                 success: false,

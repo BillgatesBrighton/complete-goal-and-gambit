@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
+const { recordJournal } = require("../services/financialLedger");
 const {
     ensureTournamentRound, ensureLeagueRound,
 } = require("../services/efootballtournament");
@@ -205,6 +206,17 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                          VALUES ($1,'match_refund',$2,'KES','completed',$3,'eFootball search expired - stake refunded')`,
                         [match.creator_id, stake, "EF-SEARCH-EXPIRED-" + match.id]
                     );
+                    await recordJournal(client, {
+                        reference: "EF-SEARCH-EXPIRED-JOURNAL-" + match.id,
+                        transactionType: "efootball_search_stake_refund",
+                        amount: stake,
+                        description: "Expired eFootball search stake returned to the player",
+                        context: { matchId: Number(match.id), userId: Number(match.creator_id) },
+                        postings: [
+                            { accountType: "efootball_match_locked", accountId: Number(match.creator_id), debit: stake },
+                            { accountType: "user_wallet_available", accountId: Number(match.creator_id), credit: stake }
+                        ]
+                    });
                 }
 
                 await client.query(
@@ -910,10 +922,22 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [candidate.rows[0].id, leagueFixtureId]);
                 }
                 if (stake > 0) {
+                    const stakeReference = "EF-LOCK-" + candidate.rows[0].id + "-" + userId + "-" + randomUUID();
                     await client.query(
                         "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
-                        [userId, stake, "EF-LOCK-" + candidate.rows[0].id + "-" + userId + "-" + randomUUID()]
+                        [userId, stake, stakeReference]
                     );
+                    await recordJournal(client, {
+                        reference: "EF-STAKE-LOCK-JOURNAL-" + candidate.rows[0].id + "-" + userId,
+                        transactionType: "efootball_stake_lock",
+                        amount: stake,
+                        description: "eFootball stake moved to locked player funds",
+                        context: { matchId: Number(candidate.rows[0].id), userId },
+                        postings: [
+                            { accountType: "user_wallet_available", accountId: userId, debit: stake },
+                            { accountType: "efootball_match_locked", accountId: userId, credit: stake }
+                        ]
+                    });
                 }
 
                 const senderMessage = senderId === userId
@@ -957,10 +981,22 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [matchId, leagueFixtureId]);
             }
             if (stake > 0) {
+                const stakeReference = "EF-LOCK-" + matchId + "-" + userId + "-" + randomUUID();
                 await client.query(
                     "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
-                    [userId, stake, "EF-LOCK-" + matchId + "-" + userId + "-" + randomUUID()]
+                    [userId, stake, stakeReference]
                 );
+                await recordJournal(client, {
+                    reference: "EF-STAKE-LOCK-JOURNAL-" + matchId + "-" + userId,
+                    transactionType: "efootball_stake_lock",
+                    amount: stake,
+                    description: "eFootball stake moved to locked player funds",
+                    context: { matchId: Number(matchId), userId },
+                    postings: [
+                        { accountType: "user_wallet_available", accountId: userId, debit: stake },
+                        { accountType: "efootball_match_locked", accountId: userId, credit: stake }
+                    ]
+                });
             }
             const match = await getMatchForUser(client, matchId, userId);
             await client.query("COMMIT");
@@ -1026,6 +1062,17 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         [participantId, stake, "EF-CANCEL-" + matchId + "-" + participantId]
                     );
                 }
+                await recordJournal(client, {
+                    reference: "EF-CANCEL-JOURNAL-" + matchId,
+                    transactionType: "efootball_match_stake_refund",
+                    amount: stake * participantIds.length,
+                    description: "eFootball match cancelled before play; locked stakes returned",
+                    context: { matchId, participants: participantIds },
+                    postings: participantIds.flatMap((participantId) => [
+                        { accountType: "efootball_match_locked", accountId: participantId, debit: stake },
+                        { accountType: "user_wallet_available", accountId: participantId, credit: stake }
+                    ])
+                });
             }
             const cancelledMatch = await client.query(
                 `UPDATE efootball_matches
@@ -1262,10 +1309,22 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 await client.query("UPDATE efootball_league_fixtures SET match_id=$1,status='playing' WHERE id=$2", [matchId, match.league_fixture_id]);
             }
             if (Number(match.stake_amount) > 0) {
+                const stakeReference = "EF-LOCK-" + matchId + "-" + userId + "-" + randomUUID();
                 await client.query(
                     "INSERT INTO transactions (user_id,transaction_type,amount,currency,status,reference,description) VALUES ($1,'stake_lock',$2,'KES','completed',$3,'eFootball match stake locked')",
-                    [userId, match.stake_amount, "EF-LOCK-" + matchId + "-" + userId + "-" + randomUUID()]
+                    [userId, match.stake_amount, stakeReference]
                 );
+                await recordJournal(client, {
+                    reference: "EF-STAKE-LOCK-JOURNAL-" + matchId + "-" + userId,
+                    transactionType: "efootball_stake_lock",
+                    amount: Number(match.stake_amount),
+                    description: "eFootball stake moved to locked player funds",
+                    context: { matchId: Number(matchId), userId },
+                    postings: [
+                        { accountType: "user_wallet_available", accountId: userId, debit: Number(match.stake_amount) },
+                        { accountType: "efootball_match_locked", accountId: userId, credit: Number(match.stake_amount) }
+                    ]
+                });
             }
             const senderMessage = senderId === userId
                 ? "You were randomly chosen to create the room and send its code. Use the match page to send it to your opponent."
