@@ -201,6 +201,15 @@ test("match workflow, chat, and wallet page scripts parse", () => {
     }
 });
 
+test("companion APK download falls back to the public GitHub file when the API is unavailable", () => {
+    const apiSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "js", "api.js"), "utf8");
+    assert.match(apiSource, /var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL/);
+    assert.match(apiSource, /controller\.abort\(\)[\s\S]*?10000/);
+    assert.match(apiSource, /application\/vnd\.android\.package-archive/);
+    assert.match(apiSource, /signature\[0\] !== 0x50[\s\S]*?signature\[3\] !== 0x04/);
+    assert.match(apiSource, /window\.location\.assign\(ANDROID_COMPANION_DOWNLOAD_URL\)/);
+});
+
 test("Android sender alert offers inline code reply and persists until successful send", () => {
     const androidRoot = path.join(__dirname, "..", "..", "android", "app", "src", "main");
     const notificationSource = fs.readFileSync(path.join(androidRoot, "java", "com", "goalgambit", "companion", "Notifications.kt"), "utf8");

@@ -20,9 +20,9 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
     var TOKEN_KEY = "goalGambitToken";
     var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk";
-    var PUBLIC_COMPANION_DOWNLOAD_URL = API_BASE
-        ? API_BASE.replace(/\/+$/, "") + "/api/companion/public-download"
-        : ANDROID_COMPANION_DOWNLOAD_URL;
+    // The APK is a static GitHub Pages asset, so download links must continue
+    // working when the player's phone cannot reach the companion API.
+    var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL;
     var POST_LOGIN_PATH_KEY = "goalGambitPostLoginPath";
     // Resolve the frontend root from this shared script so the worker stays
     // inside /frontend on GitHub Pages and works from the backend's static root.
@@ -171,22 +171,41 @@
     async function downloadCompanionApp(statusTarget) {
         var token = getToken();
         if (!token) {
-            if (statusTarget) statusTarget.textContent = "Sign in to download the official companion app.";
-            return false;
+            if (statusTarget) statusTarget.textContent = "Opening the official Android app download…";
+            try {
+                window.location.assign(ANDROID_COMPANION_DOWNLOAD_URL);
+                return true;
+            } catch (_) {
+                if (statusTarget) statusTarget.textContent = "Open the official download link to get the Android app.";
+                return false;
+            }
         }
         if (statusTarget) statusTarget.textContent = "Preparing the official Android app…";
+        var controller = typeof AbortController === "function" ? new AbortController() : null;
+        var requestTimer = controller ? window.setTimeout(function() { controller.abort(); }, 10000) : null;
         try {
-            var response = await fetch(API_BASE + "/api/companion/download", {
+            var requestOptions = {
                 headers: { "Authorization": "Bearer " + token, "Accept": "application/vnd.android.package-archive" },
                 cache: "no-store"
-            });
+            };
+            if (controller) requestOptions.signal = controller.signal;
+            var response = await fetch(API_BASE + "/api/companion/download", requestOptions);
             if (!response.ok) {
                 var problem = {};
                 try { problem = await response.json(); } catch (_) {}
                 throw new Error(problem.message || "The companion download could not be started. Try again shortly.");
             }
+            var responseType = String(response.headers && response.headers.get("content-type") || "").toLowerCase();
+            if (responseType && responseType.indexOf("application/vnd.android.package-archive") === -1 &&
+                responseType.indexOf("application/octet-stream") === -1) {
+                throw new Error("The server did not return the Android app file.");
+            }
             var blob = await response.blob();
             if (!blob.size) throw new Error("The downloaded app file is empty. Please try again.");
+            var signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+            if (signature.length < 4 || signature[0] !== 0x50 || signature[1] !== 0x4b || signature[2] !== 0x03 || signature[3] !== 0x04) {
+                throw new Error("The server response is not a valid Android app file.");
+            }
             var objectUrl = URL.createObjectURL(blob);
             var link = document.createElement("a");
             link.href = objectUrl;
@@ -198,8 +217,16 @@
             if (statusTarget) statusTarget.textContent = "Download started. Open the APK from your Downloads when it finishes.";
             return true;
         } catch (error) {
-            if (statusTarget) statusTarget.textContent = error && error.message ? error.message : "The companion download could not be started.";
-            return false;
+            if (statusTarget) statusTarget.textContent = "The server could not be reached. Opening the official GitHub APK download…";
+            try {
+                window.location.assign(ANDROID_COMPANION_DOWNLOAD_URL);
+                return true;
+            } catch (_) {
+                if (statusTarget) statusTarget.textContent = "The server is offline. Use the official GitHub APK download link instead.";
+                return false;
+            }
+        } finally {
+            if (requestTimer !== null) window.clearTimeout(requestTimer);
         }
     }
 
