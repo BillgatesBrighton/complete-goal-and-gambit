@@ -336,10 +336,19 @@ function renderCompanionTrackerRow(member) {
     var recent = !!member.recently_active;
     var permission = String(member.notification_permission_status || "unknown");
     var registration = active ? (recent ? "Registered · recently active" : "Registered · stale") : member.installation_count ? "Previously registered · inactive" : "Not detected";
+    var pushStatus = String(member.push_registration_status || "not_registered");
+    var activePushDevices = Number(member.active_push_device_count) || 0;
+    var invalidPushTokens = Number(member.invalid_push_token_count) || 0;
+    var pushRegistration = pushStatus === "registered" ? "Registered · " + activePushDevices + " active device(s)" :
+        pushStatus === "token_invalid" ? "Notification token invalid" :
+        pushStatus === "user_disabled" ? "Notifications disabled on device" :
+        pushStatus === "registration_incomplete" ? "Registration incomplete" :
+        member.installation_count ? "No active notification token" : "No registered device";
     return '<tr><td><strong>' + esc(member.username || "Member") + '</strong><div class="user-meta">User ID ' + id + '</div></td>' +
         '<td>' + (acknowledged ? 'Acknowledged<br><span class="user-meta">' + esc(date(member.onboarding_acknowledged_at)) + '</span>' : 'Not acknowledged') + '</td>' +
         '<td>' + (downloaded ? 'Downloaded<br><span class="user-meta">' + esc(date(member.last_downloaded_at || member.downloaded_at)) + '</span>' : 'Not detected') + '</td>' +
         '<td>' + esc(registration) + (member.last_seen_at ? '<br><span class="user-meta">Last seen ' + esc(date(member.last_seen_at)) + '</span>' : '') + '</td>' +
+        '<td>' + esc(pushRegistration) + (invalidPushTokens > 1 ? '<br><span class="user-meta">' + invalidPushTokens + ' invalid tokens</span>' : '') + '</td>' +
         '<td>' + esc(permission) + (member.notification_permission_checked_at ? '<br><span class="user-meta">Checked ' + esc(date(member.notification_permission_checked_at)) + '</span>' : '') + '</td>' +
         '<td>' + esc(member.app_version || 'Unknown') + '</td>' +
         '<td>' + esc(member.registered_at ? date(member.registered_at) : '—') + '</td>' +
@@ -361,7 +370,7 @@ async function loadCompanionTracker() {
     });
     var members = r.data.members || [];
     $("companionTrackerList").innerHTML = members.length
-        ? '<div style="max-width:100%;overflow:auto"><table style="width:100%;min-width:980px;border-collapse:collapse"><thead><tr>' + ["Member", "Guide", "APK download", "Companion", "Notifications", "App version", "Registered", ""].map(function(label) { return '<th scope="col" style="padding:9px;text-align:left;border-bottom:1px solid #3b3b37;color:#e9c547">' + label + '</th>'; }).join("") + '</tr></thead><tbody>' + members.map(renderCompanionTrackerRow).join("") + '</tbody></table></div>'
+        ? '<div style="max-width:100%;overflow:auto"><table style="width:100%;min-width:1120px;border-collapse:collapse"><thead><tr>' + ["Member", "Guide", "APK download", "Companion", "Push registration", "Android permission", "App version", "Registered", ""].map(function(label) { return '<th scope="col" style="padding:9px;text-align:left;border-bottom:1px solid #3b3b37;color:#e9c547">' + label + '</th>'; }).join("") + '</tr></thead><tbody>' + members.map(renderCompanionTrackerRow).join("") + '</tbody></table></div>'
         : '<div class="empty">No members match this filter.</div>';
     companionPages = Math.max(1, Math.ceil(Number(r.data.total || 0) / Number(r.data.pageSize || 40)));
     companionPage = Number(r.data.page) || 1;
@@ -375,17 +384,27 @@ async function openCompanionMember(userId) {
     $("companionDialog").showModal();
     var r = await GG.api("/api/admin/companion-tracker/" + encodeURIComponent(userId));
     if (!r.ok) { $("companionView").innerHTML = '<div class="empty">' + esc(r.data.message || "Could not load companion details.") + '</div>'; return; }
-    var member = r.data.member || {}, installations = member.installations || [];
+    var member = r.data.member || {}, installations = member.installations || [], pushDevices = member.push_devices || [];
     var html = '<h3>' + esc(member.username || "Member") + ' · User ID ' + Number(member.user_id) + '</h3><div class="account-grid">' +
         caseTile("Account game", member.game) + caseTile("Account status", member.account_status) +
         caseTile("Guide version", member.onboarding_version || "Not acknowledged") + caseTile("Guide acknowledgement", date(member.onboarding_acknowledged_at)) +
-        caseTile("APK downloaded", member.downloaded ? "Yes" : "Not detected") + caseTile("First download", date(member.downloaded_at)) + '</div><h3>Companion installations</h3>';
+        caseTile("APK downloaded", member.downloaded ? "Yes" : "Not detected") + caseTile("First download", date(member.downloaded_at)) +
+        caseTile("Push registration", member.push_registration_status || "not_registered") + caseTile("Active Android devices", Number(member.active_push_device_count) || 0) + '</div><h3>Companion installations</h3>';
     html += installations.length ? installations.map(function(item, index) {
         return '<article class="activity-block"><strong>Installation ' + (index + 1) + ' · ' + esc(item.platform || "Android") + ' · v' + esc(item.appVersion || "unknown") + '</strong>' +
             '<div class="activity-item">Registration: ' + esc(date(item.registeredAt)) + '<br>Last activity: ' + esc(date(item.lastSeenAt)) +
             '<br>Notifications: ' + esc(item.notificationPermissionStatus || "unknown") + (item.notificationPermissionCheckedAt ? ' · checked ' + esc(date(item.notificationPermissionCheckedAt)) : "") +
             (item.unregisteredAt ? '<br>Signed out: ' + esc(date(item.unregisteredAt)) : '<br>Currently registered') + '</div></article>';
     }).join("") : '<div class="empty">No companion installation has been detected for this account.</div>';
+    html += '<h3>Android notification registrations</h3>';
+    html += pushDevices.length ? pushDevices.map(function(item, index) {
+        var status = item.status === "token_invalid" ? "Notification token invalid" :
+            item.status === "registered" ? "Device registered" :
+            item.status === "user_disabled" ? "Notifications disabled on device" : "Inactive registration";
+        return '<article class="activity-block"><strong>Android notification registration ' + (index + 1) + '</strong>' +
+            '<div class="activity-item">Status: ' + esc(status) + (item.deviceName ? '<br>Device: ' + esc(item.deviceName) : '') +
+            '<br>First registered: ' + esc(date(item.registeredAt)) + '<br>Last updated: ' + esc(date(item.lastUpdatedAt)) + '</div></article>';
+    }).join("") : '<div class="empty">No Android notification token has been registered.</div>';
     $("companionView").innerHTML = html;
 }
 async function loadCompetitionList() {

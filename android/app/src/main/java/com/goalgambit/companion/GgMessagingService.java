@@ -2,6 +2,7 @@ package com.goalgambit.companion;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
+import android.content.Intent;
 
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -31,5 +32,6 @@ public final class GgMessagingService extends FirebaseMessagingService {
         Map<String, String> data = message.getData();
         if (data == null || data.isEmpty()) return;
         Notifications.showPush(this, data);
+        sendBroadcast(new Intent(MainActivity.ACTION_PUSH_RECEIVED).setPackage(getPackageName()));
     }
 }

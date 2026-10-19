@@ -129,9 +129,9 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
         const deviceName = String(req.body && req.body.deviceName || "").trim().slice(0, 120) || null;
         try {
             const saved = await pool.query(
-                "INSERT INTO android_push_tokens(user_id,token,device_id,device_name,active,updated_at) " +
-                "VALUES($1,$2,$3,$4,TRUE,NOW()) ON CONFLICT(token) DO UPDATE SET " +
-                "device_id=EXCLUDED.device_id,device_name=EXCLUDED.device_name,active=TRUE,updated_at=NOW() " +
+                "INSERT INTO android_push_tokens(user_id,token,device_id,device_name,active,inactive_reason,updated_at) " +
+                "VALUES($1,$2,$3,$4,TRUE,NULL,NOW()) ON CONFLICT(token) DO UPDATE SET " +
+                "device_id=EXCLUDED.device_id,device_name=EXCLUDED.device_name,active=TRUE,inactive_reason=NULL,updated_at=NOW() " +
                 "WHERE android_push_tokens.user_id=EXCLUDED.user_id RETURNING id",
                 [req.user.userId, token, deviceId, deviceName]
             );
@@ -152,8 +152,8 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
         }
         try {
             const result = token
-                ? await pool.query("UPDATE android_push_tokens SET active=FALSE,updated_at=NOW() WHERE user_id=$1 AND token=$2 RETURNING id", [req.user.userId, token])
-                : await pool.query("UPDATE android_push_tokens SET active=FALSE,updated_at=NOW() WHERE user_id=$1 AND active=TRUE RETURNING id", [req.user.userId]);
+                ? await pool.query("UPDATE android_push_tokens SET active=FALSE,inactive_reason='user_disabled',updated_at=NOW() WHERE user_id=$1 AND token=$2 RETURNING id", [req.user.userId, token])
+                : await pool.query("UPDATE android_push_tokens SET active=FALSE,inactive_reason='user_disabled',updated_at=NOW() WHERE user_id=$1 AND active=TRUE RETURNING id", [req.user.userId]);
             return res.json({ success: true, disabled: result.rowCount || 0 });
         } catch (error) {
             console.error("Android push token disable failed.");
@@ -162,10 +162,16 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
     });
 
     router.get("/history", authenticateToken, async (req, res) => {
+        const rawLimit = Number(req.query.limit || 50);
+        const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 50;
+        const rawBeforeId = req.query.beforeId == null || req.query.beforeId === "" ? null : Number(req.query.beforeId);
+        if (rawBeforeId !== null && (!Number.isSafeInteger(rawBeforeId) || rawBeforeId <= 0)) {
+            return res.status(400).json({ success: false, message: "Invalid notification history cursor." });
+        }
         try {
             const result = await pool.query(
                 `SELECT e.id, e.title, e.body, e.match_id, e.event_key, e.target_path,
-                        e.created_at, e.clicked_at, e.click_action,
+                        e.created_at, e.read_at, e.clicked_at, e.click_action,
                         COUNT(j.status)::int AS delivery_count,
                         COUNT(j.status) FILTER (WHERE j.status='accepted')::int AS accepted_count,
                         COUNT(j.status) FILTER (WHERE j.status='failed')::int AS failed_count,
@@ -176,22 +182,48 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
                        UNION ALL
                        SELECT status FROM android_push_delivery_jobs WHERE event_id=e.id
                    ) j ON TRUE
-                  WHERE e.user_id=$1
+                  WHERE e.user_id=$1 AND ($2::bigint IS NULL OR e.id<$2)
                   GROUP BY e.id
                   ORDER BY e.created_at DESC, e.id DESC
-                  LIMIT 100`,
+                   LIMIT $3`,
+                [req.user.userId, rawBeforeId, limit + 1]
+            );
+            const hasMore = result.rows.length > limit;
+            const rows = result.rows.slice(0, limit);
+            const unread = await pool.query(
+                "SELECT COUNT(*)::int AS unread_count FROM push_notification_events WHERE user_id=$1 AND read_at IS NULL",
                 [req.user.userId]
             );
-            return res.json({ success: true, notifications: result.rows.map((row) => ({
+            return res.json({ success: true, notifications: rows.map((row) => ({
                 ...row,
                 deliveryStatus: Number(row.delivery_count) === 0 ? "not_subscribed"
                     : Number(row.accepted_count) > 0 ? "accepted_by_push_service"
                     : Number(row.pending_count) > 0 ? "queued"
                     : "failed"
-            })) });
+            })), unreadCount: Number(unread.rows[0] && unread.rows[0].unread_count || 0),
+                hasMore, nextCursor: hasMore && rows.length ? String(rows[rows.length - 1].id) : null });
         } catch (error) {
             console.error("Push notification history query failed.");
             return res.status(500).json({ success: false, message: "Unable to load notification history." });
+        }
+    });
+
+    router.post("/history/:eventId/read", authenticateToken, async (req, res) => {
+        const eventId = Number(req.params.eventId);
+        if (!Number.isSafeInteger(eventId) || eventId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid notification." });
+        }
+        try {
+            const result = await pool.query(
+                `UPDATE push_notification_events SET read_at=COALESCE(read_at,NOW())
+                  WHERE id=$1 AND user_id=$2 RETURNING id,read_at`,
+                [eventId, req.user.userId]
+            );
+            if (!result.rows.length) return res.status(404).json({ success: false, message: "Notification not found." });
+            return res.json({ success: true, notification: result.rows[0] });
+        } catch (error) {
+            console.error("Push notification read state could not be saved.");
+            return res.status(500).json({ success: false, message: "Could not update notification status." });
         }
     });
 

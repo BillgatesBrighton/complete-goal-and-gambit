@@ -20,6 +20,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".NotificationInboxActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".HelpActivity" android:exported="false" />
+
         <service
             android:name=".GgMessagingService"
             android:exported="false">

@@ -102,7 +102,7 @@ test("event reminder windows use the stored event start time and a stable per-ph
     assert.equal(createAdminAnnouncementReminders.formatEventAt(new Date(now).toISOString(), "Africa/Nairobi").length > 0, true);
 });
 
-test("companion upcoming endpoint is authenticated and returns only a boolean", async (t) => {
+test("companion upcoming endpoint is authenticated and exposes only an actual scheduled time", async (t) => {
     let receivedUserId = null;
     const pool = { query: async (_sql, values) => { receivedUserId = values[0]; return { rows: [{ has_upcoming_games: true }] }; } };
     const app = express();
@@ -121,7 +121,7 @@ test("companion upcoming endpoint is authenticated and returns only a boolean", 
     const body = await response.json();
     assert.equal(response.status, 200);
     assert.equal(receivedUserId, 42, "account identity comes from authentication, not query parameters");
-    assert.deepEqual(body, { success: true, hasUpcomingGames: true });
+    assert.deepEqual(body, { success: true, hasUpcomingGames: true, nextScheduledGame: null });
     assert.equal(response.headers.get("cache-control"), "private, no-store");
 });
 
@@ -286,8 +286,8 @@ test("companion tracker is administrator-only and reports real database aggregat
             }
             if (query.includes("total_members")) return { rows: [{ total_members: 3, guide_acknowledged: 2, downloaded_members: 1, anonymous_downloads: 4, registered_members: 1, recently_active_members: 1, notifications_granted: 1, notifications_denied: 0, notifications_unknown: 0 }] };
             if (query.includes("SELECT COUNT(*)::int AS total FROM member_rows")) return { rows: [{ total: 1 }] };
-            if (query.includes("SELECT user_id,username,game,account_status")) return { rows: [{ user_id: 42, username: "player", game: "both", account_status: "active", installation_count: 1, active_installation_count: 1, app_version: "1.0.6", notification_permission_status: "granted", currently_registered: true, recently_active: true, guide_acknowledged: true }] };
-            if (query.includes("jsonb_agg(jsonb_build_object")) return { rows: [{ user_id: Number(values[0]), username: "player", game: "both", account_status: "active", downloaded: true, downloaded_at: "2026-10-18T09:00:00.000Z", installations: [{ platform: "android", appVersion: "1.0.6", notificationPermissionStatus: "granted", currentlyRegistered: true }] }] };
+            if (query.includes("SELECT user_id,username,game,account_status")) return { rows: [{ user_id: 42, username: "player", game: "both", account_status: "active", installation_count: 1, active_installation_count: 1, app_version: "1.0.6", notification_permission_status: "granted", active_push_device_count: 2, invalid_push_token_count: 1, push_registration_status: "registered", currently_registered: true, recently_active: true, guide_acknowledged: true }] };
+            if (query.includes("jsonb_agg(jsonb_build_object")) return { rows: [{ user_id: Number(values[0]), username: "player", game: "both", account_status: "active", downloaded: true, downloaded_at: "2026-10-18T09:00:00.000Z", installations: [{ platform: "android", appVersion: "1.0.6", notificationPermissionStatus: "granted", currentlyRegistered: true }], push_devices: [{ deviceName: "Android test", status: "token_invalid" }] }] };
             throw new Error("Unexpected tracker query: " + query.slice(0, 110));
         }
     };
@@ -312,6 +312,9 @@ test("companion tracker is administrator-only and reports real database aggregat
     assert.equal(body.stats.total_members, 3);
     assert.equal(body.stats.downloaded_members, 1);
     assert.equal(body.members[0].username, "player");
+    assert.equal(body.members[0].active_push_device_count, 2);
+    assert.equal(body.members[0].invalid_push_token_count, 1);
+    assert.equal(body.members[0].push_registration_status, "registered");
     const memberQuery = queries.find((entry) => entry.query.includes("SELECT user_id,username,game,account_status"));
     assert.match(memberQuery.query, /ILIKE \$2 ESCAPE '!'/);
     assert.deepEqual(memberQuery.values.slice(0, 3), [companionRoutes.GUIDE_VERSION, "%pla!%yer%", "pla%yer"]);
@@ -322,6 +325,77 @@ test("companion tracker is administrator-only and reports real database aggregat
     const detailBody = await detail.json();
     assert.equal(detailBody.member.username, "player");
     assert.equal(detailBody.member.installations[0].appVersion, "1.0.6");
+    assert.equal(detailBody.member.push_devices[0].status, "token_invalid");
+});
+
+test("notification preferences use authenticated account ownership and persist all categories", async (t) => {
+    const calls = [];
+    const preferences = {
+        match_reminders: true,
+        competition_reminders: true,
+        room_code_requests: true,
+        admin_announcements: false,
+        support_replies: true,
+        general_updates: false
+    };
+    const pool = {
+        async query(sql, values) {
+            calls.push({ sql, values });
+            if (sql.startsWith("SELECT match_reminders")) return { rows: [preferences] };
+            if (sql.startsWith("INSERT INTO companion_notification_preferences")) {
+                return { rows: [{
+                    match_reminders: values[1], competition_reminders: values[2], room_code_requests: values[3],
+                    admin_announcements: values[4], support_replies: values[5], general_updates: values[6]
+                }] };
+            }
+            throw new Error("Unexpected preferences query: " + sql);
+        }
+    };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/companion", companionRoutes(pool, (req, _res, next) => {
+        req.user = { userId: 42 };
+        next();
+    }));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const base = "http://127.0.0.1:" + server.address().port + "/api/companion/notification-preferences";
+
+    const loaded = await fetch(base);
+    assert.equal(loaded.status, 200);
+    assert.equal((await loaded.json()).preferences.adminAnnouncements, false);
+    assert.equal(calls[0].values[0], 42);
+
+    const submitted = {
+        matchReminders: false,
+        competitionReminders: true,
+        roomCodeRequests: true,
+        adminAnnouncements: true,
+        supportReplies: false,
+        generalUpdates: false
+    };
+    const saved = await fetch(base, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: submitted, userId: 999 })
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual((await saved.json()).preferences, submitted);
+    assert.equal(calls[1].values[0], 42, "the client-supplied user id is ignored");
+});
+
+test("support unread count is scoped to the authenticated private thread", async (t) => {
+    let values;
+    const app = express();
+    app.use("/api/chat", chatRoutes({
+        async query(_sql, queryValues) { values = queryValues; return { rows: [{ unread_count: 3 }] }; }
+    }, (req, _res, next) => { req.user = { userId: 42 }; next(); }, () => []));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const response = await fetch("http://127.0.0.1:" + server.address().port + "/api/chat/support/unread");
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { success: true, unreadCount: 3 });
+    assert.deepEqual(values, [42]);
 });
 
 test("authenticated companion downloads serve the real APK and record only completed delivery", async (t) => {

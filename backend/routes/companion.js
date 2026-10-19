@@ -14,6 +14,23 @@ const GRADLE_FILE = path.resolve(__dirname, "../../android/app/build.gradle.kts"
 const installationLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 40, message: "Too many companion setup requests. Please try again later." });
 const downloadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 12, message: "Too many app downloads. Please try again later." });
 const publicDownloadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 24, message: "Too many app downloads. Please try again later." });
+const DEFAULT_NOTIFICATION_PREFERENCES = Object.freeze({
+    matchReminders: true,
+    competitionReminders: true,
+    roomCodeRequests: true,
+    adminAnnouncements: true,
+    supportReplies: true,
+    generalUpdates: false
+});
+
+const NOTIFICATION_PREFERENCE_COLUMNS = Object.freeze({
+    matchReminders: "match_reminders",
+    competitionReminders: "competition_reminders",
+    roomCodeRequests: "room_code_requests",
+    adminAnnouncements: "admin_announcements",
+    supportReplies: "support_replies",
+    generalUpdates: "general_updates"
+});
 
 function cleanInstallationId(value) {
     const id = String(value || "").trim();
@@ -65,6 +82,73 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
     router.get("/profile", authenticateToken, (req, res) => {
         res.set("Cache-Control", "private, no-store");
         res.json({ success: true, username: String(req.user.username || "") });
+    });
+
+    router.get("/notification-preferences", authenticateToken, async (req, res) => {
+        try {
+            const result = await pool.query(
+                `SELECT match_reminders,competition_reminders,room_code_requests,
+                        admin_announcements,support_replies,general_updates
+                   FROM companion_notification_preferences WHERE user_id=$1`,
+                [req.user.userId]
+            );
+            const row = result.rows[0];
+            const preferences = row ? {
+                matchReminders: row.match_reminders,
+                competitionReminders: row.competition_reminders,
+                roomCodeRequests: row.room_code_requests,
+                adminAnnouncements: row.admin_announcements,
+                supportReplies: row.support_replies,
+                generalUpdates: row.general_updates
+            } : DEFAULT_NOTIFICATION_PREFERENCES;
+            res.set("Cache-Control", "private, no-store");
+            return res.json({ success: true, preferences });
+        } catch (error) {
+            console.error("Companion notification preferences could not be loaded.");
+            return res.status(500).json({ success: false, message: "Could not load notification preferences." });
+        }
+    });
+
+    router.put("/notification-preferences", authenticateToken, installationLimiter, async (req, res) => {
+        const source = req.body && (req.body.preferences || req.body);
+        if (!source || typeof source !== "object" || Array.isArray(source) ||
+            Object.keys(NOTIFICATION_PREFERENCE_COLUMNS).some((key) => typeof source[key] !== "boolean")) {
+            return res.status(400).json({ success: false, message: "Choose a setting for each notification type." });
+        }
+        const values = Object.keys(NOTIFICATION_PREFERENCE_COLUMNS).map((key) => source[key]);
+        try {
+            const result = await pool.query(
+                `INSERT INTO companion_notification_preferences(
+                    user_id,match_reminders,competition_reminders,room_code_requests,
+                    admin_announcements,support_replies,general_updates,updated_at
+                 ) VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
+                 ON CONFLICT(user_id) DO UPDATE SET
+                    match_reminders=EXCLUDED.match_reminders,
+                    competition_reminders=EXCLUDED.competition_reminders,
+                    room_code_requests=EXCLUDED.room_code_requests,
+                    admin_announcements=EXCLUDED.admin_announcements,
+                    support_replies=EXCLUDED.support_replies,
+                    general_updates=EXCLUDED.general_updates,
+                    updated_at=NOW()
+                 RETURNING match_reminders,competition_reminders,room_code_requests,
+                           admin_announcements,support_replies,general_updates`,
+                [req.user.userId, ...values]
+            );
+            const row = result.rows[0];
+            const preferences = {
+                matchReminders: row.match_reminders,
+                competitionReminders: row.competition_reminders,
+                roomCodeRequests: row.room_code_requests,
+                adminAnnouncements: row.admin_announcements,
+                supportReplies: row.support_replies,
+                generalUpdates: row.general_updates
+            };
+            res.set("Cache-Control", "private, no-store");
+            return res.json({ success: true, preferences });
+        } catch (error) {
+            console.error("Companion notification preferences could not be saved.");
+            return res.status(500).json({ success: false, message: "Could not save notification preferences." });
+        }
     });
 
     router.get("/status", authenticateToken, async (req, res) => {
@@ -350,11 +434,30 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
                      WHERE (m.creator_id=$1 OR m.opponent_id=$1)
                        AND m.status IN ('waiting','ready')
                        AND m.started_at IS NULL AND m.settled_at IS NULL
-                ) AS has_upcoming_games`,
+                 ) AS has_upcoming_games,
+                 (SELECT s.scheduled_at FROM chess_scheduled_matches s
+                   WHERE (s.host_user_id=$1 OR s.guest_user_id=$1) AND s.status='accepted'
+                     AND s.scheduled_at>=NOW()-INTERVAL '30 minutes'
+                     AND s.scheduled_at<=NOW()+INTERVAL '30 days'
+                   ORDER BY s.scheduled_at ASC,s.id ASC LIMIT 1) AS next_scheduled_at,
+                 (SELECT s.time_zone FROM chess_scheduled_matches s
+                   WHERE (s.host_user_id=$1 OR s.guest_user_id=$1) AND s.status='accepted'
+                     AND s.scheduled_at>=NOW()-INTERVAL '30 minutes'
+                     AND s.scheduled_at<=NOW()+INTERVAL '30 days'
+                   ORDER BY s.scheduled_at ASC,s.id ASC LIMIT 1) AS next_game_time_zone`,
                 [userId]
             );
             res.set("Cache-Control", "private, no-store");
-            res.json({ success: true, hasUpcomingGames: Boolean(result.rows[0] && result.rows[0].has_upcoming_games) });
+            const row = result.rows[0] || {};
+            res.json({
+                success: true,
+                hasUpcomingGames: Boolean(row.has_upcoming_games),
+                nextScheduledGame: row.next_scheduled_at ? {
+                    eventName: "Chess match",
+                    startsAt: row.next_scheduled_at,
+                    timeZone: row.next_game_time_zone || "Africa/Nairobi"
+                } : null
+            });
         } catch (error) {
             console.error("Companion upcoming-game status failed.");
             res.status(500).json({ success: false, message: "Could not check upcoming games." });

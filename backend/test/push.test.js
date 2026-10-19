@@ -112,8 +112,8 @@ test("Android push queue sends a data-only room-code action and records the deli
     assert.equal(sentMessages.length, 1);
     assert.equal(sentMessages[0].data.matchId, "44");
     assert.equal(sentMessages[0].data.eventKey, "efootball-match:44:room-code-needed");
-    assert.equal(sentMessages[0].data.title, "GOAL$GAMBIT — Match Room Code");
-    assert.equal(sentMessages[0].data.body, "Your opponent is waiting. Paste the room code below and tap Send.");
+    assert.equal(sentMessages[0].data.title, "GOAL$GAMBIT");
+    assert.equal(sentMessages[0].data.body, "Your match room code is needed. Reply now.");
     assert.equal(sentMessages[0].android.priority, "high");
     assert.equal(Object.prototype.hasOwnProperty.call(sentMessages[0], "notification"), false);
     assert.equal(sentMessages[0].data.roomCode, undefined);
@@ -150,6 +150,44 @@ test("subscription API stores ownership from the authenticated account", async (
     assert.equal(calls[0].values[1], validSubscription.endpoint);
 });
 
+test("notification inbox paginates per authenticated user and syncs read state", async (t) => {
+    const queries = [];
+    const pool = {
+        query: async (sql, values) => {
+            queries.push({ sql, values });
+            if (sql.includes("SELECT e.id, e.title")) return { rows: [
+                { id: 9, title: "GOAL$GAMBIT", body: "New announcement available.", read_at: null, delivery_count: 1, accepted_count: 1, failed_count: 0, pending_count: 0 },
+                { id: 8, title: "GOAL$GAMBIT", body: "Your match starts soon. Get ready!", read_at: null, delivery_count: 1, accepted_count: 1, failed_count: 0, pending_count: 0 }
+            ] };
+            if (sql.includes("COUNT(*)::int AS unread_count")) return { rows: [{ unread_count: 4 }] };
+            if (sql.includes("UPDATE push_notification_events")) return { rows: [{ id: 9, read_at: "2026-10-19T08:00:00.000Z" }] };
+            return { rows: [] };
+        }
+    };
+    const service = { status: () => ({ configured: true, androidConfigured: true }) };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/push", createPushRoutes(pool, (req, _res, next) => { req.user = { userId: 12 }; next(); }, service));
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+
+    const base = "http://127.0.0.1:" + server.address().port + "/api/push/history?limit=1";
+    const historyResponse = await fetch(base);
+    assert.equal(historyResponse.status, 200);
+    const history = await historyResponse.json();
+    assert.equal(history.unreadCount, 4);
+    assert.equal(history.notifications.length, 1);
+    assert.equal(history.notifications[0].id, 9);
+    assert.equal(history.hasMore, true);
+    assert.equal(history.nextCursor, "9");
+    assert.deepEqual(queries[0].values, [12, null, 2]);
+
+    const readResponse = await fetch(base.replace("?limit=1", "/9/read"), { method: "POST" });
+    assert.equal(readResponse.status, 200);
+    assert.deepEqual(queries[2].values, [9, 12]);
+});
+
 test("match workflow, chat, and wallet page scripts parse", () => {
     for (const file of ["match-room.html", "match-results.html", "match-hub.html", "chat.html", "wallet.html", "login.html"]) {
         const fullPath = path.join(__dirname, "..", "..", "frontend", "pages", file);
@@ -182,11 +220,25 @@ test("Android sender alert offers inline code reply and persists until successfu
     assert.match(workerSource, /Api\.sendRoomCode\(matchId, code, bearer\)/);
     assert.match(workerSource, /if \(response\.ok\(\)\) \{[\s\S]*?Notifications\.showReplySuccess/);
     assert.match(workerSource, /Result\.retry\(\)/);
-    assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Sent/);
-    assert.match(notificationSource, /GOAL\\\$GAMBIT — Room Code Not Sent/);
+    assert.match(notificationSource, /Room code sent successfully\./);
+    assert.match(notificationSource, /setVisibility\(Notification\.VISIBILITY_PRIVATE\)/);
+    assert.match(notificationSource, /Your match room code is needed\. Reply now\./);
+    assert.match(notificationSource, /New message from admin\./);
+    assert.doesNotMatch(notificationSource, /BigTextStyle/);
     assert.match(replySource, /Regex\("\^\[A-Za-z0-9 _-\]\{1,50\}\$"\)\.matches\(code\)/);
     assert.match(manifest, /android\.permission\.POST_NOTIFICATIONS/);
     assert.doesNotMatch(manifest, /SYSTEM_ALERT_WINDOW|TYPE_APPLICATION_OVERLAY/);
+});
+
+test("Android notification payloads use short private-safe templates and preferences are classified by event", () => {
+    assert.equal(createAndroidPushService.notificationBody("support-reply:7:18"), "New message from admin.");
+    assert.equal(createAndroidPushService.notificationBody("admin-announcement:99"), "New announcement available.");
+    assert.equal(createAndroidPushService.notificationBody("admin-announcement:99:reminder:1h"), "Check out your games — competition starts soon!");
+    assert.equal(createAndroidPushService.notificationBody("efootball-match:3:room-code-sent:1"), "Your match has a room-code update.");
+    const preferenceSql = createAndroidPushService.preferenceEnabledSql("e", "p");
+    assert.match(preferenceSql, /room_code_requests/);
+    assert.match(preferenceSql, /competition_reminders/);
+    assert.match(preferenceSql, /support_replies/);
 });
 
 test("browser sender push exposes a button fallback and notification click opens the focused match form", async () => {

@@ -35,9 +35,11 @@ async function enqueueAnnouncementToAudience(client, pushService, announcement, 
     );
     const id = Number(announcement.id);
     const eventName = String(announcement.event_name || "").trim();
+    const maintenanceSuffix = /maintenance/i.test(eventName) ? ":maintenance" : "";
+    const scheduleRevision = announcement.event_at ? new Date(announcement.event_at).getTime() : 0;
     const eventKey = phase === "publish"
-        ? "admin-announcement:" + id
-        : "admin-announcement:" + id + ":reminder:" + phase;
+        ? "admin-announcement:" + id + maintenanceSuffix
+        : "admin-announcement:" + id + ":reminder:" + phase + ":" + scheduleRevision + maintenanceSuffix;
     let title;
     let body;
     if (phase === "publish") {

@@ -55,6 +55,7 @@ function createChessScheduleReminders(pool, pushService, options) {
             }
 
             const timestamp = formatScheduledAt(schedule.scheduled_at, schedule.time_zone);
+            const scheduleRevision = new Date(schedule.scheduled_at).getTime();
             const title = phase === "start" ? "Your Chess match is ready to start"
                 : phase === "10m" ? "Your Chess match starts in 10 minutes"
                 : "Your Chess match is coming up";
@@ -66,7 +67,7 @@ function createChessScheduleReminders(pool, pushService, options) {
                         ? "You have a Chess game coming up at " + timestamp + ". Open GOAL$GAMBIT to check your Match Hub."
                         : "You have an upcoming Chess game at " + timestamp + ". Open GOAL$GAMBIT and check your Match Hub.";
                 await pushService.enqueueNotification(client, userId, {
-                    eventKey: "chess-schedule-reminder-" + phase + ":" + schedule.id,
+                    eventKey: "chess-schedule-reminder-" + phase + ":" + schedule.id + ":" + scheduleRevision,
                     title: title,
                     body: body,
                     page: "chess"

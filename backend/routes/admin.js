@@ -1093,6 +1093,13 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         ), download_rollup AS (
             SELECT user_id,MIN(downloaded_at) AS downloaded_at,MAX(last_downloaded_at) AS last_downloaded_at
               FROM companion_download_events GROUP BY user_id
+        ), push_token_rollup AS (
+            SELECT user_id,
+                   COUNT(*) FILTER (WHERE active)::int AS active_push_device_count,
+                   COUNT(*) FILTER (WHERE inactive_reason='token_invalid')::int AS invalid_push_token_count,
+                   COUNT(*) FILTER (WHERE inactive_reason='user_disabled')::int AS disabled_push_device_count,
+                   MAX(updated_at) FILTER (WHERE active) AS latest_push_registration_at
+              FROM android_push_tokens GROUP BY user_id
         ), member_rows AS (
             SELECT u.id AS user_id,u.username,u.game,u.account_status,
                    s.onboarding_version,s.onboarding_acknowledged_at,
@@ -1104,6 +1111,15 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                         WHEN COALESCE(i.has_unknown_permission,FALSE) THEN 'unknown'
                         ELSE 'unknown' END AS notification_permission_status,
                    (COALESCE(i.active_installation_count,0)>0) AS currently_registered,
+                   COALESCE(p.active_push_device_count,0) AS active_push_device_count,
+                   COALESCE(p.invalid_push_token_count,0) AS invalid_push_token_count,
+                   COALESCE(p.disabled_push_device_count,0) AS disabled_push_device_count,
+                   p.latest_push_registration_at,
+                   CASE WHEN COALESCE(p.active_push_device_count,0)>0 THEN 'registered'
+                        WHEN COALESCE(p.invalid_push_token_count,0)>0 THEN 'token_invalid'
+                        WHEN COALESCE(p.disabled_push_device_count,0)>0 THEN 'user_disabled'
+                        WHEN COALESCE(i.active_installation_count,0)>0 THEN 'registration_incomplete'
+                        ELSE 'not_registered' END AS push_registration_status,
                    (COALESCE(i.active_installation_count,0)>0 AND i.active_last_seen_at>=NOW()-INTERVAL '7 days') AS recently_active,
                    (COALESCE(i.installation_count,0)>0 AND
                        (COALESCE(i.active_installation_count,0)=0 OR i.active_last_seen_at<NOW()-INTERVAL '30 days')) AS stale_or_inactive,
@@ -1112,6 +1128,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
               LEFT JOIN companion_user_setup s ON s.user_id=u.id
               LEFT JOIN download_rollup d ON d.user_id=u.id
               LEFT JOIN installation_rollup i ON i.user_id=u.id
+              LEFT JOIN push_token_rollup p ON p.user_id=u.id
         )`;
 
     router.get("/companion-tracker", authenticateToken, adminOnly, async (req, res) => {
@@ -1175,6 +1192,8 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                             downloaded_at,last_downloaded_at,installation_count,active_installation_count,
                             registered_at,last_seen_at,active_last_seen_at,app_version,device_platform,
                             notification_permission_status,notification_permission_checked_at,
+                            active_push_device_count,invalid_push_token_count,disabled_push_device_count,
+                            latest_push_registration_at,push_registration_status,
                             currently_registered,recently_active,stale_or_inactive,guide_acknowledged
                        FROM member_rows${whereSql}
                       ORDER BY user_id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -1216,7 +1235,15 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                             'notificationPermissionCheckedAt',i.notification_permission_checked_at,
                             'currentlyRegistered',i.unregistered_at IS NULL
                          ) ORDER BY i.updated_at DESC,i.id DESC)
-                           FROM companion_installations i WHERE i.user_id=u.id),'[]'::jsonb) AS installations
+                           FROM companion_installations i WHERE i.user_id=u.id),'[]'::jsonb) AS installations,
+                        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                            'deviceName',t.device_name,'registeredAt',t.created_at,'lastUpdatedAt',t.updated_at,
+                            'status',CASE WHEN t.active THEN 'registered'
+                                          WHEN t.inactive_reason='token_invalid' THEN 'token_invalid'
+                                          WHEN t.inactive_reason='user_disabled' THEN 'user_disabled'
+                                          ELSE 'inactive' END
+                         ) ORDER BY t.updated_at DESC,t.id DESC)
+                           FROM android_push_tokens t WHERE t.user_id=u.id),'[]'::jsonb) AS push_devices
                    FROM users u LEFT JOIN companion_user_setup s ON s.user_id=u.id
                   WHERE u.id=$1`, [userId]
             );

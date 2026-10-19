@@ -34,11 +34,48 @@ function configuredFirebaseMessaging(options) {
     }
 }
 
+function notificationBody(eventKey) {
+    const key = String(eventKey || "").toLowerCase();
+    if (key.includes("room-code-needed") || key.includes("code-correction-requested")) return "Your match room code is needed. Reply now.";
+    if (key.includes("room-code-sent") || key.includes("room-code-received") || key.includes("room-code-replaced")) return "Your match has a room-code update.";
+    if (key.startsWith("support-reply:") || key.startsWith("support-message:")) return "New message from admin.";
+    if (key.includes("maintenance")) return "Website maintenance update available.";
+    if (key.startsWith("admin-announcement:") && key.includes(":reminder:")) return "Check out your games — competition starts soon!";
+    if (key.startsWith("admin-announcement:")) return "New announcement available.";
+    if (key.includes("chess-schedule-reminder") || key.includes("match-start")) return "Your match starts soon. Get ready!";
+    if (key.includes("cancel")) return "Your match status has changed. Open GOAL$GAMBIT.";
+    return "New GOAL$GAMBIT update available.";
+}
+
+function preferenceEnabledSql(eventAlias, preferenceAlias) {
+    return `CASE
+        WHEN ${eventAlias}.event_key LIKE '%room-code-needed%'
+          OR ${eventAlias}.event_key LIKE '%code-correction-requested%'
+          OR ${eventAlias}.event_key LIKE '%room-code-sent%'
+          OR ${eventAlias}.event_key LIKE '%room-code-received%'
+          OR ${eventAlias}.event_key LIKE '%room-code-replaced%'
+          THEN COALESCE(${preferenceAlias}.room_code_requests,TRUE)
+        WHEN ${eventAlias}.event_key LIKE 'admin-announcement:%:reminder:%'
+          THEN COALESCE(${preferenceAlias}.competition_reminders,TRUE)
+        WHEN ${eventAlias}.event_key LIKE 'admin-announcement:%'
+          THEN COALESCE(${preferenceAlias}.admin_announcements,TRUE)
+        WHEN ${eventAlias}.event_key LIKE 'chess-schedule-reminder-%'
+          OR ${eventAlias}.event_key LIKE 'chess-schedule-%'
+          OR ${eventAlias}.event_key LIKE 'efootball-match:%'
+          THEN COALESCE(${preferenceAlias}.match_reminders,TRUE)
+        WHEN ${eventAlias}.event_key LIKE 'support-reply:%'
+          THEN COALESCE(${preferenceAlias}.support_replies,TRUE)
+        ELSE COALESCE(${preferenceAlias}.general_updates,TRUE)
+    END`;
+}
+
 function createAndroidPushService(pool, options) {
     const firebase = configuredFirebaseMessaging(options || {});
     const messaging = firebase.messaging;
     let timer = null;
     let running = false;
+    const notificationEnabled = preferenceEnabledSql("e", "p");
+    const notificationEnabledForJob = preferenceEnabledSql("e", "p");
 
     async function enqueueNotification(client, eventId, userId) {
         if (!messaging) return false;
@@ -46,7 +83,10 @@ function createAndroidPushService(pool, options) {
             await client.query(
                 "INSERT INTO android_push_delivery_jobs(event_id,token_id) " +
                 "SELECT $1,t.id FROM android_push_tokens t " +
+                "JOIN push_notification_events e ON e.id=$1 " +
+                "LEFT JOIN companion_notification_preferences p ON p.user_id=t.user_id " +
                 "WHERE t.user_id=$2 AND t.active=TRUE " +
+                "AND (" + notificationEnabled + ")=TRUE " +
                 "AND NOT EXISTS (SELECT 1 FROM android_push_delivery_jobs j WHERE j.event_id=$1 AND j.token_id=t.id) " +
                 "ON CONFLICT DO NOTHING",
                 [Number(eventId), Number(userId)]
@@ -63,18 +103,19 @@ function createAndroidPushService(pool, options) {
         let errorCode = null;
         let deactivate = false;
         try {
+            const key = String(job.event_key || "");
             const data = {
                 eventId: String(job.event_id),
-                eventKey: String(job.event_key || ""),
+                eventKey: key,
                 matchId: job.match_id == null ? "" : String(job.match_id),
-                title: String(job.title || "GOAL$GAMBIT match update").slice(0, 120),
-                body: String(job.body || "Open GOAL$GAMBIT to view your match update.").slice(0, 240),
+                title: "GOAL$GAMBIT",
+                body: notificationBody(key),
                 targetPath: String(job.target_path || "pages/match-hub.html")
             };
             await messaging.send({
                 token: job.token,
                 data: data,
-                android: { priority: "high", ttl: 3600000 }
+                android: { priority: (key.includes("room-code-needed") || key.includes("code-correction-requested") || key.startsWith("support-reply:")) ? "high" : "normal", ttl: 3600000 }
             });
             outcome = "accepted";
         } catch (error) {
@@ -112,7 +153,7 @@ function createAndroidPushService(pool, options) {
                 [job.id, outcome, retry, delaySeconds, errorCode ? "Firebase delivery error: " + errorCode : null]
             );
             if (deactivate) {
-                await client.query("UPDATE android_push_tokens SET active=FALSE,updated_at=NOW() WHERE id=$1", [job.token_id]);
+                await client.query("UPDATE android_push_tokens SET active=FALSE,inactive_reason='token_invalid',updated_at=NOW() WHERE id=$1", [job.token_id]);
                 await client.query(
                     "UPDATE android_push_delivery_jobs SET status='failed',updated_at=NOW() " +
                     "WHERE token_id=$1 AND status='queued'",
@@ -139,12 +180,21 @@ function createAndroidPushService(pool, options) {
                 "UPDATE android_push_delivery_jobs SET status='queued',updated_at=NOW() " +
                 "WHERE status='sending' AND updated_at<NOW()-INTERVAL '2 minutes'"
             );
+            await client.query(
+                "UPDATE android_push_delivery_jobs j SET status='failed',last_error='Disabled in notification preferences',updated_at=NOW() " +
+                "FROM push_notification_events e,android_push_tokens t " +
+                "LEFT JOIN companion_notification_preferences p ON p.user_id=t.user_id " +
+                "WHERE j.event_id=e.id AND j.token_id=t.id AND j.status='queued' " +
+                "AND (" + notificationEnabledForJob + ")=FALSE"
+            );
             const selected = await client.query(
                 "SELECT j.id,j.event_id,j.token_id,j.attempt_count,e.event_key,e.match_id,e.title,e.body,e.target_path,t.token " +
                 "FROM android_push_delivery_jobs j " +
                 "JOIN push_notification_events e ON e.id=j.event_id " +
                 "JOIN android_push_tokens t ON t.id=j.token_id AND t.active=TRUE " +
+                "LEFT JOIN companion_notification_preferences p ON p.user_id=t.user_id " +
                 "WHERE j.status='queued' AND j.next_attempt_at<=NOW() " +
+                "AND (" + notificationEnabledForJob + ")=TRUE " +
                 "ORDER BY j.created_at,j.id LIMIT 20 FOR UPDATE OF j SKIP LOCKED"
             );
             jobs = selected.rows.map(function (row) {
@@ -203,3 +253,5 @@ function createAndroidPushService(pool, options) {
 }
 
 module.exports = createAndroidPushService;
+module.exports.notificationBody = notificationBody;
+module.exports.preferenceEnabledSql = preferenceEnabledSql;

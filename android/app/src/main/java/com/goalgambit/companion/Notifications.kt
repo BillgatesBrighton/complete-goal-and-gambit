@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.os.Build
 
 import java.util.Map
@@ -17,6 +18,7 @@ object Notifications {
     const val EXTRA_MATCH_ID = "matchId"
     const val EXTRA_NOTIFICATION_ID = "notificationId"
     const val EXTRA_EVENT_KEY = "eventKey"
+    const val EXTRA_PUSH_EVENT_ID = "pushEventId"
     const val EXTRA_ANNOUNCEMENT_ID = "announcementId"
     const val EXTRA_UPCOMING_GAMES = "upcomingGames"
     const val EXTRA_OPEN_SUPPORT = "openSupport"
@@ -51,13 +53,14 @@ object Notifications {
 
     @JvmStatic
     fun showPush(context: Context, data: Map<String, String>) {
-        val title = limit(data["title"], "GOAL\$GAMBIT match update", 120)
-        val body = limit(data["body"], "Open GOAL\$GAMBIT to view your match update.", 240)
         val eventKey = data["eventKey"].orEmpty()
         val matchId = parseLong(data["matchId"])
+        val eventId = parseLong(data["eventId"])
         val notificationId = notificationId(data["eventId"], matchId)
-        val senderAction = eventKey.contains("room-code-needed") || eventKey.contains("code-correction-requested")
-        post(context, notificationId, build(context, notificationId, matchId, eventKey, title, body, true, senderAction, 0))
+        val body = notificationBody(eventKey)
+        if (matchId > 0 && eventKey.contains("cancel", ignoreCase = true)) clearMatchNotifications(context, matchId)
+        post(context, notificationId, build(context, notificationId, matchId, eventKey,
+            "GOAL\$GAMBIT", body, true, isRoomCodeRequest(eventKey), 0, eventId))
     }
 
     @JvmStatic
@@ -77,29 +80,33 @@ object Notifications {
         } else {
             Notification.Builder(context)
         }
-        builder.setSmallIcon(android.R.drawable.stat_notify_chat)
+        builder.setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("GOAL\$GAMBIT — Upcoming games")
             .setContentText("You have upcoming games. Open GOAL\$GAMBIT and check your Match Hub.")
             .setAutoCancel(true)
             .setCategory(Notification.CATEGORY_EVENT)
             .setPriority(Notification.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
-        post(context, UPCOMING_NOTIFICATION_ID, builder.build())
+        post(context, UPCOMING_NOTIFICATION_ID, builder.setContentTitle("GOAL\$GAMBIT")
+            .setContentText("Check out your games — competition starts soon!")
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setGroup("goal_gambit.competitions")
+            .build())
     }
 
     @JvmStatic
     fun showReplyResult(context: Context, id: Int, matchId: Long, eventKey: String?, message: String, retry: Boolean) {
-        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT — Room Code Not Sent", message, retry, retry, 0))
+        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT", concise(message), retry, retry, 0, 0))
     }
 
     @JvmStatic
     fun showReplySending(context: Context, id: Int, matchId: Long, eventKey: String?) {
-        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT — Sending Room Code", "Sending room code…", true, true, 0))
+        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT", "Sending room code…", true, true, 0, 0))
     }
 
     @JvmStatic
     fun showReplySuccess(context: Context, id: Int, matchId: Long, eventKey: String?) {
-        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT — Room Code Sent", "Room code sent to your opponent.", false, false, 0))
+        post(context, id, build(context, id, matchId, eventKey.orEmpty(), "GOAL\$GAMBIT", "Room code sent successfully.", false, false, 0, 0))
     }
 
     private fun build(
@@ -111,7 +118,8 @@ object Notifications {
         body: String,
         allowReply: Boolean,
         persistent: Boolean,
-        timeoutAfterMs: Long
+        timeoutAfterMs: Long,
+        pushEventId: Long
     ): Notification {
         createChannel(context)
         val senderAction = eventKey.contains("room-code-needed") || eventKey.contains("code-correction-requested")
@@ -121,14 +129,21 @@ object Notifications {
         } else {
             Notification.Builder(context)
         }
-        builder.setSmallIcon(android.R.drawable.stat_notify_chat)
+        builder.setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(Notification.BigTextStyle().bigText(body))
             .setAutoCancel(!persistent)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setPriority(if (senderAction) Notification.PRIORITY_HIGH else Notification.PRIORITY_DEFAULT)
-            .setContentIntent(openMatchIntent(context, id, matchId, eventKey))
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setGroup(groupKey(eventKey, matchId))
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .addExtras(Bundle().apply {
+                putLong(EXTRA_MATCH_ID, matchId)
+                putLong(EXTRA_PUSH_EVENT_ID, pushEventId)
+                putString(EXTRA_EVENT_KEY, eventKey)
+            })
+            .setContentIntent(openMatchIntent(context, id, matchId, eventKey, pushEventId))
 
         if (senderAction && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             builder.setDefaults(Notification.DEFAULT_ALL)
@@ -148,6 +163,7 @@ object Notifications {
                 .putExtra(EXTRA_MATCH_ID, matchId)
                 .putExtra(EXTRA_NOTIFICATION_ID, id)
                 .putExtra(EXTRA_EVENT_KEY, eventKey)
+                .putExtra(EXTRA_PUSH_EVENT_ID, pushEventId)
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 id,
@@ -180,11 +196,12 @@ object Notifications {
         return builder.build()
     }
 
-    private fun openMatchIntent(context: Context, id: Int, matchId: Long, eventKey: String): PendingIntent {
+    private fun openMatchIntent(context: Context, id: Int, matchId: Long, eventKey: String, pushEventId: Long): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_MATCH_ID, matchId)
             .putExtra(EXTRA_EVENT_KEY, eventKey)
+            .putExtra(EXTRA_PUSH_EVENT_ID, pushEventId)
         val announcementId = announcementIdFromEventKey(eventKey)
         if (announcementId > 0) intent.putExtra(EXTRA_ANNOUNCEMENT_ID, announcementId)
         if (eventKey.startsWith("support-reply:") || eventKey.startsWith("support-message:")) {
@@ -205,11 +222,53 @@ object Notifications {
     }
 
     private fun channelId(eventKey: String): String =
-        if (eventKey.contains("room-code-needed") || eventKey.contains("code-correction-requested")) {
+        if (isRoomCodeRequest(eventKey)) {
             ROOM_CODE_CHANNEL_ID
         } else {
             CHANNEL_ID
         }
+
+    private fun isRoomCodeRequest(eventKey: String): Boolean =
+        eventKey.contains("room-code-needed") || eventKey.contains("code-correction-requested")
+
+    private fun notificationBody(eventKey: String): String {
+        val key = eventKey.lowercase()
+        return when {
+            key.contains("room-code-needed") || key.contains("code-correction-requested") ->
+                "Your match room code is needed. Reply now."
+            key.contains("support-reply:") || key.contains("support-message:") ->
+                "New message from admin."
+            key.contains("maintenance") ->
+                "Website maintenance update available."
+            key.startsWith("admin-announcement:") && key.contains(":reminder:") ->
+                "Check out your games — competition starts soon!"
+            key.startsWith("admin-announcement:") ->
+                "New announcement available."
+            key.contains("chess-schedule-reminder") || key.contains("match-start") ->
+                "Your match starts soon. Get ready!"
+            key.contains("room-code-sent") || key.contains("room-code-received") || key.contains("room-code-replaced") ->
+                "Your match has a room-code update."
+            key.contains("cancel") ->
+                "Your match status has changed. Open GOAL\$GAMBIT."
+            else -> "New GOAL\$GAMBIT update available."
+        }
+    }
+
+    private fun groupKey(eventKey: String, matchId: Long): String {
+        val key = eventKey.lowercase()
+        return when {
+            isRoomCodeRequest(eventKey) && matchId > 0 -> "goal_gambit.room_code.$matchId"
+            key.contains("support-reply:") || key.contains("support-message:") -> "goal_gambit.support"
+            key.startsWith("admin-announcement:") || key.contains("chess-schedule-reminder") -> "goal_gambit.competitions"
+            key.contains("efootball-match:") || matchId > 0 -> "goal_gambit.matches"
+            else -> "goal_gambit.updates"
+        }
+    }
+
+    private fun concise(message: String): String {
+        val clean = message.replace(Regex("\\s+"), " ").trim()
+        return if (clean.length <= 120) clean else clean.substring(0, 117) + "…"
+    }
 
     private fun post(context: Context, id: Int, notification: Notification) {
         try {
@@ -217,6 +276,19 @@ object Notifications {
             manager.notify(id, notification)
         } catch (_: SecurityException) {
             // Android 13+ notification permission can be denied independently of FCM registration.
+        }
+    }
+
+    private fun clearMatchNotifications(context: Context, matchId: Long) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            for (active in manager.activeNotifications) {
+                val activeMatchId = active.notification.extras?.getLong(EXTRA_MATCH_ID, 0L) ?: 0L
+                if (activeMatchId == matchId) manager.cancel(active.tag, active.id)
+            }
+        } catch (_: SecurityException) {
+            // Notification permission can be disabled while the match is active.
         }
     }
 

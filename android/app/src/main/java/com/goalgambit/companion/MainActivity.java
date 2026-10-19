@@ -2,8 +2,9 @@ package com.goalgambit.companion;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
-import android.content.SharedPreferences;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -40,7 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 
 public final class MainActivity extends Activity {
-    private static final int REQUEST_NOTIFICATIONS = 401;
+    static final String ACTION_PUSH_RECEIVED = "com.goalgambit.companion.PUSH_RECEIVED";
     private static final ExecutorService API_EXECUTOR = Executors.newSingleThreadExecutor();
     private LinearLayout content;
     private ScrollView screenScroll;
@@ -53,12 +54,24 @@ public final class MainActivity extends Activity {
     private TextView supportStatusView;
     private LinearLayout announcementsList;
     private LinearLayout supportMessages;
+    private Button notificationsShortcut;
+    private Button supportShortcut;
     private EditText supportSubject;
     private EditText supportComposer;
     private Spinner supportCategory;
     private long selectedMatchId;
     private long selectedAnnouncementId;
+    private long selectedPushEventId;
     private boolean companionRefreshInFlight;
+    private boolean pushReceiverRegistered;
+
+    private final BroadcastReceiver pushReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(android.content.Context context, Intent intent) {
+            refreshCompanionData();
+            refreshNotificationCount();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle state) {
@@ -66,19 +79,37 @@ public final class MainActivity extends Activity {
         Notifications.createChannel(this);
         selectedMatchId = getIntent().getLongExtra(Notifications.EXTRA_MATCH_ID, 0);
         selectedAnnouncementId = getIntent().getLongExtra(Notifications.EXTRA_ANNOUNCEMENT_ID, 0);
+        selectedPushEventId = getIntent().getLongExtra(Notifications.EXTRA_PUSH_EVENT_ID, 0);
         buildScreen();
         renderAccountState();
+        markSelectedNotificationRead();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (!pushReceiverRegistered) {
+            IntentFilter filter = new IntentFilter(ACTION_PUSH_RECEIVED);
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(pushReceiver, filter, RECEIVER_NOT_EXPORTED);
+            else registerReceiver(pushReceiver, filter);
+            pushReceiverRegistered = true;
+        }
         String bearer = TokenStore.read(this);
         if (bearer != null) {
             syncCompanionInstallation();
             if (!SupportQueueStore.pending(this, TokenStore.accountUserId(bearer)).isEmpty()) enqueueSupportSync();
             refreshCompanionData();
+            refreshNotificationCount();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        if (pushReceiverRegistered) {
+            unregisterReceiver(pushReceiver);
+            pushReceiverRegistered = false;
+        }
+        super.onPause();
     }
 
     @Override
@@ -87,10 +118,16 @@ public final class MainActivity extends Activity {
         setIntent(intent);
         selectedMatchId = intent.getLongExtra(Notifications.EXTRA_MATCH_ID, 0);
         selectedAnnouncementId = intent.getLongExtra(Notifications.EXTRA_ANNOUNCEMENT_ID, 0);
+        selectedPushEventId = intent.getLongExtra(Notifications.EXTRA_PUSH_EVENT_ID, 0);
+        markSelectedNotificationRead();
         if (selectedMatchId > 0) loadMatch(selectedMatchId);
         refreshCompanionData();
+        refreshNotificationCount();
         if (intent.getBooleanExtra(Notifications.EXTRA_OPEN_SUPPORT, false) && supportMessages != null) {
             screenScroll.post(() -> screenScroll.smoothScrollTo(0, supportMessages.getTop()));
+        }
+        if (selectedAnnouncementId > 0 && announcementsList != null) {
+            screenScroll.post(() -> screenScroll.smoothScrollTo(0, announcementsList.getTop()));
         }
     }
 
@@ -199,15 +236,35 @@ public final class MainActivity extends Activity {
     }
 
     private void showSignedIn() {
-        statusView.setText("Your GOAL$GAMBIT companion for event announcements, upcoming-game reminders, and admin support chat. Room-code replies remain available in match notifications.");
-        Button enable = button("ENABLE MATCH NOTIFICATIONS");
-        Button test = button("SEND TEST NOTIFICATION");
-        Button disable = button("DISABLE NOTIFICATIONS ON THIS DEVICE");
+        statusView.setText("GOAL$GAMBIT | Compete. Win. Earn.");
+
+        LinearLayout quickActions = new LinearLayout(this);
+        quickActions.setOrientation(LinearLayout.HORIZONTAL);
+        notificationsShortcut = button("NOTIFICATIONS");
+        Button settings = button("SETTINGS");
+        quickActions.addView(notificationsShortcut, new LinearLayout.LayoutParams(0, dp(50), 1));
+        quickActions.addView(settings, marginParams(0, 50, 8, 0, 0, 0));
+        ((LinearLayout.LayoutParams) settings.getLayoutParams()).weight = 1;
+        content.addView(quickActions, marginParams(-1, -2, 0, 0, 0, 8));
+        notificationsShortcut.setOnClickListener(view -> startActivity(new Intent(this, NotificationInboxActivity.class)));
+        settings.setOnClickListener(view -> startActivity(new Intent(this, SettingsActivity.class)));
+
+        LinearLayout secondActions = new LinearLayout(this);
+        secondActions.setOrientation(LinearLayout.HORIZONTAL);
+        supportShortcut = button("SUPPORT INBOX");
+        Button help = button("HELP & FAQ");
+        secondActions.addView(supportShortcut, new LinearLayout.LayoutParams(0, dp(50), 1));
+        secondActions.addView(help, marginParams(0, 50, 8, 0, 0, 0));
+        ((LinearLayout.LayoutParams) help.getLayoutParams()).weight = 1;
+        content.addView(secondActions, marginParams(-1, -2, 0, 0, 0, 12));
+        supportShortcut.setOnClickListener(view -> {
+            if (supportMessages != null) screenScroll.smoothScrollTo(0, supportMessages.getTop());
+        });
+        help.setOnClickListener(view -> startActivity(new Intent(this, HelpActivity.class)));
+
         Button signOut = button("SIGN OUT");
-        content.addView(enable, marginParams(-1, -2, 0, 0, 0, 10));
-        content.addView(test, marginParams(-1, -2, 0, 0, 0, 10));
-        content.addView(disable, marginParams(-1, -2, 0, 0, 0, 10));
-        content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 18));
+        content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 14));
+        signOut.setOnClickListener(view -> disableNotifications(true));
         serviceStatusView = text("Checking companion services…", 13, Color.LTGRAY, false);
         upcomingStatusView = text("Checking upcoming games…", 15, Color.WHITE, false);
         upcomingStatusView.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -251,27 +308,8 @@ public final class MainActivity extends Activity {
         Button sendSupport = button("SEND TO ADMIN");
         content.addView(sendSupport, marginParams(-1, -2, 0, 0, 0, 20));
         sendSupport.setOnClickListener(view -> sendSupportMessage(sendSupport));
-        enable.setOnClickListener(view -> requestNotificationPermission());
-        test.setOnClickListener(view -> {
-            test.setEnabled(false);
-            API_EXECUTOR.execute(() -> {
-                try {
-                    Api.Result result = Api.testAndroidNotification(TokenStore.read(this));
-                    runOnUiThread(() -> {
-                        statusView.setText(result.ok() ? "Test queued. Check the Android notification shade."
-                            : result.message("Could not send the Android test notification."));
-                        test.setEnabled(true);
-                    });
-                } catch (Exception error) {
-                    runOnUiThread(() -> {
-                        statusView.setText("Could not reach the server to queue a test notification.");
-                        test.setEnabled(true);
-                    });
-                }
-            });
-        });
-        disable.setOnClickListener(view -> disableNotifications(false));
-        signOut.setOnClickListener(view -> disableNotifications(true));
+        String supportCategoryExtra = getIntent().getStringExtra("supportCategory");
+        if ("suggestion".equals(supportCategoryExtra) && supportCategory != null) supportCategory.setSelection(1);
         if (selectedMatchId > 0) addMatchLoading(selectedMatchId);
         refreshCompanionData();
     }
@@ -284,15 +322,21 @@ public final class MainActivity extends Activity {
             Api.Result announcementResult = null;
             Api.Result upcomingResult = null;
             Api.Result supportResult = null;
+            Api.Result supportUnreadResult = null;
             Api.Result profileResult = null;
+            Api.Result pushStatusResult = null;
             try { announcementResult = Api.getAnnouncements(bearer); } catch (Exception ignored) {}
             try { upcomingResult = Api.getUpcomingGameStatus(bearer); } catch (Exception ignored) {}
+            try { supportUnreadResult = Api.getSupportUnreadCount(bearer); } catch (Exception ignored) {}
             try { supportResult = Api.getSupportMessages(bearer); } catch (Exception ignored) {}
             try { profileResult = Api.getCompanionProfile(bearer); } catch (Exception ignored) {}
+            try { pushStatusResult = Api.getPushStatus(bearer); } catch (Exception ignored) {}
             final Api.Result announcements = announcementResult;
             final Api.Result upcoming = upcomingResult;
             final Api.Result support = supportResult;
+            final Api.Result supportUnread = supportUnreadResult;
             final Api.Result profile = profileResult;
+            final Api.Result pushStatus = pushStatusResult;
             runOnUiThread(() -> {
                 companionRefreshInFlight = false;
                 if (TokenStore.read(this) == null || !bearer.equals(TokenStore.read(this))) return;
@@ -302,22 +346,34 @@ public final class MainActivity extends Activity {
                 }
                 boolean connected = announcements != null && announcements.ok()
                     && upcoming != null && upcoming.ok() && support != null && support.ok();
-                if (serviceStatusView != null) serviceStatusView.setText(connected
-                    ? "Connected to GOAL$GAMBIT. Support and announcements sync independently of the website pages."
-                    : "GOAL$GAMBIT services are temporarily unreachable. Unsent support messages stay queued on this device.");
+                if (serviceStatusView != null) {
+                    if (!connected) {
+                        serviceStatusView.setText("Offline or reconnecting · unsent support messages stay queued on this device.");
+                    } else {
+                        int activeDevices = pushStatus != null && pushStatus.ok() ? pushStatus.json.optInt("activeAndroidDevices", 0) : -1;
+                        boolean alertsAllowed = areNotificationsAllowed();
+                        String registered = activeDevices < 0 ? "device status unavailable"
+                            : activeDevices == 0 ? "no registered device" : activeDevices + (activeDevices == 1 ? " companion device registered" : " companion devices registered");
+                        serviceStatusView.setText("Connected · " + registered + (alertsAllowed ? " · Android alerts allowed" : " · notifications need permission"));
+                    }
+                }
+                if (supportUnread != null && supportUnread.ok() && supportShortcut != null) {
+                    int count = supportUnread.json.optInt("unreadCount", 0);
+                    supportShortcut.setText(count > 0 ? "SUPPORT INBOX · " + count + " NEW" : "SUPPORT INBOX");
+                }
                 if (announcements != null && announcements.ok()) renderAnnouncements(announcements.json);
                 else if (announcementsStatusView != null) announcementsStatusView.setText("Announcements could not be refreshed. Try again when connected.");
                 if (upcoming != null && upcoming.ok()) {
                     boolean hasUpcoming = upcoming.json.optBoolean("hasUpcomingGames", false);
-                    if (upcomingStatusView != null) upcomingStatusView.setText(hasUpcoming
-                        ? "You have upcoming games. Open Match Hub to check when they are available."
-                        : "No upcoming games are confirmed for your account right now.");
-                    long accountId = TokenStore.accountUserId(bearer);
-                    SharedPreferences state = getSharedPreferences("gg_companion_state", MODE_PRIVATE);
-                    String key = "upcoming_active_" + accountId;
-                    boolean wasUpcoming = state.getBoolean(key, false);
-                    if (hasUpcoming && !wasUpcoming) Notifications.showUpcomingReminder(this);
-                    state.edit().putBoolean(key, hasUpcoming).apply();
+                    JSONObject nextGame = upcoming.json.optJSONObject("nextScheduledGame");
+                    if (upcomingStatusView != null) {
+                        if (!hasUpcoming) upcomingStatusView.setText("No upcoming games are confirmed for your account right now.");
+                        else if (nextGame != null && !nextGame.optString("startsAt", "").isEmpty()) {
+                            upcomingStatusView.setText("Your next scheduled game · " + nextGame.optString("eventName", "Match") + "\n" + formatTimestamp(nextGame.optString("startsAt", ""), nextGame.optString("timeZone", "Africa/Nairobi")));
+                        } else {
+                            upcomingStatusView.setText("You have upcoming games. Open Match Hub to check your current match details.");
+                        }
+                    }
                 } else if (upcomingStatusView != null) {
                     upcomingStatusView.setText("Upcoming-game status is temporarily unavailable.");
                 }
@@ -336,6 +392,38 @@ public final class MainActivity extends Activity {
                 }
             });
         });
+    }
+
+    private void refreshNotificationCount() {
+        String bearer = TokenStore.read(this);
+        if (bearer == null || notificationsShortcut == null) return;
+        API_EXECUTOR.execute(() -> {
+            try {
+                Api.Result result = Api.getNotificationHistory(bearer, 1, null);
+                if (!result.ok()) return;
+                int unread = result.json.optInt("unreadCount", 0);
+                runOnUiThread(() -> {
+                    if (notificationsShortcut != null) notificationsShortcut.setText(unread > 0 ? "NOTIFICATIONS · " + unread : "NOTIFICATIONS");
+                });
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void markSelectedNotificationRead() {
+        long eventId = selectedPushEventId;
+        selectedPushEventId = 0;
+        String bearer = TokenStore.read(this);
+        if (eventId <= 0 || bearer == null) return;
+        API_EXECUTOR.execute(() -> {
+            try { Api.markNotificationRead(eventId, bearer); } catch (Exception ignored) {}
+            refreshNotificationCount();
+        });
+    }
+
+    private boolean areNotificationsAllowed() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+        android.app.NotificationManager manager = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager != null && manager.areNotificationsEnabled();
     }
 
     private void renderAnnouncements(JSONObject response) {
@@ -534,29 +622,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
-            return;
-        }
-        syncCompanionInstallation();
-        registerFirebaseToken();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_NOTIFICATIONS) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            syncCompanionInstallation();
-            registerFirebaseToken();
-        } else {
-            syncCompanionInstallation();
-            statusView.setText("Notification permission was denied. Allow notifications for GOAL$GAMBIT Companion in Android Settings, then try again.");
-        }
-    }
-
     private void syncCompanionInstallation() {
         String bearer = TokenStore.read(this);
         if (bearer == null || bearer.trim().isEmpty()) return;
@@ -573,32 +638,6 @@ public final class MainActivity extends Activity {
                 // A failed or offline registration is retried on the next app open or background check.
             }
         });
-    }
-
-    private void registerFirebaseToken() {
-        statusView.setText("Registering this Android device for push notifications…");
-        try {
-            FirebaseMessaging.getInstance().getToken().addOnCompleteListener(this, task -> {
-                if (!task.isSuccessful() || task.getResult() == null) {
-                    statusView.setText("Firebase Cloud Messaging is not configured for this Android build yet.");
-                    return;
-                }
-                String fcmToken = task.getResult();
-                API_EXECUTOR.execute(() -> {
-                    try {
-                        Api.Result result = Api.registerDevice(fcmToken, TokenStore.deviceId(this), TokenStore.read(this));
-                        if (result.ok()) Api.registerCompanion(this, TokenStore.read(this));
-                        runOnUiThread(() -> statusView.setText(result.ok()
-                            ? (BuildConfig.DEBUG ? "Trial build" : "Release build") + " v" + BuildConfig.VERSION_NAME + " is registered for GOAL$GAMBIT notifications."
-                            : result.message("Could not register this Android device.")));
-                    } catch (Exception error) {
-                        runOnUiThread(() -> statusView.setText("Device registration failed. Check the connection and try again."));
-                    }
-                });
-            });
-        } catch (Exception error) {
-            statusView.setText("Firebase Cloud Messaging is not configured for this Android build yet.");
-        }
     }
 
     private void disableNotifications(boolean signOut) {

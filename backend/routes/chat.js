@@ -5,9 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { getImageType, safeStoragePath, storePrivateImage } = require("../services/privateEvidence");
-const router = express.Router();
 
 module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
+    const router = express.Router();
     const complaintEvidenceDirectory = path.join(__dirname, "..", "uploads", "complaint-evidence");
     const complaintUpload = multer({
         storage: multer.memoryStorage(),
@@ -299,6 +299,25 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
     // =========================================================
     // SUPPORT / CHAT WITH ADMIN
     // =========================================================
+    router.get("/support/unread", authenticateToken, async (req,res) => {
+        try {
+            const result = await pool.query(
+                `SELECT COUNT(*)::int AS unread_count
+                   FROM chat_threads t
+                   JOIN chat_messages m ON m.thread_id=t.id
+                  WHERE t.thread_type='support' AND t.user_one_id=$1 AND t.user_two_id IS NULL
+                    AND m.sender_id<>$1 AND m.read_at IS NULL
+                    AND (t.user_cleared_at IS NULL OR m.created_at>t.user_cleared_at)`,
+                [req.user.userId]
+            );
+            res.set("Cache-Control","private, no-store");
+            return res.json({ success: true, unreadCount: Number(result.rows[0] && result.rows[0].unread_count || 0) });
+        } catch(e) {
+            console.error("Support unread count could not be loaded.");
+            return res.status(500).json({ success:false, message:"Could not check support replies." });
+        }
+    });
+
     router.get("/support", authenticateToken, async (req,res) => {
         const me=Number(req.user.userId);
         try {

@@ -547,8 +547,21 @@ CREATE TABLE IF NOT EXISTS push_notification_events (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(user_id, event_key)
 );
+ALTER TABLE push_notification_events
+    ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_push_events_user_created
     ON push_notification_events(user_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS companion_notification_preferences (
+    user_id                 INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    match_reminders         BOOLEAN NOT NULL DEFAULT TRUE,
+    competition_reminders  BOOLEAN NOT NULL DEFAULT TRUE,
+    room_code_requests     BOOLEAN NOT NULL DEFAULT TRUE,
+    admin_announcements    BOOLEAN NOT NULL DEFAULT TRUE,
+    support_replies        BOOLEAN NOT NULL DEFAULT TRUE,
+    general_updates        BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS push_delivery_jobs (
     id                  BIGSERIAL PRIMARY KEY,
@@ -590,9 +603,25 @@ CREATE TABLE IF NOT EXISTS android_push_tokens (
     device_id           VARCHAR(80),
     device_name         VARCHAR(120),
     active              BOOLEAN NOT NULL DEFAULT TRUE,
+    inactive_reason     VARCHAR(30) CHECK (inactive_reason IS NULL OR inactive_reason IN ('user_disabled', 'token_invalid')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE android_push_tokens
+    ADD COLUMN IF NOT EXISTS inactive_reason VARCHAR(30);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid='android_push_tokens'::regclass
+           AND conname='android_push_tokens_inactive_reason_check'
+    ) THEN
+        ALTER TABLE android_push_tokens
+            ADD CONSTRAINT android_push_tokens_inactive_reason_check
+            CHECK (inactive_reason IS NULL OR inactive_reason IN ('user_disabled', 'token_invalid'));
+    END IF;
+END;
+$$;
 CREATE INDEX IF NOT EXISTS idx_android_push_tokens_user_active
     ON android_push_tokens(user_id, active);
 

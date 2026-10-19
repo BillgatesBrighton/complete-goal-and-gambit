@@ -175,6 +175,39 @@ final class Api {
         return request("GET", "/api/chat/support", bearer, null);
     }
 
+    static Result getSupportUnreadCount(String bearer) throws Exception {
+        return request("GET", "/api/chat/support/unread", bearer, null);
+    }
+
+    static Result getNotificationHistory(String bearer, int limit, String beforeId) throws Exception {
+        String query = "?limit=" + Math.max(1, Math.min(limit, 100));
+        if (beforeId != null && beforeId.matches("[1-9][0-9]{0,18}")) query += "&beforeId=" + beforeId;
+        return request("GET", "/api/push/history" + query, bearer, null);
+    }
+
+    static Result markNotificationRead(long eventId, String bearer) throws Exception {
+        if (eventId <= 0) throw new IllegalArgumentException("Invalid notification id.");
+        return request("POST", "/api/push/history/" + eventId + "/read", bearer, new JSONObject());
+    }
+
+    static Result getNotificationPreferences(String bearer) throws Exception {
+        return request("GET", "/api/companion/notification-preferences", bearer, null);
+    }
+
+    static Result saveNotificationPreferences(JSONObject preferences, String bearer) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("preferences", preferences);
+        return request("PUT", "/api/companion/notification-preferences", bearer, body);
+    }
+
+    static Result getCompanionStatus(String bearer) throws Exception {
+        return request("GET", "/api/companion/status", bearer, null);
+    }
+
+    static Result getPushStatus(String bearer) throws Exception {
+        return request("GET", "/api/push/status", bearer, null);
+    }
+
     static Result sendSupportMessage(JSONObject payload, String bearer) throws Exception {
         return request("POST", "/api/chat/support", bearer, payload);
     }
