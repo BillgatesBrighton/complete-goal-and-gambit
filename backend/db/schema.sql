@@ -1195,9 +1195,10 @@ DECLARE
     debit_total NUMERIC(14,2);
     credit_total NUMERIC(14,2);
 BEGIN
-    target_id := CASE WHEN TG_OP='DELETE' THEN OLD.transaction_id ELSE NEW.transaction_id END;
     IF TG_TABLE_NAME='financial_ledger_transactions' THEN
         target_id := CASE WHEN TG_OP='DELETE' THEN OLD.id ELSE NEW.id END;
+    ELSE
+        target_id := CASE WHEN TG_OP='DELETE' THEN OLD.transaction_id ELSE NEW.transaction_id END;
     END IF;
     SELECT amount,posted_at INTO expected,posted FROM financial_ledger_transactions WHERE id=target_id;
     IF NOT FOUND OR posted IS NULL THEN
