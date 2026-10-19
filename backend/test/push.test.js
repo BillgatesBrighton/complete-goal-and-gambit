@@ -224,6 +224,8 @@ test("Android sender alert offers inline code reply and persists until successfu
     assert.match(notificationSource, /ROOM_CODE_CHANNEL_ID[\s\S]*?NotificationManager\.IMPORTANCE_HIGH/);
     assert.match(notificationSource, /Notification\.PRIORITY_HIGH/);
     assert.match(replySource, /WorkManager\.getInstance\(app\)\.enqueueUniqueWork/);
+    assert.match(replySource, /setExpedited\(OutOfQuotaPolicy\.RUN_AS_NON_EXPEDITED_WORK_REQUEST\)/);
+    assert.match(replySource, /ExistingWorkPolicy\.REPLACE/);
     assert.match(replySource, /Notifications\.showReplySending/);
     assert.match(replySource, /TokenStore\.protect\(app, code\)/);
     assert.match(workerSource, /Api\.sendRoomCode\(matchId, code, bearer\)/);

@@ -8,6 +8,7 @@ import androidx.work.Data
 import androidx.work.BackoffPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
@@ -50,11 +51,17 @@ class RoomCodeReplyReceiver : BroadcastReceiver() {
             val work = OneTimeWorkRequestBuilder<RoomCodeSendWorker>()
                 .setInputData(input)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                // This is a user-initiated action from the notification shade.
+                // Ask Android to run it promptly, while keeping a normal-work
+                // fallback when expedited-work quota is unavailable.
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
             Notifications.showReplySending(app, notificationId, matchId, eventKey)
             WorkManager.getInstance(app).enqueueUniqueWork(
                 "goal-gambit-room-code-$matchId-$notificationId",
-                ExistingWorkPolicy.KEEP,
+                // A stale retry must not swallow a newly typed reply. Replacing
+                // it also lets the player retry from the still-visible action.
+                ExistingWorkPolicy.REPLACE,
                 work
             )
         } catch (_: Exception) {
