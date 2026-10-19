@@ -129,7 +129,8 @@ accounts do not need the app; Both accounts can use Chess while they set it up.
 Setup requires Android Studio, JDK 17, Android SDK 36, a Firebase Android app
 with package name `com.goalgambit.companion`, and Cloud Messaging enabled. Put
 the Firebase client configuration at `android/app/google-services.json`; this
-file is ignored by Git. Give the backend a Firebase service account through
+file is tracked for reproducible Android builds. Give the backend a Firebase
+service account through
 `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS`. The credential JSON
 must stay outside this repository. A placeholder is in `backend/.env.example`;
 merge its settings into the private `.env` or provide them in the backend

@@ -52,6 +52,11 @@ const repairDuplicateSupportThreads = require("./db/repairSupportThreads");
 const app = express();
 const server = http.createServer(app);
 
+// Online mode proxies Funnel requests from the local Tailscale daemon. Trust
+// only loopback so Express can use the daemon's sanitized forwarded headers
+// for client-IP rate limits without trusting headers from remote clients.
+app.set("trust proxy", "loopback");
+
 const PORT = Number(process.env.PORT) || 5000;
 const HOST = String(process.env.HOST || "127.0.0.1");
 

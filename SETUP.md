@@ -139,7 +139,9 @@ outside the project. Configure `FIREBASE_PROJECT_ID` and
 `GOOGLE_APPLICATION_CREDENTIALS` in the backend's private environment; merge
 the placeholders from `backend\.env.example` into the private
 `backend\.env` or set them in the backend process environment. Never commit
-either Firebase JSON file.
+the Firebase service-account JSON, signing keys, or private environment files.
+The Android `google-services.json` is client configuration used by the app
+build and is tracked in this repository; it is not the service-account key.
 
 The public APK will be served from
 `https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk`.
