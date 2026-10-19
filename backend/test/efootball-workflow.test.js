@@ -45,8 +45,16 @@ async function startWorkflowServer(userId, fixture, t) {
             if (![Number(fixture.creator_id), Number(fixture.opponent_id)].includes(Number(values[1]))) return { rows: [] };
             return { rows: [{ ...fixture }] };
         }
-        if (sql.includes("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE")) {
+        if (/SELECT\s+\*\s+FROM\s+efootball_matches\s+WHERE id\s*=\s*\$1/i.test(sql)) {
             return { rows: [{ ...fixture }] };
+        }
+        if (/UPDATE efootball_matches\s+SET opponent_ready\s*=\s*true/i.test(sql)) {
+            fixture.opponent_ready = true;
+            return { rows: [], rowCount: 1 };
+        }
+        if (/UPDATE efootball_matches\s+SET creator_ready\s*=\s*true/i.test(sql)) {
+            fixture.creator_ready = true;
+            return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE efootball_matches SET code_received_at")) {
             fixture.code_received_at = new Date().toISOString();
@@ -161,6 +169,22 @@ test("room-code receipt is receiver-only, persistent, and does not start the mat
     const duplicate = await receiver.request("/api/efootball/matches/5/code-received", { method: "POST" });
     assert.equal(duplicate.status, 200);
     assert.equal(receiver.pushEvents.length, 1);
+});
+
+test("receiver can mark ready after confirming the room code", async (t) => {
+    const fixture = makeFixture({
+        code_received_at: new Date().toISOString(),
+        code_received_by: 2
+    });
+    const receiver = await startWorkflowServer(2, fixture, t);
+    const response = await receiver.request("/api/efootball/matches/5/ready", { method: "POST" });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.success, true);
+    assert.equal(fixture.opponent_ready, true);
+    assert.equal(fixture.creator_ready, false);
+    assert.equal(fixture.status, "waiting");
+    assert.ok(receiver.socketEvents.some(event => event.room === "user_2" && event.data.reason === "ready-updated"));
 });
 
 test("sending a room code alerts only the receiver without putting the code in push", async (t) => {

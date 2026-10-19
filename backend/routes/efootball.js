@@ -1317,6 +1317,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                         `,
                         [req.params.id]
                     );
+                const match = matchResult.rows[0];
 
                 if (!matchResult.rows.length) {
 
@@ -1335,9 +1336,6 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     );
                     if (!member.rows.length) throw Object.assign(new Error("Join this league before joining its match."), { status: 403 });
                 }
-
-                const match =
-                    matchResult.rows[0];
 
                 const isCreator =
                     Number(match.creator_id) ===
