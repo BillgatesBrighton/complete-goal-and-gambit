@@ -1,3 +1,7 @@
+param(
+    [switch]$UseNodemon
+)
+
 $ErrorActionPreference = "Stop"
 $backendDir = $PSScriptRoot
 $backendEnvFile = Join-Path $backendDir ".env"
@@ -72,7 +76,11 @@ try {
         npm ci --ignore-scripts --no-audit --no-fund
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
-    npm start
+    if ($UseNodemon) {
+        npm run dev:local
+    } else {
+        npm start
+    }
 } finally {
     Pop-Location
     & $tailscaleCommand.Source funnel reset

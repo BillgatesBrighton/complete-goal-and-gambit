@@ -879,6 +879,9 @@
 
         var wasOffline = false;
         var recoveryTimer = null;
+        var retryTimer = null;
+        var consecutiveFailures = 0;
+        var healthCheckInFlight = false;
         var healthBase = API_BASE || location.origin;
         if (!healthBase || healthBase === "null" || location.protocol === "file:") {
             healthBase = "http://localhost:5000";
@@ -919,7 +922,17 @@
             }
         }
 
+        function scheduleHealthRetry() {
+            if (retryTimer) return;
+            retryTimer = window.setTimeout(function () {
+                retryTimer = null;
+                checkServer();
+            }, 1500);
+        }
+
         async function checkServer() {
+            if (healthCheckInFlight) return;
+            healthCheckInFlight = true;
             var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
             var timeout = window.setTimeout(function () {
                 if (controller) controller.abort();
@@ -934,14 +947,24 @@
                 });
                 var health = await response.json();
                 if (response.ok && health && health.success === true && health.database === "connected") {
+                    consecutiveFailures = 0;
+                    if (retryTimer) {
+                        window.clearTimeout(retryTimer);
+                        retryTimer = null;
+                    }
                     showOnline();
                 } else {
-                    showOffline();
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= 2) showOffline();
+                    else scheduleHealthRetry();
                 }
             } catch (error) {
-                showOffline();
+                consecutiveFailures++;
+                if (consecutiveFailures >= 2) showOffline();
+                else scheduleHealthRetry();
             } finally {
                 window.clearTimeout(timeout);
+                healthCheckInFlight = false;
             }
         }
 
