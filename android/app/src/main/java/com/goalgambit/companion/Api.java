@@ -204,6 +204,10 @@ final class Api {
         return request("GET", "/api/companion/status", bearer, null);
     }
 
+    static Result acceptCompanionTerms(String bearer) throws Exception {
+        return request("POST", "/api/companion/terms/accept", bearer, new JSONObject());
+    }
+
     static Result getPushStatus(String bearer) throws Exception {
         return request("GET", "/api/push/status", bearer, null);
     }

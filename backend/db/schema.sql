@@ -657,11 +657,19 @@ CREATE TABLE IF NOT EXISTS android_push_delivery_attempts (
 -- require an existing member to review updated instructions.
 CREATE TABLE IF NOT EXISTS companion_user_setup (
     user_id                     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    onboarding_version          VARCHAR(40) NOT NULL,
-    onboarding_acknowledged_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    onboarding_version          VARCHAR(40),
+    onboarding_acknowledged_at  TIMESTAMPTZ,
+    terms_accepted_version     VARCHAR(40),
+    terms_accepted_at          TIMESTAMPTZ,
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- A member may accept terms in the Android Companion before acknowledging
+-- the separate website setup guide, so both versioned records are optional.
+ALTER TABLE companion_user_setup ALTER COLUMN onboarding_version DROP NOT NULL;
+ALTER TABLE companion_user_setup ALTER COLUMN onboarding_acknowledged_at DROP NOT NULL;
+ALTER TABLE companion_user_setup ADD COLUMN IF NOT EXISTS terms_accepted_version VARCHAR(40);
+ALTER TABLE companion_user_setup ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 
 -- A random app-generated installation id is HMACed server-side. This keeps a
 -- stable installation record without retaining the raw id or device model.

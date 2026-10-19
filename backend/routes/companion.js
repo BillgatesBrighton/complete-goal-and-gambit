@@ -7,6 +7,8 @@ const path = require("path");
 const rateLimit = require("../middleware/rateLimit");
 
 const GUIDE_VERSION = "2026-10-18-v1";
+const TERMS_VERSION = "2026-10-19-v1";
+const TERMS_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/terms.html";
 const RECENT_ACTIVITY_DAYS = 7;
 const STALE_ACTIVITY_DAYS = 30;
 const APK_PATH = path.resolve(__dirname, "../../frontend/downloads/goal-gambit-companion.apk");
@@ -156,7 +158,7 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
             const userId = Number(req.user.userId);
             const [setup, installation, download] = await Promise.all([
                 pool.query(
-                    `SELECT onboarding_version,onboarding_acknowledged_at
+                    `SELECT onboarding_version,onboarding_acknowledged_at,terms_accepted_version,terms_accepted_at
                        FROM companion_user_setup WHERE user_id=$1`, [userId]
                 ),
                 pool.query(
@@ -179,13 +181,23 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
             const app = installation.rows[0] || {};
             const downloads = download.rows[0] || {};
             const apk = getApkMetadata();
+            const guideAcknowledged = savedSetup.onboarding_version === GUIDE_VERSION;
+            const termsAccepted = savedSetup.terms_accepted_version === TERMS_VERSION && Boolean(savedSetup.terms_accepted_at);
+            const installationConfirmed = Boolean(app.ever_registered);
             res.set("Cache-Control", "private, no-store");
             return res.json({
                 success: true,
                 guideVersion: GUIDE_VERSION,
-                onboardingAcknowledgedAt: savedSetup.onboarding_version === GUIDE_VERSION ? savedSetup.onboarding_acknowledged_at : null,
+                termsVersion: TERMS_VERSION,
+                termsUrl: TERMS_URL,
+                termsAccepted,
+                termsAcceptedVersion: savedSetup.terms_accepted_version || null,
+                termsAcceptedAt: termsAccepted ? savedSetup.terms_accepted_at : null,
+                onboardingAcknowledgedAt: guideAcknowledged ? savedSetup.onboarding_acknowledged_at : null,
                 onboardingAcknowledgedVersion: savedSetup.onboarding_version || null,
-                needsAcknowledgement: savedSetup.onboarding_version !== GUIDE_VERSION,
+                needsAcknowledgement: !guideAcknowledged,
+                installationConfirmed,
+                onboardingComplete: installationConfirmed && termsAccepted && guideAcknowledged,
                 apk: apk ? {
                     version: apk.version,
                     fileSize: apk.fileSize,
@@ -239,6 +251,30 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
         }
     });
 
+    router.post("/terms/accept", authenticateToken, installationLimiter, async (req, res) => {
+        try {
+            const result = await pool.query(
+                `INSERT INTO companion_user_setup(user_id,terms_accepted_version,terms_accepted_at,updated_at)
+                 VALUES($1,$2,NOW(),NOW())
+                 ON CONFLICT(user_id) DO UPDATE SET
+                    terms_accepted_version=EXCLUDED.terms_accepted_version,
+                    terms_accepted_at=NOW(),updated_at=NOW()
+                 RETURNING terms_accepted_version,terms_accepted_at`,
+                [req.user.userId, TERMS_VERSION]
+            );
+            res.set("Cache-Control", "private, no-store");
+            return res.json({
+                success: true,
+                accepted: true,
+                version: result.rows[0].terms_accepted_version,
+                acceptedAt: result.rows[0].terms_accepted_at
+            });
+        } catch (error) {
+            console.error("Companion terms acceptance could not be saved.");
+            return res.status(500).json({ success: false, message: "Could not save your Terms and Conditions acceptance." });
+        }
+    });
+
     router.post("/register", authenticateToken, installationLimiter, async (req, res) => {
         const installationId = cleanInstallationId(req.body && req.body.installationId);
         const appVersion = cleanAppVersion(req.body && req.body.appVersion);
@@ -246,6 +282,19 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
         const permissionStatus = cleanPermissionStatus(req.body && req.body.notificationPermissionStatus);
         if (!installationId || !appVersion || platform !== "android" || !permissionStatus) {
             return res.status(400).json({ success: false, message: "Companion installation details are invalid." });
+        }
+        try {
+            const terms = await pool.query(
+                `SELECT EXISTS(SELECT 1 FROM companion_user_setup
+                                WHERE user_id=$1 AND terms_accepted_version=$2 AND terms_accepted_at IS NOT NULL) AS terms_accepted`,
+                [req.user.userId, TERMS_VERSION]
+            );
+            if (!terms.rows[0] || !terms.rows[0].terms_accepted) {
+                return res.status(403).json({ success: false, message: "Accept the current Terms and Conditions before registering this companion installation." });
+            }
+        } catch (error) {
+            console.error("Companion terms status could not be checked before registration.");
+            return res.status(500).json({ success: false, message: "Could not verify Terms and Conditions before registering this installation." });
         }
         const hash = installationHash(installationId);
         let client;
@@ -468,3 +517,4 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
 };
 
 module.exports.GUIDE_VERSION = GUIDE_VERSION;
+module.exports.TERMS_VERSION = TERMS_VERSION;

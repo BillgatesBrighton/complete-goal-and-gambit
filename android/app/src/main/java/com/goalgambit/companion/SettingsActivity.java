@@ -203,6 +203,25 @@ public final class SettingsActivity extends Activity {
     private void registerPushToken() {
         String bearer = TokenStore.read(this);
         if (bearer == null) return;
+        EXECUTOR.execute(() -> {
+            Api.Result accountStatus = null;
+            try { accountStatus = Api.getCompanionStatus(bearer); } catch (Exception ignored) {}
+            Api.Result verifiedStatus = accountStatus;
+            runOnUiThread(() -> {
+                if (TokenStore.read(this) == null || !bearer.equals(TokenStore.read(this))) return;
+                if (verifiedStatus == null || !verifiedStatus.ok() || !verifiedStatus.json.optBoolean("termsAccepted", false)) {
+                    status.setText(verifiedStatus == null
+                        ? "Could not verify Terms and Conditions. Notification registration was not started."
+                        : verifiedStatus.ok() ? "Accept the current Terms and Conditions in the companion app before enabling notifications."
+                        : verifiedStatus.message("Could not verify Terms and Conditions."));
+                    return;
+                }
+                registerPushTokenAfterTerms(bearer);
+            });
+        });
+    }
+
+    private void registerPushTokenAfterTerms(String bearer) {
         try {
             FirebaseMessaging.getInstance().getToken().addOnCompleteListener(this, task -> {
                 if (!task.isSuccessful() || task.getResult() == null) {

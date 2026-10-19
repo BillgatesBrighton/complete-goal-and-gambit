@@ -17,6 +17,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.Button;
 import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
@@ -64,6 +65,9 @@ public final class MainActivity extends Activity {
     private long selectedPushEventId;
     private boolean companionRefreshInFlight;
     private boolean pushReceiverRegistered;
+    private boolean companionTermsAccepted;
+    private String termsStatusInFlightToken;
+    private String termsStatusCheckedToken;
 
     private final BroadcastReceiver pushReceiver = new BroadcastReceiver() {
         @Override
@@ -95,7 +99,7 @@ public final class MainActivity extends Activity {
             pushReceiverRegistered = true;
         }
         String bearer = TokenStore.read(this);
-        if (bearer != null) {
+        if (bearer != null && companionTermsAccepted) {
             syncCompanionInstallation();
             if (!SupportQueueStore.pending(this, TokenStore.accountUserId(bearer)).isEmpty()) enqueueSupportSync();
             refreshCompanionData();
@@ -175,6 +179,8 @@ public final class MainActivity extends Activity {
         content.removeViews(5, Math.max(0, content.getChildCount() - 5));
         String bearer = TokenStore.read(this);
         if (bearer == null) {
+            companionTermsAccepted = false;
+            termsStatusCheckedToken = null;
             if (welcomeGreetingView != null) welcomeGreetingView.setVisibility(View.GONE);
             if (welcomeNameView != null) welcomeNameView.setVisibility(View.GONE);
             if (welcomeNameView != null) welcomeNameView.setText("player");
@@ -184,8 +190,103 @@ public final class MainActivity extends Activity {
             if (welcomeNameView != null) welcomeNameView.setVisibility(View.VISIBLE);
             String username = TokenStore.accountUsername(bearer);
             if (!username.isEmpty() && welcomeNameView != null) welcomeNameView.setText(username);
-            showSignedIn();
+            if (companionTermsAccepted && bearer.equals(termsStatusCheckedToken)) {
+                showSignedIn();
+            } else {
+                checkCompanionTerms(bearer);
+            }
         }
+    }
+
+    private void checkCompanionTerms(String bearer) {
+        if (bearer.equals(termsStatusInFlightToken)) return;
+        termsStatusInFlightToken = bearer;
+        statusView.setText("Checking your current Terms and Conditions…");
+        API_EXECUTOR.execute(() -> {
+            Api.Result result = null;
+            try { result = Api.getCompanionStatus(bearer); } catch (Exception ignored) {}
+            Api.Result status = result;
+            runOnUiThread(() -> {
+                if (bearer.equals(termsStatusInFlightToken)) termsStatusInFlightToken = null;
+                if (TokenStore.read(this) == null || !bearer.equals(TokenStore.read(this))) return;
+                termsStatusCheckedToken = bearer;
+                content.removeViews(5, Math.max(0, content.getChildCount() - 5));
+                if (status == null || !status.ok()) {
+                    showTermsStatusUnavailable(status == null ? "Could not reach the GOAL$GAMBIT server." : status.message("Could not verify your account setup."));
+                    return;
+                }
+                companionTermsAccepted = status.json.optBoolean("termsAccepted", false);
+                if (companionTermsAccepted) {
+                    showSignedIn();
+                    syncCompanionInstallation();
+                } else {
+                    showTermsAcceptance(status.json.optString("termsUrl", ""));
+                }
+            });
+        });
+    }
+
+    private void showTermsAcceptance(String termsUrl) {
+        statusView.setText("Review and accept the current Terms and Conditions to finish companion setup.");
+        TextView explanation = text("Your acceptance is saved securely to your signed-in GOAL$GAMBIT account. The app will register this installation after you accept.", 14, Color.LTGRAY, false);
+        content.addView(explanation, marginParams(-1, -2, 0, 0, 0, 12));
+        Button readTerms = button("READ TERMS AND CONDITIONS");
+        content.addView(readTerms, marginParams(-1, -2, 0, 0, 0, 12));
+        String safeTermsUrl = termsUrl.startsWith("https://") ? termsUrl : "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/terms.html";
+        readTerms.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(safeTermsUrl))));
+        CheckBox agree = new CheckBox(this);
+        agree.setText("I have read and agree to the GOAL$GAMBIT Terms and Conditions.");
+        agree.setTextColor(Color.WHITE);
+        agree.setButtonTintList(android.content.res.ColorStateList.valueOf(Color.rgb(237, 195, 53)));
+        content.addView(agree, marginParams(-1, -2, 0, 0, 0, 10));
+        Button accept = button("ACCEPT AND CONTINUE");
+        accept.setEnabled(false);
+        content.addView(accept, marginParams(-1, -2, 0, 0, 0, 10));
+        agree.setOnCheckedChangeListener((buttonView, checked) -> accept.setEnabled(checked));
+        accept.setOnClickListener(view -> {
+            if (!agree.isChecked()) return;
+            accept.setEnabled(false);
+            readTerms.setEnabled(false);
+            statusView.setText("Saving your acceptance securely…");
+            String bearer = TokenStore.read(this);
+            API_EXECUTOR.execute(() -> {
+                Api.Result accepted = null;
+                try { accepted = Api.acceptCompanionTerms(bearer); } catch (Exception ignored) {}
+                Api.Result response = accepted;
+                runOnUiThread(() -> {
+                    if (bearer == null || !bearer.equals(TokenStore.read(this))) return;
+                    if (response == null || !response.ok() || !response.json.optBoolean("accepted", false)) {
+                        statusView.setText(response == null ? "Could not reach the server. Your acceptance was not confirmed; please retry." : response.message("Your acceptance was not saved. Please retry."));
+                        accept.setEnabled(agree.isChecked());
+                        readTerms.setEnabled(true);
+                        return;
+                    }
+                    companionTermsAccepted = true;
+                    termsStatusCheckedToken = bearer;
+                    Toast.makeText(this, "Terms acceptance saved.", Toast.LENGTH_SHORT).show();
+                    renderAccountState();
+                    syncCompanionInstallation();
+                });
+            });
+        });
+        Button signOut = button("SIGN OUT");
+        content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 0));
+        signOut.setOnClickListener(view -> disableNotifications(true));
+    }
+
+    private void showTermsStatusUnavailable(String message) {
+        statusView.setText("Could not confirm your terms status. Companion setup remains paused until the server responds.");
+        TextView detail = text(message, 13, Color.LTGRAY, false);
+        content.addView(detail, marginParams(-1, -2, 0, 0, 0, 12));
+        Button retry = button("RETRY");
+        content.addView(retry, marginParams(-1, -2, 0, 0, 0, 10));
+        retry.setOnClickListener(view -> {
+            termsStatusCheckedToken = null;
+            renderAccountState();
+        });
+        Button signOut = button("SIGN OUT");
+        content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 0));
+        signOut.setOnClickListener(view -> disableNotifications(true));
     }
 
     private void showLogin() {
@@ -218,7 +319,6 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     TokenStore.save(this, token);
-                    syncCompanionInstallation();
                     runOnUiThread(() -> {
                         Toast.makeText(this, "Signed in to GOAL$GAMBIT.", Toast.LENGTH_SHORT).show();
                         renderAccountState();
@@ -316,7 +416,7 @@ public final class MainActivity extends Activity {
 
     private void refreshCompanionData() {
         String bearer = TokenStore.read(this);
-        if (bearer == null || companionRefreshInFlight || announcementsList == null || supportMessages == null) return;
+        if (bearer == null || !companionTermsAccepted || companionRefreshInFlight || announcementsList == null || supportMessages == null) return;
         companionRefreshInFlight = true;
         API_EXECUTOR.execute(() -> {
             Api.Result announcementResult = null;
@@ -396,7 +496,7 @@ public final class MainActivity extends Activity {
 
     private void refreshNotificationCount() {
         String bearer = TokenStore.read(this);
-        if (bearer == null || notificationsShortcut == null) return;
+        if (bearer == null || !companionTermsAccepted || notificationsShortcut == null) return;
         API_EXECUTOR.execute(() -> {
             try {
                 Api.Result result = Api.getNotificationHistory(bearer, 1, null);

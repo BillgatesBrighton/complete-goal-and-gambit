@@ -33,6 +33,9 @@
     var presenceSocket = null;
     var presenceScriptPending = false;
     var onlineUserIds = new Set();
+    var companionNoticeCheckInFlight = false;
+    var companionNoticeRefreshPending = false;
+    var companionNoticeLastCheckedAt = 0;
 
     function getToken() {
         return localStorage.getItem(TOKEN_KEY);
@@ -283,6 +286,7 @@
             document.removeEventListener("keydown", preventGuideDismiss, true);
             document.body.style.overflow = "";
             overlay.remove();
+            refreshAndroidCompanionDownloadLink(true);
         });
         function preventGuideDismiss(event) {
             if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); }
@@ -376,27 +380,88 @@
         document.body.insertBefore(banner, document.body.firstChild);
     }
 
-    async function showAndroidCompanionDownloadLink() {
-        if (!document.body || !getToken() || document.getElementById("gg-android-companion-download")) return;
-        var banner = document.createElement("aside");
-        banner.id = "gg-android-companion-download";
-        banner.setAttribute("aria-label", "Android notification companion download");
-        banner.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 14px;width:100%;padding:10px 16px;border-bottom:1px solid #80671e;background:#171307;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
-        var message = document.createElement("span");
-        message.textContent = "GOAL$GAMBIT Android Companion: match alerts and room-code chat replies on your phone.";
-        var download = document.createElement("button");
-        download.type = "button";
-        download.textContent = "Download the Android app";
-        download.style.cssText = "color:#f4bd20;font-weight:700;text-decoration:underline";
-        var downloadStatus = document.createElement("span");
-        downloadStatus.setAttribute("role", "status");
-        downloadStatus.setAttribute("aria-live", "polite");
-        download.addEventListener("click", function() { downloadCompanionApp(downloadStatus); });
-        banner.append(message, download, downloadStatus);
-        document.body.insertBefore(banner, document.body.firstChild);
-        var status = await api("/api/companion/status", { noRedirect: true });
-        if (status.ok && status.data.needsAcknowledgement) showCompanionWelcomeGuide(status.data);
+    function renderAndroidCompanionDownloadLink(statusData) {
+        if (!document.body || !getToken() || /\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
+        var banner = document.getElementById("gg-android-companion-download");
+        if (!banner) {
+            banner = document.createElement("aside");
+            banner.id = "gg-android-companion-download";
+            banner.setAttribute("aria-label", "Android notification companion setup");
+            banner.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 14px;width:100%;padding:10px 16px;border-bottom:1px solid #80671e;background:#171307;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
+            var message = document.createElement("span");
+            message.id = "gg-android-companion-message";
+            var download = document.createElement("button");
+            download.type = "button";
+            download.id = "gg-android-companion-download-button";
+            download.style.cssText = "color:#f4bd20;font-weight:700;text-decoration:underline";
+            var downloadStatus = document.createElement("span");
+            downloadStatus.setAttribute("role", "status");
+            downloadStatus.setAttribute("aria-live", "polite");
+            download.addEventListener("click", function() { downloadCompanionApp(downloadStatus); });
+            banner.append(message, download, downloadStatus);
+            document.body.insertBefore(banner, document.body.firstChild);
+        }
+        var message = banner.querySelector("#gg-android-companion-message");
+        var download = banner.querySelector("#gg-android-companion-download-button");
+        if (statusData && statusData.installationConfirmed) {
+            if (!statusData.termsAccepted) {
+                message.textContent = "Companion installation confirmed. Open the app and accept the current Terms and Conditions to finish setup.";
+            } else {
+                message.textContent = "Companion installation confirmed. Acknowledge the setup guide on this website to finish setup.";
+            }
+            download.textContent = "Get the Android app";
+        } else {
+            message.textContent = "GOAL$GAMBIT Android Companion: match alerts and room-code chat replies on your phone.";
+            download.textContent = "Download the Android app";
+        }
     }
+
+    function removeAndroidCompanionDownloadLink() {
+        var banner = document.getElementById("gg-android-companion-download");
+        if (banner) banner.remove();
+    }
+
+    async function refreshAndroidCompanionDownloadLink(force) {
+        if (!document.body) return;
+        var token = getToken();
+        if (!token) {
+            removeAndroidCompanionDownloadLink();
+            return;
+        }
+        if (/\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
+        if (companionNoticeCheckInFlight) {
+            companionNoticeRefreshPending = true;
+            return;
+        }
+        if (!force && Date.now() - companionNoticeLastCheckedAt < 2500) return;
+        companionNoticeCheckInFlight = true;
+        companionNoticeRefreshPending = false;
+        var status = await api("/api/companion/status", { noRedirect: true });
+        companionNoticeLastCheckedAt = Date.now();
+        companionNoticeCheckInFlight = false;
+        if (getToken() !== token) {
+            removeAndroidCompanionDownloadLink();
+            return;
+        }
+        if (status.ok && status.data.onboardingComplete === true) {
+            removeAndroidCompanionDownloadLink();
+        } else {
+            // If the backend cannot verify completion, keep the existing notice.
+            renderAndroidCompanionDownloadLink(status.ok ? status.data : null);
+        }
+        if (status.ok && status.data.needsAcknowledgement) showCompanionWelcomeGuide(status.data);
+        if (companionNoticeRefreshPending) refreshAndroidCompanionDownloadLink(true);
+    }
+
+    function showAndroidCompanionDownloadLink() {
+        refreshAndroidCompanionDownloadLink(true);
+    }
+
+    window.addEventListener("focus", function() { refreshAndroidCompanionDownloadLink(true); });
+    window.addEventListener("pageshow", function() { refreshAndroidCompanionDownloadLink(true); });
+    document.addEventListener("visibilitychange", function() {
+        if (!document.hidden) refreshAndroidCompanionDownloadLink(true);
+    });
 
     // Sends the request with the login token. Always resolves to
     // { ok, status, data } and never throws on HTTP errors.

@@ -7,6 +7,7 @@ const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
 const companionGuideVersion = require("./companion").GUIDE_VERSION;
+const companionTermsVersion = require("./companion").TERMS_VERSION;
 
 module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
     const router = express.Router();
@@ -1103,6 +1104,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         ), member_rows AS (
             SELECT u.id AS user_id,u.username,u.game,u.account_status,
                    s.onboarding_version,s.onboarding_acknowledged_at,
+                   s.terms_accepted_version,s.terms_accepted_at,
                    d.downloaded_at,d.last_downloaded_at,
                    i.installation_count,i.active_installation_count,i.registered_at,i.last_seen_at,
                    i.active_last_seen_at,i.app_version,i.device_platform,i.notification_permission_checked_at,
@@ -1123,7 +1125,12 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                    (COALESCE(i.active_installation_count,0)>0 AND i.active_last_seen_at>=NOW()-INTERVAL '7 days') AS recently_active,
                    (COALESCE(i.installation_count,0)>0 AND
                        (COALESCE(i.active_installation_count,0)=0 OR i.active_last_seen_at<NOW()-INTERVAL '30 days')) AS stale_or_inactive,
-                   (s.onboarding_version=$1) AS guide_acknowledged
+                   COALESCE(s.onboarding_version=$1,FALSE) AS guide_acknowledged,
+                   COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE) AS terms_accepted,
+                   (COALESCE(i.installation_count,0)>0) AS installation_confirmed,
+                   (COALESCE(s.onboarding_version=$1,FALSE)
+                    AND COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE)
+                    AND COALESCE(i.installation_count,0)>0) AS onboarding_complete
               FROM users u
               LEFT JOIN companion_user_setup s ON s.user_id=u.id
               LEFT JOIN download_rollup d ON d.user_id=u.id
@@ -1134,7 +1141,8 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
     router.get("/companion-tracker", authenticateToken, adminOnly, async (req, res) => {
         const allowedFilters = new Set([
             "all", "guide_not_acknowledged", "download_not_detected", "registration_not_detected",
-            "registered", "recently_active", "stale", "notifications_denied", "notifications_unknown"
+            "registered", "recently_active", "stale", "notifications_denied", "notifications_unknown",
+            "terms_not_accepted", "onboarding_complete"
         ]);
         const filter = String(req.query.filter || "all");
         const search = String(req.query.search || "").trim().slice(0, 80);
@@ -1143,7 +1151,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         if (!allowedFilters.has(filter)) return res.status(400).json({ success: false, message: "Invalid companion tracker filter." });
 
         const where = [];
-        const params = [companionGuideVersion];
+        const params = [companionGuideVersion, companionTermsVersion];
         if (search) {
             params.push("%" + search.replace(/!/g, "!!").replace(/%/g, "!%").replace(/_/g, "!_") + "%");
             const searchPatternIndex = params.length;
@@ -1159,7 +1167,9 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             recently_active: "recently_active",
             stale: "stale_or_inactive",
             notifications_denied: "currently_registered AND notification_permission_status='denied'",
-            notifications_unknown: "currently_registered AND notification_permission_status='unknown'"
+            notifications_unknown: "currently_registered AND notification_permission_status='unknown'",
+            terms_not_accepted: "NOT terms_accepted",
+            onboarding_complete: "onboarding_complete"
         };
         if (filterSql[filter]) where.push(filterSql[filter]);
         const whereSql = where.length ? " WHERE " + where.join(" AND ") : "";
@@ -1170,7 +1180,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             const [stats, count, members] = await Promise.all([
                 pool.query(
                     `SELECT COUNT(*)::int AS total_members,
-                            COUNT(*) FILTER (WHERE s.onboarding_version=$1)::int AS guide_acknowledged,
+                            COUNT(*) FILTER (WHERE COALESCE(s.onboarding_version=$1,FALSE))::int AS guide_acknowledged,
+                            COUNT(*) FILTER (WHERE COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE))::int AS terms_accepted,
+                            COUNT(*) FILTER (WHERE COALESCE(s.onboarding_version=$1,FALSE)
+                                AND COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE)
+                                AND EXISTS(SELECT 1 FROM companion_installations i WHERE i.user_id=u.id))::int AS onboarding_complete,
                             (SELECT COUNT(DISTINCT user_id)::int FROM companion_download_events) AS downloaded_members,
                             (SELECT COUNT(*)::int FROM companion_anonymous_download_events) AS anonymous_downloads,
                             (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations WHERE unregistered_at IS NULL) AS registered_members,
@@ -1183,12 +1197,13 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                             (SELECT COUNT(DISTINCT user_id)::int FROM companion_installations
                               WHERE unregistered_at IS NULL AND notification_permission_status='unknown') AS notifications_unknown
                        FROM users u LEFT JOIN companion_user_setup s ON s.user_id=u.id`,
-                    [companionGuideVersion]
+                    [companionGuideVersion, companionTermsVersion]
                 ),
                 pool.query(`${companionTrackerCte} SELECT COUNT(*)::int AS total FROM member_rows${whereSql}`, countParams),
                 pool.query(
                     `${companionTrackerCte}
                      SELECT user_id,username,game,account_status,onboarding_version,onboarding_acknowledged_at,
+                            terms_accepted_version,terms_accepted_at,terms_accepted,installation_confirmed,onboarding_complete,
                             downloaded_at,last_downloaded_at,installation_count,active_installation_count,
                             registered_at,last_seen_at,active_last_seen_at,app_version,device_platform,
                             notification_permission_status,notification_permission_checked_at,
@@ -1209,6 +1224,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 pageSize,
                 total: Number(count.rows[0] && count.rows[0].total || 0),
                 guideVersion: companionGuideVersion,
+                termsVersion: companionTermsVersion,
                 recentlyActiveDays: 7,
                 staleAfterDays: 30
             });
@@ -1225,6 +1241,12 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             const result = await pool.query(
                 `SELECT u.id AS user_id,u.username,u.game,u.account_status,
                         s.onboarding_version,s.onboarding_acknowledged_at,
+                        s.terms_accepted_version,s.terms_accepted_at,
+                        COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE) AS terms_accepted,
+                        EXISTS(SELECT 1 FROM companion_installations i WHERE i.user_id=u.id) AS installation_confirmed,
+                        (COALESCE(s.onboarding_version=$3,FALSE)
+                         AND COALESCE(s.terms_accepted_version=$2 AND s.terms_accepted_at IS NOT NULL,FALSE)
+                         AND EXISTS(SELECT 1 FROM companion_installations i WHERE i.user_id=u.id)) AS onboarding_complete,
                         EXISTS(SELECT 1 FROM companion_download_events d WHERE d.user_id=u.id) AS downloaded,
                         (SELECT MIN(downloaded_at) FROM companion_download_events d WHERE d.user_id=u.id) AS downloaded_at,
                         COALESCE((SELECT jsonb_agg(jsonb_build_object(
@@ -1245,7 +1267,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                          ) ORDER BY t.updated_at DESC,t.id DESC)
                            FROM android_push_tokens t WHERE t.user_id=u.id),'[]'::jsonb) AS push_devices
                    FROM users u LEFT JOIN companion_user_setup s ON s.user_id=u.id
-                  WHERE u.id=$1`, [userId]
+                  WHERE u.id=$1`, [userId, companionTermsVersion, companionGuideVersion]
             );
             if (!result.rows.length) return res.status(404).json({ success: false, message: "Member not found." });
             res.set("Cache-Control", "private, no-store");

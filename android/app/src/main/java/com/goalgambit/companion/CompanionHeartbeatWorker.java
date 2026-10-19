@@ -43,6 +43,10 @@ public final class CompanionHeartbeatWorker extends Worker {
         String bearer = TokenStore.read(getApplicationContext());
         if (bearer == null || bearer.trim().isEmpty()) return Result.success();
         try {
+            Api.Result accountStatus = Api.getCompanionStatus(bearer);
+            if (accountStatus.status == 401) return Result.success();
+            if (!accountStatus.ok()) return accountStatus.status >= 500 ? Result.retry() : Result.success();
+            if (!accountStatus.json.optBoolean("termsAccepted", false)) return Result.success();
             Api.Result heartbeat = Api.heartbeatCompanion(getApplicationContext(), bearer);
             if (heartbeat.status == 404) {
                 heartbeat = Api.registerCompanion(getApplicationContext(), bearer);

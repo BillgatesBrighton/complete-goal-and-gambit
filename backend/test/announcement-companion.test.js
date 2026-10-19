@@ -200,6 +200,7 @@ test("companion guide acknowledgement and installation records use only the auth
     let heartbeatValues = null;
     const pool = {
         async query(sql, values) {
+            if (/SELECT EXISTS\(SELECT 1 FROM companion_user_setup/.test(sql)) return { rows: [{ terms_accepted: true }] };
             if (/SELECT onboarding_version,onboarding_acknowledged_at/.test(sql)) return { rows: [{ onboarding_version: "old-version", onboarding_acknowledged_at: null }] };
             if (/SELECT EXISTS\(SELECT 1 FROM companion_installations/.test(sql)) return { rows: [{ ever_registered: false, currently_registered: false }] };
             if (/SELECT MIN\(downloaded_at\)/.test(sql)) return { rows: [{ downloaded_at: null, last_downloaded_at: null }] };
@@ -274,6 +275,158 @@ test("companion guide acknowledgement and installation records use only the auth
     assert.equal(Number(heartbeatValues[0]), 43, "one member cannot heartbeat another member's installation");
 });
 
+test("companion onboarding requires authenticated app registration, current terms, and guide acknowledgement account-wide", async (t) => {
+    const setupByUser = new Map();
+    const installationsByUser = new Map();
+    const registrationUsers = [];
+    const pool = {
+        async query(sql, values) {
+            const userId = Number(values && values[0]);
+            if (/SELECT EXISTS\(SELECT 1 FROM companion_user_setup/.test(sql)) {
+                const setup = setupByUser.get(userId) || {};
+                return { rows: [{ terms_accepted: setup.terms_accepted_version === companionRoutes.TERMS_VERSION && Boolean(setup.terms_accepted_at) }] };
+            }
+            if (/SELECT onboarding_version,onboarding_acknowledged_at,terms_accepted_version,terms_accepted_at/.test(sql)) {
+                return { rows: [setupByUser.get(userId) || {}] };
+            }
+            if (/SELECT EXISTS\(SELECT 1 FROM companion_installations/.test(sql)) {
+                const installations = installationsByUser.get(userId) || [];
+                const newest = installations[installations.length - 1] || {};
+                return { rows: [{
+                    ever_registered: installations.length > 0,
+                    currently_registered: installations.some((item) => !item.unregistered_at),
+                    registered_at: installations[0] && installations[0].registered_at,
+                    last_seen_at: newest.last_seen_at,
+                    app_version: newest.app_version,
+                    device_platform: "android",
+                    notification_permission_status: "granted"
+                }] };
+            }
+            if (/SELECT MIN\(downloaded_at\)/.test(sql)) return { rows: [{ downloaded_at: null, last_downloaded_at: null }] };
+            if (/INSERT INTO companion_user_setup/.test(sql)) {
+                const state = Object.assign({}, setupByUser.get(userId) || {});
+                if (/terms_accepted_version/.test(sql)) {
+                    state.terms_accepted_version = values[1];
+                    state.terms_accepted_at = new Date().toISOString();
+                    setupByUser.set(userId, state);
+                    return { rows: [{ terms_accepted_version: state.terms_accepted_version, terms_accepted_at: state.terms_accepted_at }] };
+                }
+                state.onboarding_version = values[1];
+                state.onboarding_acknowledged_at = new Date().toISOString();
+                setupByUser.set(userId, state);
+                return { rows: [{ onboarding_acknowledged_at: state.onboarding_acknowledged_at }] };
+            }
+            throw new Error("Unexpected onboarding query: " + sql.slice(0, 120));
+        },
+        async connect() {
+            return {
+                async query(sql, values) {
+                    if (/UPDATE companion_installations SET unregistered_at/.test(sql)) return { rows: [] };
+                    if (/INSERT INTO companion_installations/.test(sql)) {
+                        const userId = Number(values[0]);
+                        registrationUsers.push(userId);
+                        const rows = installationsByUser.get(userId) || [];
+                        const installation = {
+                            registered_at: new Date().toISOString(),
+                            last_seen_at: new Date().toISOString(),
+                            app_version: values[3],
+                            unregistered_at: null
+                        };
+                        rows.push(installation);
+                        installationsByUser.set(userId, rows);
+                        return { rows: [{ id: rows.length, registered_at: installation.registered_at, last_seen_at: installation.last_seen_at }] };
+                    }
+                    return { rows: [] };
+                },
+                release() {}
+            };
+        }
+    };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/companion", companionRoutes(pool, (req, res, next) => {
+        const userId = Number(req.get("x-test-user"));
+        if (!userId) return res.status(401).json({ success: false, message: "Sign in required." });
+        req.user = { userId };
+        next();
+    }));
+    const server = await listen(app);
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const base = "http://127.0.0.1:" + server.address().port + "/api/companion";
+    const auth = { "x-test-user": "42" };
+    const readStatus = async (headers = auth) => fetch(base + "/status", { headers });
+
+    assert.equal((await readStatus()).status, 200);
+    let status = await (await readStatus()).json();
+    assert.equal(status.installationConfirmed, false, "a new account is not assumed to have installed the APK");
+    assert.equal(status.onboardingComplete, false);
+    assert.equal(status.termsAccepted, false);
+    assert.equal(status.termsVersion, companionRoutes.TERMS_VERSION);
+    assert.equal(status.apk.version, "1.0.8", "the companion download reports the newly built app version");
+    assert.equal((await readStatus({})).status, 401, "status is private to an authenticated account");
+    assert.equal((await fetch(base + "/terms/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 401,
+        "an unauthenticated request cannot record terms acceptance");
+
+    const registrationBeforeTerms = await fetch(base + "/register", {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ installationId: "616f3b9c-48e4-4b89-a263-df5bc7b6144f", appVersion: "1.0.8", platform: "android", notificationPermissionStatus: "granted" })
+    });
+    assert.equal(registrationBeforeTerms.status, 403, "the backend blocks app registration until current terms are accepted");
+    assert.deepEqual(registrationUsers, [], "a blocked registration cannot confirm an installation");
+
+    const terms = await fetch(base + "/terms/accept", {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: 999, version: "forged-version" })
+    });
+    assert.equal(terms.status, 200);
+    assert.equal(Number([...setupByUser.keys()][0]), 42, "terms acceptance is stored against the authenticated account");
+    assert.equal(setupByUser.get(42).terms_accepted_version, companionRoutes.TERMS_VERSION, "the server chooses the current version");
+    status = await (await readStatus()).json();
+    assert.equal(status.termsAccepted, true);
+    assert.equal(status.onboardingComplete, false, "terms alone do not verify an installation or complete the guide");
+
+    const guide = await fetch(base + "/acknowledge", {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ version: companionRoutes.GUIDE_VERSION })
+    });
+    assert.equal(guide.status, 200);
+    status = await (await readStatus()).json();
+    assert.equal(status.needsAcknowledgement, false);
+    assert.equal(status.onboardingComplete, false, "guide and terms do not confirm an APK download as an installation");
+
+    const firstInstall = "616f3b9c-48e4-4b89-a263-df5bc7b6144f";
+    const register = (installationId) => fetch(base + "/register", {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ installationId, appVersion: "1.0.6", platform: "android", notificationPermissionStatus: "granted", userId: 999 })
+    });
+    assert.equal((await register(firstInstall)).status, 201);
+    assert.deepEqual(registrationUsers, [42], "the app registration uses the authenticated account, not a supplied user ID");
+    status = await (await readStatus()).json();
+    assert.equal(status.installationConfirmed, true);
+    assert.equal(status.onboardingComplete, true, "current terms, guide acknowledgement, and registered app complete onboarding");
+
+    const otherDeviceStatus = await (await readStatus({ "x-test-user": "42", "x-test-client": "second-browser" })).json();
+    assert.equal(otherDeviceStatus.onboardingComplete, true, "account status is shared across browser/device sessions");
+    assert.equal((await register("d90fb4db-403d-45cf-bac7-89fb3d974dbb")).status, 201,
+        "a reinstall with a fresh installation id may register again without erasing account setup");
+    assert.equal((await (await readStatus()).json()).onboardingComplete, true);
+
+    setupByUser.get(42).terms_accepted_version = "old-version";
+    status = await (await readStatus()).json();
+    assert.equal(status.termsAccepted, false, "an outdated terms acceptance requires review again");
+    assert.equal(status.onboardingComplete, false);
+
+    const invalidInstall = await fetch(base + "/register", {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ installationId: "not-an-install-id", appVersion: "1.0.6", platform: "android", notificationPermissionStatus: "granted" })
+    });
+    assert.equal(invalidInstall.status, 400, "malformed installation identifiers cannot confirm an app install");
+
+    const frontend = fs.readFileSync(path.join(__dirname, "../../frontend/js/api.js"), "utf8");
+    assert.match(frontend, /onboardingComplete === true/);
+    assert.doesNotMatch(frontend, /navigator\.getInstalledRelatedApps/, "PWA/browser presence is not treated as a separately installed APK");
+});
+
 test("companion tracker is administrator-only and reports real database aggregates", async (t) => {
     const queries = [];
     const pool = {
@@ -284,10 +437,10 @@ test("companion tracker is administrator-only and reports real database aggregat
                 const id = Number(values[0]);
                 return { rows: [{ id, username: id === 1 ? "admin" : "player", role: id === 1 ? "admin" : "player" }] };
             }
-            if (query.includes("total_members")) return { rows: [{ total_members: 3, guide_acknowledged: 2, downloaded_members: 1, anonymous_downloads: 4, registered_members: 1, recently_active_members: 1, notifications_granted: 1, notifications_denied: 0, notifications_unknown: 0 }] };
+            if (query.includes("total_members")) return { rows: [{ total_members: 3, guide_acknowledged: 2, terms_accepted: 2, onboarding_complete: 1, downloaded_members: 1, anonymous_downloads: 4, registered_members: 1, recently_active_members: 1, notifications_granted: 1, notifications_denied: 0, notifications_unknown: 0 }] };
             if (query.includes("SELECT COUNT(*)::int AS total FROM member_rows")) return { rows: [{ total: 1 }] };
-            if (query.includes("SELECT user_id,username,game,account_status")) return { rows: [{ user_id: 42, username: "player", game: "both", account_status: "active", installation_count: 1, active_installation_count: 1, app_version: "1.0.6", notification_permission_status: "granted", active_push_device_count: 2, invalid_push_token_count: 1, push_registration_status: "registered", currently_registered: true, recently_active: true, guide_acknowledged: true }] };
-            if (query.includes("jsonb_agg(jsonb_build_object")) return { rows: [{ user_id: Number(values[0]), username: "player", game: "both", account_status: "active", downloaded: true, downloaded_at: "2026-10-18T09:00:00.000Z", installations: [{ platform: "android", appVersion: "1.0.6", notificationPermissionStatus: "granted", currentlyRegistered: true }], push_devices: [{ deviceName: "Android test", status: "token_invalid" }] }] };
+            if (query.includes("SELECT user_id,username,game,account_status")) return { rows: [{ user_id: 42, username: "player", game: "both", account_status: "active", installation_count: 1, active_installation_count: 1, app_version: "1.0.6", notification_permission_status: "granted", active_push_device_count: 2, invalid_push_token_count: 1, push_registration_status: "registered", currently_registered: true, recently_active: true, guide_acknowledged: true, terms_accepted: true, installation_confirmed: true, onboarding_complete: true, terms_accepted_at: "2026-10-18T09:00:00.000Z" }] };
+            if (query.includes("jsonb_agg(jsonb_build_object")) return { rows: [{ user_id: Number(values[0]), username: "player", game: "both", account_status: "active", downloaded: true, downloaded_at: "2026-10-18T09:00:00.000Z", terms_accepted: true, terms_accepted_version: companionRoutes.TERMS_VERSION, terms_accepted_at: "2026-10-18T09:00:00.000Z", installation_confirmed: true, onboarding_complete: true, installations: [{ platform: "android", appVersion: "1.0.6", notificationPermissionStatus: "granted", currentlyRegistered: true }], push_devices: [{ deviceName: "Android test", status: "token_invalid" }] }] };
             throw new Error("Unexpected tracker query: " + query.slice(0, 110));
         }
     };
@@ -310,20 +463,26 @@ test("companion tracker is administrator-only and reports real database aggregat
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.stats.total_members, 3);
+    assert.equal(body.stats.terms_accepted, 2);
+    assert.equal(body.stats.onboarding_complete, 1);
     assert.equal(body.stats.downloaded_members, 1);
     assert.equal(body.members[0].username, "player");
     assert.equal(body.members[0].active_push_device_count, 2);
     assert.equal(body.members[0].invalid_push_token_count, 1);
     assert.equal(body.members[0].push_registration_status, "registered");
+    assert.equal(body.members[0].terms_accepted, true);
+    assert.equal(body.members[0].onboarding_complete, true);
     const memberQuery = queries.find((entry) => entry.query.includes("SELECT user_id,username,game,account_status"));
-    assert.match(memberQuery.query, /ILIKE \$2 ESCAPE '!'/);
-    assert.deepEqual(memberQuery.values.slice(0, 3), [companionRoutes.GUIDE_VERSION, "%pla!%yer%", "pla%yer"]);
+    assert.match(memberQuery.query, /ILIKE \$3 ESCAPE '!'/);
+    assert.deepEqual(memberQuery.values.slice(0, 4), [companionRoutes.GUIDE_VERSION, companionRoutes.TERMS_VERSION, "%pla!%yer%", "pla%yer"]);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
 
     const detail = await fetch("http://127.0.0.1:" + server.address().port + "/api/admin/companion-tracker/42", { headers: { "x-test-user": "1" } });
     assert.equal(detail.status, 200);
     const detailBody = await detail.json();
     assert.equal(detailBody.member.username, "player");
+    assert.equal(detailBody.member.terms_accepted, true);
+    assert.equal(detailBody.member.onboarding_complete, true);
     assert.equal(detailBody.member.installations[0].appVersion, "1.0.6");
     assert.equal(detailBody.member.push_devices[0].status, "token_invalid");
 });

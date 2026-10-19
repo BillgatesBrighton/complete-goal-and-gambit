@@ -331,6 +331,8 @@ async function loadAnnouncements() {
 }
 function renderCompanionTrackerRow(member) {
     var id = Number(member.user_id), acknowledged = !!member.guide_acknowledged;
+    var termsAccepted = !!member.terms_accepted;
+    var onboardingComplete = !!member.onboarding_complete;
     var downloaded = !!member.downloaded_at;
     var active = !!member.currently_registered;
     var recent = !!member.recently_active;
@@ -346,6 +348,8 @@ function renderCompanionTrackerRow(member) {
         member.installation_count ? "No active notification token" : "No registered device";
     return '<tr><td><strong>' + esc(member.username || "Member") + '</strong><div class="user-meta">User ID ' + id + '</div></td>' +
         '<td>' + (acknowledged ? 'Acknowledged<br><span class="user-meta">' + esc(date(member.onboarding_acknowledged_at)) + '</span>' : 'Not acknowledged') + '</td>' +
+        '<td>' + (termsAccepted ? 'Accepted<br><span class="user-meta">' + esc(date(member.terms_accepted_at)) + '</span>' : 'Not accepted') + '</td>' +
+        '<td>' + (onboardingComplete ? 'Complete' : 'Incomplete') + '</td>' +
         '<td>' + (downloaded ? 'Downloaded<br><span class="user-meta">' + esc(date(member.last_downloaded_at || member.downloaded_at)) + '</span>' : 'Not detected') + '</td>' +
         '<td>' + esc(registration) + (member.last_seen_at ? '<br><span class="user-meta">Last seen ' + esc(date(member.last_seen_at)) + '</span>' : '') + '</td>' +
         '<td>' + esc(pushRegistration) + (invalidPushTokens > 1 ? '<br><span class="user-meta">' + invalidPushTokens + ' invalid tokens</span>' : '') + '</td>' +
@@ -365,19 +369,19 @@ async function loadCompanionTracker() {
         return;
     }
     var stats = r.data.stats || {};
-    [["companionStatMembers", "total_members"], ["companionStatAcknowledged", "guide_acknowledged"], ["companionStatDownloads", "downloaded_members"], ["companionStatAnonymousDownloads", "anonymous_downloads"], ["companionStatRegistered", "registered_members"], ["companionStatRecent", "recently_active_members"], ["companionStatGranted", "notifications_granted"], ["companionStatDenied", "notifications_denied"], ["companionStatUnknown", "notifications_unknown"]].forEach(function(pair) {
+    [["companionStatMembers", "total_members"], ["companionStatAcknowledged", "guide_acknowledged"], ["companionStatTerms", "terms_accepted"], ["companionStatComplete", "onboarding_complete"], ["companionStatDownloads", "downloaded_members"], ["companionStatAnonymousDownloads", "anonymous_downloads"], ["companionStatRegistered", "registered_members"], ["companionStatRecent", "recently_active_members"], ["companionStatGranted", "notifications_granted"], ["companionStatDenied", "notifications_denied"], ["companionStatUnknown", "notifications_unknown"]].forEach(function(pair) {
         $(pair[0]).textContent = (Number(stats[pair[1]]) || 0).toLocaleString();
     });
     var members = r.data.members || [];
     $("companionTrackerList").innerHTML = members.length
-        ? '<div style="max-width:100%;overflow:auto"><table style="width:100%;min-width:1120px;border-collapse:collapse"><thead><tr>' + ["Member", "Guide", "APK download", "Companion", "Push registration", "Android permission", "App version", "Registered", ""].map(function(label) { return '<th scope="col" style="padding:9px;text-align:left;border-bottom:1px solid #3b3b37;color:#e9c547">' + label + '</th>'; }).join("") + '</tr></thead><tbody>' + members.map(renderCompanionTrackerRow).join("") + '</tbody></table></div>'
+        ? '<div style="max-width:100%;overflow:auto"><table style="width:100%;min-width:1280px;border-collapse:collapse"><thead><tr>' + ["Member", "Guide", "Terms", "Setup", "APK download", "Companion", "Push registration", "Android permission", "App version", "Registered", ""].map(function(label) { return '<th scope="col" style="padding:9px;text-align:left;border-bottom:1px solid #3b3b37;color:#e9c547">' + label + '</th>'; }).join("") + '</tr></thead><tbody>' + members.map(renderCompanionTrackerRow).join("") + '</tbody></table></div>'
         : '<div class="empty">No members match this filter.</div>';
     companionPages = Math.max(1, Math.ceil(Number(r.data.total || 0) / Number(r.data.pageSize || 40)));
     companionPage = Number(r.data.page) || 1;
     $("companionPageLabel").textContent = "Page " + companionPage + " of " + companionPages + " · " + Number(r.data.total || 0).toLocaleString() + " members";
     $("companionPrev").disabled = companionPage <= 1;
     $("companionNext").disabled = companionPage >= companionPages;
-    $("companionTrackerMessage").textContent = "A download record means the APK was served. It does not confirm installation; only a signed-in app registration does.";
+    $("companionTrackerMessage").textContent = "A download record means the APK was served. Confirmed installation requires an authenticated app registration; setup completes only after current terms and the website guide are acknowledged.";
 }
 async function openCompanionMember(userId) {
     $("companionView").innerHTML = '<div class="empty">Loading companion details…</div>';
@@ -388,6 +392,8 @@ async function openCompanionMember(userId) {
     var html = '<h3>' + esc(member.username || "Member") + ' · User ID ' + Number(member.user_id) + '</h3><div class="account-grid">' +
         caseTile("Account game", member.game) + caseTile("Account status", member.account_status) +
         caseTile("Guide version", member.onboarding_version || "Not acknowledged") + caseTile("Guide acknowledgement", date(member.onboarding_acknowledged_at)) +
+        caseTile("Terms accepted", member.terms_accepted ? "Yes · " + (member.terms_accepted_version || "current") : "Not accepted") + caseTile("Terms acceptance time", date(member.terms_accepted_at)) +
+        caseTile("Installation confirmed", member.installation_confirmed ? "Yes" : "Not detected") + caseTile("Onboarding complete", member.onboarding_complete ? "Yes" : "Incomplete") +
         caseTile("APK downloaded", member.downloaded ? "Yes" : "Not detected") + caseTile("First download", date(member.downloaded_at)) +
         caseTile("Push registration", member.push_registration_status || "not_registered") + caseTile("Active Android devices", Number(member.active_push_device_count) || 0) + '</div><h3>Companion installations</h3>';
     html += installations.length ? installations.map(function(item, index) {
