@@ -8,6 +8,7 @@
 
     <link rel="stylesheet" href="board.css">
     <link rel="stylesheet" href="board-lichess.css">
+    <link rel="manifest" href="../manifest.webmanifest">
 </head>
 
 <body>
@@ -103,6 +104,7 @@
 
         <div id="statusBar" class="status-bar" aria-live="polite">
             <span id="turnMessage">Connecting to chess server…</span>
+            <span id="connectionStatus" class="connection-status" role="status" hidden></span>
             <button id="cancelSearchButton" class="control-button cancel-search hidden" type="button" hidden>
                 Cancel Search · Refund Stake
             </button>
@@ -311,12 +313,40 @@
 </div>
 
 
+<!-- Promotion choice is local to the website board; only the selected move is
+     submitted to the authoritative chess backend. -->
+<div id="promotionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="promotionTitle">
+
+    <div class="modal-box promotion-modal-box">
+
+        <h2 id="promotionTitle">Choose a promotion piece</h2>
+        <p>Choose the piece your pawn should become.</p>
+
+        <div class="promotion-choices" aria-label="Promotion piece">
+            <button id="promoteQueenButton" type="button"></button>
+            <button id="promoteRookButton" type="button"></button>
+            <button id="promoteBishopButton" type="button"></button>
+            <button id="promoteKnightButton" type="button"></button>
+        </div>
+
+        <button id="cancelPromotionButton" class="promotion-cancel" type="button">Cancel</button>
+
+    </div>
+
+</div>
+
+
 <script src="../js/api.js?v=20261019-companion-onboarding"></script>
 <script>
   var socketApiBase = (window.GG_API_BASE || (window.GG && window.GG.API_BASE) || location.origin).replace(/\/+$/, "");
-  document.write('<script src="' + socketApiBase + '/socket.io/socket.io.js"><\/script>');
+  var chessSocketScript = document.createElement("script");
+  chessSocketScript.src = socketApiBase + "/socket.io/socket.io.js";
+  chessSocketScript.async = true;
+  chessSocketScript.onload = function() { window.dispatchEvent(new Event("gg-chess-socket-ready")); };
+  chessSocketScript.onerror = function() { window.dispatchEvent(new Event("gg-chess-socket-unavailable")); };
+  document.head.appendChild(chessSocketScript);
 </script>
-<script src="../js/board.js"></script>
+<script type="module" src="../js/board.js?v=20261020-chess-rules"></script>
 
 </body>
 </html>

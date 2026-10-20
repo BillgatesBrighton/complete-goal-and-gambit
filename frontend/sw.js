@@ -1,5 +1,88 @@
 "use strict";
 
+// Keep the website chess shell available when a player returns during a brief
+// backend/site outage. This cache is limited to static chess resources; API
+// responses and Socket.IO traffic are never cached. The push handlers below
+// remain unchanged.
+const CHESS_SHELL_CACHE = "goal-gambit-chess-shell-v1";
+const CHESS_SHELL_ASSETS = [
+    "pages/chess-match.html",
+    "pages/board.html",
+    "pages/chess.html",
+    "pages/board.css",
+    "pages/board-lichess.css",
+    "js/api.js",
+    "js/board.js",
+    "js/chess-schedules.js",
+    "js/active-tournaments.js",
+    "js/vendor/chess.mjs",
+    "manifest.webmanifest",
+    "images/notification-icon.svg"
+];
+const CHESS_SHELL_NAVIGATIONS = new Set(["pages/chess-match.html", "pages/board.html", "pages/chess.html"]);
+
+function chessShellPath(url) {
+    const scopePath = new URL(self.registration.scope).pathname;
+    if (!url.pathname.startsWith(scopePath)) return "";
+    return url.pathname.slice(scopePath.length).replace(/^\/+/, "");
+}
+
+self.addEventListener("install", function(event) {
+    event.waitUntil(caches.open(CHESS_SHELL_CACHE).then(function(cache) {
+        return cache.addAll(CHESS_SHELL_ASSETS.map(function(path) {
+            return new URL(path, self.registration.scope).href;
+        }));
+    }));
+});
+
+self.addEventListener("activate", function(event) {
+    event.waitUntil(caches.keys().then(function(keys) {
+        return Promise.all(keys.filter(function(key) {
+            return key.startsWith("goal-gambit-chess-shell-") && key !== CHESS_SHELL_CACHE;
+        }).map(function(key) { return caches.delete(key); }));
+    }).then(function() { return self.clients.claim(); }));
+});
+
+self.addEventListener("fetch", function(event) {
+    const request = event.request;
+    if (request.method !== "GET") return;
+    const url = new URL(request.url);
+    if (url.origin !== self.location.origin || /\/(?:api|socket\.io)(?:\/|$)/i.test(url.pathname)) return;
+    const path = chessShellPath(url);
+    if (!path) return;
+
+    if (CHESS_SHELL_NAVIGATIONS.has(path) && request.mode === "navigate") {
+        event.respondWith((async function() {
+            try {
+                const response = await fetch(request);
+                if (response.ok) {
+                    const cache = await caches.open(CHESS_SHELL_CACHE);
+                    await cache.put(new URL(path, self.registration.scope).href, response.clone());
+                }
+                return response;
+            } catch (_) {
+                const cached = await caches.match(new URL(path, self.registration.scope).href, { ignoreSearch: true });
+                return cached || new Response("<!doctype html><title>Chess offline</title><p>Chess is unavailable until this page has been loaded once while connected.</p>", {
+                    headers: { "Content-Type": "text/html; charset=utf-8" }, status: 503
+                });
+            }
+        })());
+        return;
+    }
+
+    if (!CHESS_SHELL_ASSETS.includes(path)) return;
+    event.respondWith((async function() {
+        const cached = await caches.match(request, { ignoreSearch: true });
+        if (cached) return cached;
+        const response = await fetch(request);
+        if (response.ok) {
+            const cache = await caches.open(CHESS_SHELL_CACHE);
+            await cache.put(new URL(path, self.registration.scope).href, response.clone());
+        }
+        return response;
+    })());
+});
+
 function safeTargetPath(value) {
     const path = String(value || "");
     if (path === "pages/chess.html") return path;

@@ -866,6 +866,7 @@ body {
 .white-piece { color: #fff; text-shadow: 1px 1px 2px #111, -1px -1px 1px #111; }
 .black-piece { color: #181818; text-shadow: 1px 1px 1px #f4e2c5, -1px -1px 1px #f4e2c5; }
 .square.possible-capture { box-shadow: inset 0 0 0 5px #b32626aa; }
+.square.illegal-move { background: #d9534f !important; animation: illegalMoveFlash .18s ease-in-out 2 alternate; }
 .square.in-check { background: #db625c !important; box-shadow: inset 0 0 0 4px #8e1e1a; }
 .square.last-move { box-shadow: inset 0 0 0 999px #f4bd2033; }
 .square.selected { box-shadow: inset 0 0 0 4px #f4bd20, inset 0 0 0 999px #f4bd2033; }
@@ -895,6 +896,9 @@ body {
     font-size: 13px;
 }
 .status-bar #turnMessage { flex: 1 1 240px; }
+.connection-status { flex: 0 1 auto; color: #ffcf61; font-size: 12px; font-weight: 700; }
+.connection-status.offline { color: #ff8a80; }
+.connection-status.recovery { color: #b8d8ff; }
 .status-bar .cancel-search {
     flex: 0 0 auto;
     min-height: 36px;
@@ -915,3 +919,9 @@ body {
 .move-row:nth-child(even) { background: #ffffff08; }
 .move-white,.move-black { padding-left: 6px; }
 @keyframes clockPulse { to { background:#301313; box-shadow:0 0 18px #ff3d3d44; } }
+@keyframes illegalMoveFlash { to { filter: brightness(1.45); } }
+.promotion-modal-box { border-color: #8d711e; }
+.promotion-choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
+.promotion-choices button { min-height: 68px; border: 1px solid #8d711e; border-radius: 8px; background: #252114; color: #fff; font: 52px/1 "Segoe UI Symbol", "DejaVu Sans", sans-serif; cursor: pointer; }
+.promotion-choices button:hover,.promotion-choices button:focus-visible { outline: 3px solid #f4bd20; outline-offset: 2px; background: #352c15; }
+.promotion-cancel { width: 100%; min-height: 42px; border: 1px solid #4a4a4a; border-radius: 7px; background: #222; color: #ddd; cursor: pointer; }
