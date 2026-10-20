@@ -1,9 +1,23 @@
 param(
-    [switch]$UseNodemon
+    [switch]$UseNodemon,
+    [switch]$ScheduledTask
 )
 
 $ErrorActionPreference = "Stop"
 $backendDir = $PSScriptRoot
+$scheduledTaskLog = Join-Path $backendDir "server-task.log"
+$transcriptStarted = $false
+if ($ScheduledTask) {
+    try {
+        if ((Test-Path -LiteralPath $scheduledTaskLog) -and (Get-Item -LiteralPath $scheduledTaskLog).Length -gt 5MB) {
+            Move-Item -LiteralPath $scheduledTaskLog -Destination (Join-Path $backendDir "server-task.previous.log") -Force
+        }
+        Start-Transcript -LiteralPath $scheduledTaskLog -Append -Force | Out-Null
+        $transcriptStarted = $true
+    } catch {
+        Write-Warning "Could not start the server task log: $($_.Exception.Message)"
+    }
+}
 $backendEnvFile = Join-Path $backendDir ".env"
 $desktopEnvFile = [IO.Path]::GetFullPath((Join-Path $backendDir "..\..\.env"))
 $envFile = if (Test-Path -LiteralPath $backendEnvFile) { $backendEnvFile } else { $desktopEnvFile }
@@ -71,6 +85,7 @@ Write-Host "Callback: $publicBase/api/payments/callback"
 Write-Host "Starting GOAL$GAMBIT. Keep this window and Tailscale running."
 
 Push-Location $backendDir
+$serverExitCode = 0
 try {
     if (-not (Test-Path (Join-Path $backendDir "node_modules"))) {
         npm ci --ignore-scripts --no-audit --no-fund
@@ -80,8 +95,13 @@ try {
         npm run dev:local
     } else {
         npm start
+        $serverExitCode = $LASTEXITCODE
+        if ($serverExitCode -eq 0) { $serverExitCode = 1 }
     }
 } finally {
     Pop-Location
     & $tailscaleCommand.Source funnel reset
+    if ($transcriptStarted) { Stop-Transcript | Out-Null }
 }
+
+if ($ScheduledTask) { exit $serverExitCode }

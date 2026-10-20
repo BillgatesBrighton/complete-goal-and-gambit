@@ -7,6 +7,9 @@
     "start": "node server.js",
     "dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File start-online.ps1 -UseNodemon",
     "dev:local": "nodemon server.js",
+    "server:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-server-autostart.ps1",
+    "server:on": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File server-on.ps1",
+    "server:off": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File server-off.ps1",
     "setup-db": "node db/setup.js",
     "test": "node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/admin-match-management.test.js && node test/admin-wallet.test.js && node test/user-history.test.js && node test/chess-competitions.test.js && node test/chat.test.js && node test/announcement-companion.test.js && node test/wallet-financial-rules.test.js"
   },
