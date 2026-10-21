@@ -505,18 +505,29 @@ async function loadOverview() {
 async function loadPasswordRecoveryRequests() {
     if(!adminAuthorized)return;
     var list=$("passwordRecoveryList"),message=$("passwordRecoveryMessage");
-    var result=await GG.api("/api/admin/password-recovery");
+    var filter=$("passwordRecoveryFilter"),status=filter&&filter.value==="all"?"all":"pending";
+    var result=await GG.api("/api/admin/password-recovery?status="+status);
     if(!result.ok){list.innerHTML='<div class="empty">'+esc(result.data.message||"Could not load recovery requests.")+'</div>';return;}
     var requests=result.data.requests||[];
-    if(!requests.length){list.innerHTML='<div class="empty">No pending recovery requests.</div>';return;}
+    if(!requests.length){list.innerHTML='<div class="empty">'+(status==="all"?"No password recovery requests have been submitted.":"No pending recovery requests.")+'</div>';return;}
     list.innerHTML=requests.map(function(request){
         var matched=!!request.matched_active_account;
+        var state=String(request.status||"unknown").toLowerCase();
+        var stateClass=state==="completed"?"good":state==="denied"?"alert":"wait";
         var account=matched
             ? '<strong>'+esc(request.account_username||"Account")+'</strong> · registered phone <strong>'+esc(request.registered_phone||"Unavailable")+'</strong> · account #'+esc(request.account_id)
             : 'No active account matches both submitted details.';
-        return '<article class="card" data-password-recovery="'+esc(request.id)+'"><div class="card-top"><div><h3>Recovery request · '+esc(request.requested_username)+'</h3><div class="meta">Submitted '+esc(date(request.created_at))+' · request expires '+esc(date(request.expires_at))+'</div></div><span class="badge wait">Identity review required</span></div><p class="bodytext">Submitted phone: <strong>'+esc(request.submitted_phone)+'</strong><br>Account match: '+account+'</p><div class="warn">Contact the player through a trusted existing channel and complete a manual identity check. Do not approve based only on the submitted username and phone matching.</div><label class="help" for="recoveryNote-'+esc(request.id)+'">Internal verification note · record how identity was checked (10–500 characters)</label><textarea id="recoveryNote-'+esc(request.id)+'" class="note" data-recovery-note minlength="10" maxlength="500" placeholder="Describe the manual identity check. Do not store passwords or payment PINs."></textarea><div class="actions"><button class="btn gold" type="button" data-recovery-decision="approve" '+(matched?'':'disabled')+'>Verify identity and approve</button><button class="btn red" type="button" data-recovery-decision="deny">Deny request</button></div></article>';
+        var details='<p class="bodytext">Submitted phone: <strong>'+esc(request.submitted_phone)+'</strong><br>Account match: '+account+'</p>';
+        if(state==="pending"){
+            details+='<div class="warn">Contact the player through a trusted existing channel and complete a manual identity check. Do not approve based only on the submitted username and phone matching.</div><label class="help" for="recoveryNote-'+esc(request.id)+'">Internal verification note · record how identity was checked (10–500 characters)</label><textarea id="recoveryNote-'+esc(request.id)+'" class="note" data-recovery-note minlength="10" maxlength="500" placeholder="Describe the manual identity check. Do not store passwords or payment PINs."></textarea><div class="actions"><button class="btn gold" type="button" data-recovery-decision="approve" '+(matched?'':'disabled')+'>Verify identity and approve</button><button class="btn red" type="button" data-recovery-decision="deny">Deny request</button></div>';
+        } else {
+            details+='<p class="meta">'+(request.reviewed_at?'Reviewed '+esc(date(request.reviewed_at)):"Not reviewed")+(request.approval_expires_at?' · approval expires '+esc(date(request.approval_expires_at)):"")+(request.completed_at?' · reset completed '+esc(date(request.completed_at)):"")+'</p>';
+            if(request.review_note)details+='<p class="help">Internal review note: '+esc(request.review_note)+'</p>';
+            if(state==="approved")details+='<p class="help">The claimant completes the reset using their private recovery link. The link and secret are never shown to admins.</p>';
+        }
+        return '<article class="card" data-password-recovery="'+esc(request.id)+'"><div class="card-top"><div><h3>Recovery request · '+esc(request.requested_username)+'</h3><div class="meta">Submitted '+esc(date(request.created_at))+' · request expires '+esc(date(request.expires_at))+'</div></div><span class="badge '+stateClass+'">'+esc(state.replace(/_/g," "))+'</span></div>'+details+'</article>';
     }).join("");
-    if(message)message.textContent="Review requests carefully. An approved private link expires after 30 minutes.";
+    if(message)message.textContent="Any authorized admin can review user requests. Approved links stay private to the claimant and expire after 30 minutes.";
 }
 async function reviewPasswordRecovery(button) {
     var card=button.closest("[data-password-recovery]"),id=card&&card.dataset.passwordRecovery;
@@ -964,6 +975,7 @@ $("toggleCleared").addEventListener("click",function(){includeCleared=!includeCl
 $("clearAllSupport").addEventListener("click",clearAllSupport);
 $("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=null)clearThreadAction(this);});
 $("refreshPasswordRecovery").addEventListener("click",loadPasswordRecoveryRequests);
+$("passwordRecoveryFilter").addEventListener("change",loadPasswordRecoveryRequests);
 $("passwordRecoveryList").addEventListener("click",function(e){var button=e.target.closest("[data-recovery-decision]");if(button)reviewPasswordRecovery(button);});
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 

@@ -16,6 +16,8 @@ async function main() {
     const privateReviewPage = fs.readFileSync(path.join(__dirname, "../private-pages/admin-verifications.html"), "utf8");
     assert(!adminPage.includes("GOAL$GAMBIT Admin Desk"), "the public page must not contain the dashboard markup");
     assert(adminPage.includes("/api/admin/dashboard-page"), "the public page must request the dashboard from the backend");
+    assert(adminPage.includes('GG.api("/api/me", { noRedirect: true })'), "the public admin loader must show authentication failures instead of silently redirecting away");
+    assert(adminPage.includes("server did not authorize this account"), "the public admin loader must explain server-side role rejection");
     const accessScript = adminPage.match(/<script>([\s\S]*?)<\/script>/i);
     assert(accessScript, "the public access page must have its role-checking loader");
     new Function(accessScript[1]);
@@ -27,15 +29,28 @@ async function main() {
     new Function(reviewLoader[1]);
     assert(privateReviewPage.includes("<h1>⚖ Result Reviews</h1>"), "the private backend copy must retain the result-review screen");
     assert(adminScript.includes('r.data.user.role!=="admin"'), "the dashboard must verify the current account role");
+    assert(adminScript.includes("/api/admin/password-recovery?status="), "the recovery manager must load pending and processed request statuses");
+    assert(privateDashboard.includes('id="passwordRecoveryFilter"'), "the recovery manager must provide a status filter");
+    assert(privateDashboard.includes("admin-recovery-shared-statuses"), "the updated recovery manager must bypass stale browser script caches");
     assert(adminScript.includes('addEventListener("visibilitychange"'), "returning to the tab must recheck access");
 
     const queryLog = [];
+    const recoveryRows = new Map([
+        ["00000000-0000-4000-8000-000000000001", { id: "00000000-0000-4000-8000-000000000001", user_id: 20, status: "pending", expires_at: new Date(Date.now() + 86400000), requested_username: "player_one", submitted_phone: "254700123456", created_at: new Date(), matched_active_account: true, account_username: "player_one", registered_phone: "254700123456", account_id: 20, account_status: "active" }],
+        ["00000000-0000-4000-8000-000000000002", { id: "00000000-0000-4000-8000-000000000002", user_id: 21, status: "pending", expires_at: new Date(Date.now() + 86400000), requested_username: "player_two", submitted_phone: "254711123456", created_at: new Date(), matched_active_account: true, account_username: "player_two", registered_phone: "254711123456", account_id: 21, account_status: "active" }]
+    ]);
+    const reviewedRequests = [];
     const phone = "254700123456";
     const pool = {
         async query(sql, params) {
             queryLog.push(String(sql));
             if (/SELECT id,\s*username,\s*role FROM users WHERE id\s*=\s*\$1/i.test(String(sql))) {
-                return { rows: [{ id: Number(params[0]), username: Number(params[0]) === 1 ? "admin" : "player", role: Number(params[0]) === 1 ? "admin" : "player" }] };
+                const accountId = Number(params[0]);
+                return { rows: [{ id: accountId, username: accountId === 1 ? "billgates" : accountId === 3 ? "briton" : "player", role: [1, 3].includes(accountId) ? "admin" : "player" }] };
+            }
+            if (/FROM password_recovery_requests r/i.test(String(sql))) {
+                const status = params && params[0] === "all" ? "all" : "pending";
+                return { rows: Array.from(recoveryRows.values()).filter(row => status === "all" || row.status === "pending") };
             }
             if (String(sql).includes("SELECT COUNT(*)::int AS total")) return { rows: [{ total: 1 }] };
             if (String(sql).includes("SELECT c.id,c.complaint_ref")) {
@@ -43,9 +58,35 @@ async function main() {
             }
             if (String(sql).includes("SELECT status,COUNT(*)::int AS count FROM complaints")) return { rows: [{ status: "open", count: 1 }] };
             throw new Error("Unexpected test query: " + String(sql).slice(0, 100));
+        },
+        async connect() {
+            return {
+                async query(sql, params) {
+                    const statement = String(sql);
+                    if (/^BEGIN|^COMMIT|^ROLLBACK/i.test(statement)) return { rows: [] };
+                    if (/SELECT id,user_id,status,expires_at\s+FROM password_recovery_requests/i.test(statement)) {
+                        const request = recoveryRows.get(String(params[0]));
+                        return { rows: request ? [{ id: request.id, user_id: request.user_id, status: request.status, expires_at: request.expires_at }] : [] };
+                    }
+                    if (/SELECT id,auth_version FROM users/i.test(statement)) return { rows: [{ id: Number(params[0]), auth_version: 0 }] };
+                    if (/UPDATE password_recovery_requests\s+SET status='approved'/i.test(statement)) {
+                        const request = recoveryRows.get(String(params[3]));
+                        request.status = "approved";
+                        request.approval_expires_at = new Date(Date.now() + 30 * 60000);
+                        request.reviewed_by = Number(params[1]);
+                        request.reviewed_at = new Date();
+                        request.review_note = params[2];
+                        reviewedRequests.push({ id: request.id, reviewer: request.reviewed_by });
+                        return { rows: [] };
+                    }
+                    throw new Error("Unexpected recovery review query: " + statement.slice(0, 100));
+                },
+                release() {}
+            };
         }
     };
     const app = express();
+    app.use(express.json());
     function authenticateTestUser(req, res, next) {
         const id = Number(req.get("x-test-user"));
         if (!Number.isInteger(id) || id <= 0) return res.status(401).json({ success: false });
@@ -92,9 +133,34 @@ async function main() {
         assert.strictEqual(adminPageResponse.status, 200, "admins must be served the private dashboard HTML");
         assert(adminPageBody.includes("GOAL$GAMBIT Admin Desk"), "the admin page endpoint should serve the dashboard to admins");
         assert.strictEqual(adminPageResponse.headers.get("cache-control"), "private, no-store", "private dashboard HTML must not be cached");
+        const secondAdminPage = await fetch(adminBase + "/dashboard-page", { headers: { "x-test-user": "3" } });
+        assert.strictEqual(secondAdminPage.status, 200, "the second authorized admin must also be served the private dashboard");
+        assert((await secondAdminPage.text()).includes("GOAL$GAMBIT Admin Desk"), "both admins must receive the same admin page");
         const adminReviewPage = await fetch(adminBase + "/result-review-page", { headers: { "x-test-user": "1" } });
         assert.strictEqual(adminReviewPage.status, 200, "admins must be served the private result-review screen");
         assert((await adminReviewPage.text()).includes("Result Reviews"), "admins should receive the result-review markup");
+
+        for (const adminId of [1, 3]) {
+            const recoveryQueue = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": String(adminId) } });
+            assert.strictEqual(recoveryQueue.status, 200, "each authorized admin must be able to view all recovery requests");
+            const queueBody = await recoveryQueue.json();
+            assert.strictEqual(queueBody.requests.length, 2, "both admins must see the same recovery queue");
+        }
+        for (const [adminId, requestId] of [[1, "00000000-0000-4000-8000-000000000001"], [3, "00000000-0000-4000-8000-000000000002"]]) {
+            const reviewed = await fetch(adminBase + "/password-recovery/" + requestId + "/review", {
+                method: "POST",
+                headers: { "x-test-user": String(adminId), "Content-Type": "application/json" },
+                body: JSON.stringify({ decision: "approve", note: "Verified using the player's trusted contact." })
+            });
+            assert.strictEqual(reviewed.status, 200, "each admin must independently approve a verified player request");
+            assert.strictEqual(recoveryRows.get(requestId).status, "approved", "approval status must persist for refreshes");
+        }
+        assert.deepStrictEqual(reviewedRequests.map(row => row.reviewer), [1, 3], "each admin must be recorded as the reviewer for their own request");
+        const updatedQueue = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": "3" } });
+        const updatedBody = await updatedQueue.json();
+        assert(updatedBody.requests.every(row => row.status === "approved"), "either admin can refresh the shared queue and see persisted review statuses");
+        const unauthorizedRecovery = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": "2" } });
+        assert.strictEqual(unauthorizedRecovery.status, 403, "non-admin accounts must not access password recovery management");
         console.log("Admin access test passed.");
     } finally {
         await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
