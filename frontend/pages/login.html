@@ -155,21 +155,19 @@
         </p>
 
         <section id="passwordResetPanel" hidden style="max-width:500px;margin:0 auto 28px;padding:22px;text-align:left;border:1px solid #3a3525;border-radius:14px;background:#111;">
-            <h3 style="margin-top:0;">Reset password by phone</h3>
-            <p style="color:#aaa;font-size:14px;">We’ll send a one-time code to the phone number saved on your account.</p>
-            <label for="resetUsername">Username</label>
-            <input id="resetUsername" type="text" maxlength="30" autocomplete="username" style="width:100%;padding:13px;margin:8px 0 12px;">
-            <button id="requestResetCode" type="button" class="primary-button" style="border:0;cursor:pointer;width:100%;">Send reset code</button>
-            <form id="confirmPasswordReset" hidden style="margin-top:16px;">
-                <label for="resetCode">6-digit code</label>
-                <input id="resetCode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" style="width:100%;padding:13px;margin:8px 0 12px;">
-                <label for="resetNewPassword">New password</label>
-                <input id="resetNewPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" style="width:100%;padding:13px;margin:8px 0 12px;">
-                <label for="resetConfirmPassword">Confirm new password</label>
-                <input id="resetConfirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" style="width:100%;padding:13px;margin:8px 0 12px;">
-                <button id="confirmResetButton" type="submit" class="primary-button" style="border:0;cursor:pointer;width:100%;">Reset password</button>
+            <h3 style="margin-top:0;">Get help resetting your password</h3>
+            <p style="color:#aaa;font-size:14px;">Enter the username and phone number you saved when creating your account. The server checks both against your account before it creates a support request. Support must still verify your identity before your private reset link can be used.</p>
+            <form id="requestRecoveryForm">
+                <label for="recoveryUsername">Username</label>
+                <input id="recoveryUsername" type="text" minlength="3" maxlength="30" autocomplete="username" required style="width:100%;padding:13px;margin:8px 0 12px;">
+                <label for="recoveryPhone">Phone number on your account</label>
+                <input id="recoveryPhone" type="tel" maxlength="20" autocomplete="tel" placeholder="e.g. 07… or +254…" required style="width:100%;padding:13px;margin:8px 0 12px;">
+                <button id="requestRecoveryButton" type="submit" class="primary-button" style="border:0;cursor:pointer;width:100%;">Request support review</button>
             </form>
-            <p id="resetMessage" role="status" aria-live="polite" style="color:#f4bd20;min-height:1.5em;margin-bottom:0;"></p>
+            <p id="recoveryMessage" role="status" aria-live="polite" style="color:#f4bd20;min-height:1.5em;margin-bottom:0;"></p>
+            <p style="color:#aaa;font-size:13px;">Keep the private recovery link safe. It is needed after support approves your request. GOAL$GAMBIT support will never ask for your current password or payment PIN.</p>
+            <a id="recoveryLink" hidden class="text-link" style="display:block;overflow-wrap:anywhere;margin-top:10px;">Open your secure recovery status</a>
+            <button id="copyRecoveryLink" hidden type="button" class="text-link" style="border:0;background:none;color:inherit;text-decoration:underline;cursor:pointer;font:inherit;margin-top:10px;">Copy recovery link</button>
         </section>
 
 
@@ -268,27 +266,32 @@ document.getElementById("loginForm").addEventListener("submit", async function (
 var resetPanel=document.getElementById("passwordResetPanel");
 document.getElementById("openPasswordReset").addEventListener("click",function(){
     resetPanel.hidden=!resetPanel.hidden;
-    if(!resetPanel.hidden){document.getElementById("resetUsername").value=document.getElementById("username").value.trim();document.getElementById("resetUsername").focus();}
+    if(!resetPanel.hidden){document.getElementById("recoveryUsername").value=document.getElementById("username").value.trim();document.getElementById("recoveryUsername").focus();}
 });
-document.getElementById("requestResetCode").addEventListener("click",async function(){
-    var button=this,username=document.getElementById("resetUsername").value.trim(),message=document.getElementById("resetMessage");
-    if(!username){message.textContent="Enter your username first.";return;}
-    button.disabled=true;message.textContent="Requesting a code…";
-    var result=await GG.api("/api/auth/password-reset/request",{method:"POST",body:{username:username},noRedirect:true});
-    button.disabled=false;
-    message.textContent=result.data.message||(result.ok?"Check the phone saved on your account.":"Could not request a reset code.");
-    if(result.ok)document.getElementById("confirmPasswordReset").hidden=false;
-});
-document.getElementById("confirmPasswordReset").addEventListener("submit",async function(event){
+document.getElementById("requestRecoveryForm").addEventListener("submit",async function(event){
     event.preventDefault();
-    var code=document.getElementById("resetCode").value.trim(),password=document.getElementById("resetNewPassword").value,confirmPassword=document.getElementById("resetConfirmPassword").value;
-    var button=document.getElementById("confirmResetButton"),message=document.getElementById("resetMessage");
-    if(password!==confirmPassword){message.textContent="The new passwords do not match.";return;}
-    button.disabled=true;message.textContent="Resetting password…";
-    var result=await GG.api("/api/auth/password-reset/confirm",{method:"POST",body:{username:document.getElementById("resetUsername").value.trim(),code:code,newPassword:password},noRedirect:true});
+    var button=document.getElementById("requestRecoveryButton"),message=document.getElementById("recoveryMessage");
+    document.getElementById("recoveryLink").hidden=true;
+    document.getElementById("copyRecoveryLink").hidden=true;
+    button.disabled=true;message.textContent="Sending your request…";
+    var result=await GG.api("/api/auth/password-recovery/request",{method:"POST",body:{username:document.getElementById("recoveryUsername").value.trim(),phone:document.getElementById("recoveryPhone").value.trim()},noRedirect:true});
     button.disabled=false;
-    message.textContent=result.data.message||(result.ok?"Password reset. Sign in with your new password.":"Could not reset your password.");
-    if(result.ok){document.getElementById("password").value="";document.getElementById("resetCode").value="";document.getElementById("resetNewPassword").value="";document.getElementById("resetConfirmPassword").value="";}
+    message.textContent=result.data.message||(result.ok?"Save your secure recovery link.":"Could not submit the support request.");
+    if(result.ok&&result.data.ticketId&&result.data.secret){
+        var url=new URL("password-recovery.html",location.href);
+        url.hash=new URLSearchParams({ticket:result.data.ticketId,secret:result.data.secret}).toString();
+        var link=document.getElementById("recoveryLink");
+        link.href=url.href;link.hidden=false;
+        document.getElementById("copyRecoveryLink").hidden=false;
+        button.textContent="Request submitted";
+        button.disabled=true;
+    }
+});
+document.getElementById("copyRecoveryLink").addEventListener("click",async function(){
+    var link=document.getElementById("recoveryLink");
+    if(link.hidden)return;
+    try{await navigator.clipboard.writeText(link.href);document.getElementById("recoveryMessage").textContent="Recovery link copied. Keep it private.";}
+    catch(_){window.prompt("Copy and save this private recovery link:",link.href);}
 });
 </script>
 

@@ -41,6 +41,32 @@ CREATE TABLE IF NOT EXISTS password_reset_codes (
 CREATE INDEX IF NOT EXISTS idx_password_reset_codes_expiry
     ON password_reset_codes(expires_at);
 
+-- Support-assisted recovery never resets an account until an administrator
+-- records an identity check. The claimant's one-time link is stored only as
+-- a hash and becomes usable for 30 minutes after approval.
+CREATE TABLE IF NOT EXISTS password_recovery_requests (
+    id                  UUID PRIMARY KEY,
+    user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    requested_username VARCHAR(30) NOT NULL,
+    submitted_phone    VARCHAR(20) NOT NULL,
+    secret_hash         CHAR(64) NOT NULL,
+    status              VARCHAR(16) NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','approved','denied','completed','expired')),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at          TIMESTAMPTZ NOT NULL,
+    approval_expires_at TIMESTAMPTZ,
+    auth_version_at_approval INTEGER,
+    reviewed_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at         TIMESTAMPTZ,
+    review_note         TEXT,
+    completed_at        TIMESTAMPTZ
+);
+ALTER TABLE password_recovery_requests ADD COLUMN IF NOT EXISTS auth_version_at_approval INTEGER;
+CREATE INDEX IF NOT EXISTS idx_password_recovery_requests_status
+    ON password_recovery_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_password_recovery_requests_user
+    ON password_recovery_requests(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS wallets (
     id              SERIAL PRIMARY KEY,
     user_id         INTEGER       NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,

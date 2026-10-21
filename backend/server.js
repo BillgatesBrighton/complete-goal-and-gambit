@@ -18,6 +18,7 @@ require("dotenv").config({
 // ======================================================
 
 const authRoutes = require("./routes/auth");
+const passwordRecoveryRoutes = require("./routes/passwordRecovery");
 const walletRoutes = require("./routes/wallet");
 const userHistoryRoutes = require("./routes/userHistory");
 const chessRoutes = require("./routes/chess");
@@ -784,6 +785,11 @@ const mpesaC2b = mpesaC2bFactory(pool, authenticateToken);
 app.use(
     "/api/auth",
     authRoutes(pool, authenticateToken, io)
+);
+
+app.use(
+    "/api/auth/password-recovery",
+    passwordRecoveryRoutes(pool)
 );
 
 app.use(

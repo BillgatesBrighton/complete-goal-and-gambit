@@ -62,7 +62,7 @@ function concealDashboard(message, clearData) {
     ["accountDialog", "complaintDialog", "companionDialog"].forEach(function(id) { var dialog = $(id); if (dialog && dialog.open) dialog.close(); });
     urls.concat(complaintUrls).forEach(function(url) { URL.revokeObjectURL(url); });
     urls = []; complaintUrls = []; currentComplaintId = null; selectedUser = null; selectedName = ""; messageSig = null; users = [];
-    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "manualWithdrawalsList", "userList", "announcementList", "companionTrackerList", "companionView", "threads", "messages", "accountView"].forEach(function(id) {
+    ["resultList", "matchManagementList", "activeComplaintList", "resolvedComplaintList", "complaintView", "adminWalletBalance", "adminWalletTransactions", "manualWithdrawalsList", "userList", "announcementList", "companionTrackerList", "companionView", "threads", "messages", "accountView", "passwordRecoveryList"].forEach(function(id) {
         var node = $(id); if (node) node.replaceChildren();
     });
     if ($("adminName")) $("adminName").textContent = "Admin";
@@ -500,6 +500,35 @@ async function loadOverview() {
     var u=r.data.users||{};
     $("statActiveUsers").textContent=(Number(u.active)||0).toLocaleString();
     $("statRestricted").textContent=((Number(u.suspended)||0)+(Number(u.closed)||0)).toLocaleString();
+    if($("navPasswordRecovery"))$("navPasswordRecovery").textContent=String(Number((r.data.passwordRecovery||{}).pending)||0);
+}
+async function loadPasswordRecoveryRequests() {
+    if(!adminAuthorized)return;
+    var list=$("passwordRecoveryList"),message=$("passwordRecoveryMessage");
+    var result=await GG.api("/api/admin/password-recovery");
+    if(!result.ok){list.innerHTML='<div class="empty">'+esc(result.data.message||"Could not load recovery requests.")+'</div>';return;}
+    var requests=result.data.requests||[];
+    if(!requests.length){list.innerHTML='<div class="empty">No pending recovery requests.</div>';return;}
+    list.innerHTML=requests.map(function(request){
+        var matched=!!request.matched_active_account;
+        var account=matched
+            ? '<strong>'+esc(request.account_username||"Account")+'</strong> · registered phone <strong>'+esc(request.registered_phone||"Unavailable")+'</strong> · account #'+esc(request.account_id)
+            : 'No active account matches both submitted details.';
+        return '<article class="card" data-password-recovery="'+esc(request.id)+'"><div class="card-top"><div><h3>Recovery request · '+esc(request.requested_username)+'</h3><div class="meta">Submitted '+esc(date(request.created_at))+' · request expires '+esc(date(request.expires_at))+'</div></div><span class="badge wait">Identity review required</span></div><p class="bodytext">Submitted phone: <strong>'+esc(request.submitted_phone)+'</strong><br>Account match: '+account+'</p><div class="warn">Contact the player through a trusted existing channel and complete a manual identity check. Do not approve based only on the submitted username and phone matching.</div><label class="help" for="recoveryNote-'+esc(request.id)+'">Internal verification note · record how identity was checked (10–500 characters)</label><textarea id="recoveryNote-'+esc(request.id)+'" class="note" data-recovery-note minlength="10" maxlength="500" placeholder="Describe the manual identity check. Do not store passwords or payment PINs."></textarea><div class="actions"><button class="btn gold" type="button" data-recovery-decision="approve" '+(matched?'':'disabled')+'>Verify identity and approve</button><button class="btn red" type="button" data-recovery-decision="deny">Deny request</button></div></article>';
+    }).join("");
+    if(message)message.textContent="Review requests carefully. An approved private link expires after 30 minutes.";
+}
+async function reviewPasswordRecovery(button) {
+    var card=button.closest("[data-password-recovery]"),id=card&&card.dataset.passwordRecovery;
+    var note=card&&card.querySelector("[data-recovery-note]");
+    var decision=button.dataset.recoveryDecision;
+    if(!id||!note||note.value.trim().length<10){say("Enter an internal verification note of at least 10 characters.","error");return;}
+    if(decision==="approve"&&!confirm("Have you completed a manual identity check through a trusted contact method? Approving lets the claimant set a new password for 30 minutes."))return;
+    button.disabled=true;
+    var result=await GG.api("/api/admin/password-recovery/"+encodeURIComponent(id)+"/review",{method:"POST",body:{decision:decision,note:note.value.trim()}});
+    if(!result.ok){button.disabled=false;say(result.data.message||"Could not save the recovery review.","error");return;}
+    say(result.data.message||"Recovery review saved.","ok");
+    await Promise.all([loadPasswordRecoveryRequests(),loadOverview()]);
 }
 async function loadAdminWallet() {
     var search=$("adminFinanceSearch");
@@ -706,6 +735,7 @@ async function refresh(force) {
         if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
         if(location.hash==="#companionTracker"&&(force||!editing("companionTracker")))tasks.push(loadCompanionTracker());
         if(location.hash==="#efootballScheduler")tasks.push(loadEfootballScheduler());
+        if(location.hash==="#passwordRecovery"&&(force||!editing("passwordRecoveryList")))tasks.push(loadPasswordRecoveryRequests());
         tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
         $("live").textContent="Live · "+new Date().toLocaleTimeString();
     } catch(_){$("live").textContent="Some data could not refresh.";}
@@ -933,16 +963,19 @@ $("threads").addEventListener("click",function(e){var status=e.target.closest("[
 $("toggleCleared").addEventListener("click",function(){includeCleared=!includeCleared;this.setAttribute("aria-pressed",String(includeCleared));this.textContent=includeCleared?"Hide cleared":"Show cleared";loadThreads();});
 $("clearAllSupport").addEventListener("click",clearAllSupport);
 $("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=null)clearThreadAction(this);});
+$("refreshPasswordRecovery").addEventListener("click",loadPasswordRecoveryRequests);
+$("passwordRecoveryList").addEventListener("click",function(e){var button=e.target.closest("[data-recovery-decision]");if(button)reviewPasswordRecovery(button);});
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 function updateAdminPage() {
-    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],efootballScheduler:["eFootball daily scheduler","View the EAT gaming window, tournament capacity, fixtures, matchmaking rejections, and scheduler failures."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."],companionTracker:["Companion App Tracker","Review guide acknowledgement, APK downloads, registered Companion apps, recent activity, and notification permission."]};
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],passwordRecovery:["Password recovery","Manually verify identity before approving a one-time password reset."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],efootballScheduler:["eFootball daily scheduler","View the EAT gaming window, tournament capacity, fixtures, matchmaking rejections, and scheduler failures."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."],companionTracker:["Companion App Tracker","Review guide acknowledgement, APK downloads, registered Companion apps, recent activity, and notification permission."]};
     if(!titles[page])page="overview";
-    ["results","matchManagement","complaints","support","accounts","competitions","efootballScheduler","adminWallet","announcements","companionTracker"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
+    ["results","matchManagement","complaints","support","passwordRecovery","accounts","competitions","efootballScheduler","adminWallet","announcements","companionTracker"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
     $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];
     Array.from(document.querySelectorAll("[data-admin-page]")).forEach(function(link){if(link.dataset.adminPage===page)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
     if(page==="companionTracker"&&adminAuthorized)loadCompanionTracker();
     if(page==="efootballScheduler"&&adminAuthorized)loadEfootballScheduler();
+    if(page==="passwordRecovery"&&adminAuthorized)loadPasswordRecoveryRequests();
 }
 window.addEventListener("hashchange",updateAdminPage);
 updateAdminPage();

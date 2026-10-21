@@ -311,7 +311,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
     // =========================================================
     router.get("/overview", authenticateToken, adminOnly, async (req, res) => {
         try {
-            const [users, complaints, openChats, announcements] = await Promise.all([
+            const [users, complaints, openChats, announcements, passwordRecovery] = await Promise.all([
                 pool.query(`SELECT COUNT(*)::int AS total,
                                    COUNT(*) FILTER (WHERE account_status='active')::int AS active,
                                    COUNT(*) FILTER (WHERE account_status='suspended')::int AS suspended,
@@ -326,18 +326,121 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                               AND cm.sender_id <> $1`, [req.user.userId]),
                 pool.query(`SELECT COUNT(*)::int AS total
                             FROM admin_announcements
-                            WHERE active=TRUE`)
+                            WHERE active=TRUE`),
+                pool.query(`SELECT COUNT(*)::int AS pending
+                            FROM password_recovery_requests
+                            WHERE status='pending' AND expires_at>NOW()`)
             ]);
             res.json({
                 success:true,
                 users:users.rows[0],
                 complaints:complaints.rows[0],
                 openChats:openChats.rows[0],
-                announcements:announcements.rows[0]
+                announcements:announcements.rows[0],
+                passwordRecovery:passwordRecovery.rows[0]
             });
         } catch (e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to load admin overview."});
+        }
+    });
+
+    router.get("/password-recovery", authenticateToken, adminOnly, async function(req, res) {
+        const status = String(req.query.status || "pending").trim().toLowerCase();
+        if (!['pending', 'all'].includes(status)) {
+            return res.status(400).json({ success: false, message: "Invalid recovery request filter." });
+        }
+        try {
+            const result = await pool.query(
+                `SELECT r.id,r.requested_username,r.submitted_phone,r.status,r.created_at,r.expires_at,
+                        r.approval_expires_at,r.reviewed_at,r.review_note,r.completed_at,
+                        u.id AS account_id,u.username AS account_username,u.phone AS registered_phone,
+                        u.account_status,
+                        (u.id IS NOT NULL AND u.account_status='active') AS matched_active_account
+                   FROM password_recovery_requests r
+                   LEFT JOIN users u ON u.id=r.user_id
+                  WHERE ($1='all' OR (r.status='pending' AND r.expires_at>NOW()))
+                  ORDER BY r.created_at DESC LIMIT 100`,
+                [status]
+            );
+            return res.json({ success: true, requests: result.rows });
+        } catch (error) {
+            console.error("Admin password recovery queue failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not load password recovery requests." });
+        }
+    });
+
+    router.post("/password-recovery/:id/review", authenticateToken, adminOnly, async function(req, res) {
+        const id = String(req.params.id || "").trim();
+        const decision = String(req.body && req.body.decision || "").trim().toLowerCase();
+        const note = String(req.body && req.body.note || "").trim();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ||
+            !["approve", "deny"].includes(decision) || note.length < 10 || note.length > 500) {
+            return res.status(400).json({ success: false, message: "Choose approve or deny and enter a 10–500 character internal verification note." });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const locked = await client.query(
+                `SELECT id,user_id,status,expires_at
+                   FROM password_recovery_requests WHERE id=$1 FOR UPDATE`,
+                [id]
+            );
+            if (!locked.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({ success: false, message: "Recovery request not found." });
+            }
+            const request = locked.rows[0];
+            if (request.status !== "pending") {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This recovery request has already been reviewed." });
+            }
+            if (new Date(request.expires_at) <= new Date()) {
+                await client.query("UPDATE password_recovery_requests SET status='expired' WHERE id=$1", [id]);
+                await client.query("COMMIT");
+                return res.status(409).json({ success: false, message: "This recovery request has expired." });
+            }
+
+            if (decision === "approve") {
+                if (!request.user_id || Number(request.user_id) === Number(req.user.userId)) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({ success: false, message: "This request cannot be approved by this administrator. An active matching account and a second administrator are required." });
+                }
+                const account = await client.query(
+                    "SELECT id,auth_version FROM users WHERE id=$1 AND account_status='active' FOR UPDATE",
+                    [request.user_id]
+                );
+                if (!account.rows.length) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({ success: false, message: "The matching account is no longer active." });
+                }
+                await client.query(
+                    `UPDATE password_recovery_requests
+                        SET status='approved',approval_expires_at=NOW()+INTERVAL '30 minutes',auth_version_at_approval=$1,
+                            reviewed_by=$2,reviewed_at=NOW(),review_note=$3
+                      WHERE id=$4`,
+                    [account.rows[0].auth_version, req.user.userId, note, id]
+                );
+            } else {
+                await client.query(
+                    `UPDATE password_recovery_requests
+                        SET status='denied',reviewed_by=$1,reviewed_at=NOW(),review_note=$2
+                      WHERE id=$3`,
+                    [req.user.userId, note, id]
+                );
+            }
+
+            await client.query("COMMIT");
+            return res.json({ success: true, message: decision === "approve"
+                ? "Identity review recorded. The claimant’s private recovery link is available for 30 minutes."
+                : "Recovery request denied." });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(function() {});
+            console.error("Admin password recovery review failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not save the recovery decision." });
+        } finally {
+            client.release();
         }
     });
 
