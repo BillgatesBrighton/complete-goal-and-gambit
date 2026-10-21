@@ -99,6 +99,91 @@ test("ordinary active match GET returns without opening a settlement transaction
     assert.equal(transactionStarts, 0);
 });
 
+test("move attempts are rate-limited per authenticated account before taking match locks", async t => {
+    const pool = {
+        async query(sql) {
+            if (String(sql).includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            throw new Error("Malformed moves should not query the database.");
+        },
+        async connect() { throw new Error("Malformed moves should not acquire a match lock."); }
+    };
+    const api = await startChessApi(pool);
+    t.after(api.close);
+
+    const sendInvalidMove = () => fetch(api.base + "/501/move", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "bad", to: "e4" })
+    });
+    for (let index = 0; index < 30; index++) assert.equal((await sendInvalidMove()).status, 400);
+    const limited = await sendInvalidMove();
+    assert.equal(limited.status, 429);
+    assert.ok(Number(limited.headers.get("retry-after")) > 0);
+});
+
+test("authoritative move position restores PGN history for threefold repetition and rejects mismatched history", () => {
+    const history = new BrowserChess(INITIAL_FEN);
+    for (const san of ["Nf3", "Nf6", "Ng1", "Ng8", "Nf3", "Nf6", "Ng1", "Ng8"]) history.move(san);
+    assert.equal(new BrowserChess(history.fen()).isThreefoldRepetition(), false, "FEN alone cannot establish prior repetitions");
+
+    const restored = chessRoutes.createMatchPosition({ fen: history.fen(), pgn: history.pgn() });
+    assert.ok(restored);
+    assert.equal(restored.fen(), history.fen());
+    assert.equal(restored.isThreefoldRepetition(), true, "the authoritative state should retain the repeated-position history");
+    assert.equal(chessRoutes.createMatchPosition({ fen: INITIAL_FEN, pgn: history.pgn() }), null,
+        "a PGN that does not match the stored FEN must not be used to validate a move");
+});
+
+test("successive authoritative moves retain the existing PGN history", async t => {
+    let current = matchRow();
+    const pool = {
+        async query(sql) {
+            const text = String(sql);
+            if (text.includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            if (text.includes("FROM chess_matches m")) return { rows: [current] };
+            throw new Error("Unexpected top-level SQL in PGN history test: " + text.slice(0, 120));
+        },
+        async connect() {
+            return {
+                async query(sql, params) {
+                    const text = String(sql).trim();
+                    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
+                    if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
+                    if (text.startsWith("UPDATE chess_matches SET fen=$1")) {
+                        current = matchRow({
+                            fen: params[0], pgn: params[1], white_time_ms: params[2], black_time_ms: params[3],
+                            active_color: params[4], last_move_at: new Date(), status: params[5] ? "settling" : "active",
+                            result: params[5], winner_id: params[6]
+                        });
+                        return { rows: [] };
+                    }
+                    throw new Error("Unexpected transaction SQL in PGN history test: " + text.slice(0, 120));
+                },
+                release() {}
+            };
+        }
+    };
+    const whiteApi = await startChessApi(pool, null, 41);
+    const blackApi = await startChessApi(pool, null, 42);
+    t.after(async () => { await Promise.all([whiteApi.close(), blackApi.close()]); });
+
+    const play = (api, move) => fetch(api.base + "/501/move", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(move)
+    });
+    const whiteMove = { from: "e2", to: "e4", expectedFen: current.fen, expectedPly: 0 };
+    const white = await play(whiteApi, whiteMove);
+    assert.equal(white.status, 200);
+    const replay = await play(whiteApi, whiteMove);
+    assert.equal(replay.status, 409, "the exact request replay must not be applied to the updated position");
+    assert.equal(current.active_color, "b");
+    const black = await play(blackApi, { from: "e7", to: "e5", expectedFen: current.fen, expectedPly: 1 });
+    const body = await black.json();
+    assert.equal(black.status, 200);
+    const replayed = new BrowserChess();
+    replayed.loadPgn(body.match.pgn);
+    assert.equal(body.match.pgn.includes("e4"), true);
+    assert.equal(body.match.pgn.includes("e5"), true);
+    assert.equal(replayed.fen(), body.match.fen, "stored PGN must describe the authoritative board position");
+});
+
 test("a successful chess move queues a private turn alert for only the opponent without using the eFootball match id column", async t => {
     let current = matchRow();
     const notifications = [];
@@ -152,9 +237,14 @@ test("a successful chess move queues a private turn alert for only the opponent 
     const response = await fetch(api.base + "/501/move", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ from: "e2", to: "e4" })
+        body: JSON.stringify({ from: "e2", to: "e4", fen: "forged", pgn: "1. Qh5#", whiteTimeMs: 1, result: "white_win", winnerId: 41 })
     });
     assert.equal(response.status, 200);
+    const authoritative = await response.json();
+    assert.equal(authoritative.match.result, null, "client-supplied winner claims are ignored");
+    assert.equal(authoritative.match.winnerId, null, "the server determines the official winner");
+    assert.equal(authoritative.match.status, "active");
+    assert.notEqual(authoritative.match.whiteTimeMs, 1, "client-supplied clocks are ignored");
     await Promise.race([queued, new Promise(resolve => setTimeout(resolve, 250))]);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].userId, 42);
@@ -408,7 +498,7 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         .replace(/^import\s+\{\s*Chess\s*\}\s+from\s+["'][^"']+["'];\s*/m, "");
     context.Chess = BrowserChess;
     vm.createContext(context);
-    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
+    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,currentRulesPosition,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
     return { board: context.__boardTest, document, elements, documentListeners, windowListeners, sockets: windows, delays, storage, clock, setOnline(value) { context.navigator.onLine = value; } };
 }
 
@@ -560,6 +650,27 @@ test("piece selection calculates legal hints locally without a legal-moves API r
     assert.deepEqual(harness.board.getLegalTargets().map(move => move.to), ["e3", "e4"]);
     assert.equal(requests, 0);
     t.diagnostic("Local legal selection/highlighting (30 samples, chess.js + mocked DOM; no network or browser paint): p50 " + latencyPercentile(selectionSamples, 0.5).toFixed(3) + " ms, p95 " + latencyPercentile(selectionSamples, 0.95).toFixed(3) + " ms.");
+});
+
+test("rules position is reused for repeated selection and invalidated by a changed match position", () => {
+    const harness = createBoardHarness(async () => { throw new Error("Local rules lookup must not make requests"); }, { search: "" });
+    harness.board.setMatchId(1);
+    const opening = browserMatch(1);
+    harness.board.applyState(opening);
+
+    const initialPosition = harness.board.currentRulesPosition();
+    for (let index = 0; index < 10; index++) harness.board.selectPiece("e2");
+    assert.equal(harness.board.currentRulesPosition(), initialPosition, "selection must reuse the already-validated chess.js position");
+
+    const moved = new BrowserChess(INITIAL_FEN);
+    moved.move({ from: "e2", to: "e4" });
+    const afterMove = browserMatch(1, moved.pgn());
+    afterMove.fen = moved.fen();
+    afterMove.activeColor = "b";
+    harness.board.applyState(afterMove);
+    const updatedPosition = harness.board.currentRulesPosition();
+    assert.notEqual(updatedPosition, initialPosition, "a changed FEN/PGN must rebuild the rules position");
+    assert.equal(updatedPosition.fen(), afterMove.fen);
 });
 
 test("board updates reuse the same accessible squares and click handlers", () => {
@@ -987,6 +1098,8 @@ test("optimistic local moves stay interactive while backend submissions remain o
     assert.equal(harness.board.getState().fen, afterWhite.fen(), "the first move should render synchronously");
     assert.equal(await harness.board.sendMove("e7", "e5"), false, "turn enforcement must still reject a second move by white");
     await firstRequestStarted;
+    assert.equal(submitted[0].expectedFen, INITIAL_FEN);
+    assert.equal(submitted[0].expectedPly, 0, "the website should bind the move to the starting position and sequence");
 
     const afterBlack = new BrowserChess(INITIAL_FEN);
     afterBlack.move({ from: "e2", to: "e4" });
@@ -1013,6 +1126,8 @@ test("optimistic local moves stay interactive while backend submissions remain o
     firstResponse.resolve(responseFor({ success: true, match: confirmedWhite }));
     await secondRequestStarted;
     assert.deepEqual(submitted.map(move => [move.from, move.to]), [["e2", "e4"], ["g1", "f3"]]);
+    assert.equal(submitted[1].expectedFen, authoritativeAfterBlack.fen);
+    assert.equal(submitted[1].expectedPly, 2, "the next move should use the latest authoritative position and ply");
 
     const confirmedKnight = browserMatch(1, afterKnight.pgn());
     confirmedKnight.fen = afterKnight.fen();

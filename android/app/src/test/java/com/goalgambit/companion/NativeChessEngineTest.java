@@ -121,4 +121,26 @@ public final class NativeChessEngineTest {
         assertEquals(60000, move.clockEstimate.blackTimeMs);
         assertEquals("b", move.clockEstimate.activeColor);
     }
+
+    @Test public void nativeEngineRetainsPositionHistoryForThreefoldRepetition() {
+        NativeChessEngine engine = new NativeChessEngine();
+        engine.seedSnapshot(50, START, "", 0, 60000, 60000, "w", "1+0", 0);
+        String fen = START;
+        String pgn = "";
+        String[][] moves = {
+            {"g1", "f3"}, {"g8", "f6"}, {"f3", "g1"}, {"f6", "g8"},
+            {"g1", "f3"}, {"g8", "f6"}, {"f3", "g1"}, {"f6", "g8"}
+        };
+        NativeChessEngine.Result last = null;
+        for (int index = 0; index < moves.length; index++) {
+            last = engine.processMove("repetition-move-" + index + "0000", 50, index + 1,
+                fen, pgn, moves[index][0], moves[index][1], null,
+                "", "", false, 0, 0, "w", "1+0", index * 100L);
+            assertTrue(last.legal);
+            fen = last.resultingFen;
+            pgn = last.pgn;
+        }
+        assertNotNull(last);
+        assertTrue("the native rules engine should recognize the third occurrence of the position", last.draw);
+    }
 }

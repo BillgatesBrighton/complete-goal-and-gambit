@@ -18,6 +18,8 @@ let playerColor = "w";
 let boardFlipped = false;
 let selectedSquare = null;
 let state = null;
+let cachedRulesPosition = null;
+let cachedRulesPositionKey = null;
 let clockTimer = null;
 let socket = null;
 let socketMatchId = null;
@@ -500,15 +502,23 @@ function setStatus(text, cls){
   const bar=document.getElementById("statusBar");if(bar){bar.classList.remove("ready","waiting");if(cls)bar.classList.add(cls)}
 }
 function currentRulesPosition(){
+  if(!state||!state.fen){invalidateRulesPosition();return null}
+  const key=JSON.stringify([Number(matchId)||0,String(state.fen),String(state.pgn||"")]);
+  if(cachedRulesPosition&&cachedRulesPositionKey===key)return cachedRulesPosition;
+  invalidateRulesPosition();
   try{
-    if(!state||!state.fen)return null;
+    let chess;
     if(state.pgn){
-      const replayed=new Chess();replayed.loadPgn(state.pgn);
-      return replayed.fen()===state.fen?replayed:null;
-    }
-    return new Chess(state.fen);
+      chess=new Chess();chess.loadPgn(state.pgn);
+      if(chess.fen()!==state.fen)return null;
+    }else chess=new Chess(state.fen);
+    cachedRulesPosition=chess;cachedRulesPositionKey=key;
+    return chess;
   }
   catch(_){return null}
+}
+function invalidateRulesPosition(){
+  cachedRulesPosition=null;cachedRulesPositionKey=null;
 }
 function selectPiece(sq){
   const chess=currentRulesPosition();
@@ -672,6 +682,7 @@ async function sendMove(from,to,promotion){
   try{move=chess.move({from,to,...(promotionRequired?{promotion}: {})})}
   catch(_){flashIllegalMove(from,to);setStatus("That move is illegal. The board has not changed.","waiting");return false}
   if(!move){flashIllegalMove(from,to);setStatus("That move is illegal. The board has not changed.","waiting");return false}
+  invalidateRulesPosition();
   const submittedMatchId=Number(matchId),submittedEpoch=boardEpoch;
   const movedAt=monotonicNow(),movedAtWall=Date.now(),moverColor=state.activeColor;
   const clocksBefore={whiteTimeMs:remaining("w"),blackTimeMs:remaining("b")};
@@ -726,7 +737,7 @@ async function sendMove(from,to,promotion){
     const controller=new AbortController();
     const requestTimeout=setTimeout(()=>controller.abort(),MOVE_SYNC_TIMEOUT_MS);
     let r;
-    try{r=await api("/api/chess/"+submittedMatchId+"/move",{method:"POST",body:{from,to,promotion:promotion||"q"},signal:controller.signal})}
+    try{r=await api("/api/chess/"+submittedMatchId+"/move",{method:"POST",body:{from,to,promotion:promotion||"q",expectedFen:entry.fenBefore,expectedPly:chessPlyFromFen(entry.fenBefore)},signal:controller.signal})}
     finally{clearTimeout(requestTimeout)}
     if(!r.ok&&r.status===0){
       await updateOfflineRecord(submittedMatchId,current=>{if(!current)return null;current.sync={...(current.sync||{}),status:"pending",lastError:r.data.message||"The server is offline."};current.updatedAt=Date.now();return current}).catch(()=>{});

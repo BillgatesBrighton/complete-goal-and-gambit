@@ -2,6 +2,7 @@
 
 const express = require("express");
 const { Chess } = require("chess.js");
+const rateLimit = require("../middleware/rateLimit");
 const { creditPlatform } = require("../services/adminWalletAccounting");
 const { rankedMatchPayout } = require("../services/rankedMatchPayout");
 const { recordJournal } = require("../services/financialLedger");
@@ -354,7 +355,29 @@ try {
 
     return new Chess();
 }
+}
 
+// Rebuild the authoritative rules state from match history so repetition
+// draws remain detectable. A FEN-only board cannot know earlier positions.
+function createMatchPosition(match) {
+    if (!match || typeof match.fen !== "string" || !match.fen) return null;
+    try {
+        if (match.pgn) {
+            const chess = new Chess();
+            chess.loadPgn(String(match.pgn));
+            return chess.fen() === match.fen ? chess : null;
+        }
+        return new Chess(match.fen);
+    } catch (_) {
+        return null;
+    }
+}
+
+function chessPlyFromFen(fen) {
+    const fields = String(fen || "").trim().split(/\s+/);
+    const fullMove = Number(fields[5]);
+    if (fields.length !== 6 || !Number.isSafeInteger(fullMove) || fullMove < 1 || !["w", "b"].includes(fields[1])) return null;
+    return (fullMove - 1) * 2 + (fields[1] === "b" ? 1 : 0);
 }
 
 function safeFen(chess) {
@@ -1350,6 +1373,12 @@ try {
 module.exports = function (pool, authenticateToken, io, pushService) {
 
     const router = express.Router();
+    const chessMoveRateLimit = rateLimit({
+        windowMs: 10_000,
+        max: 30,
+        message: "Too many chess move attempts. Please wait a moment and try again.",
+        keyGenerator: function (req) { return "chess-moves:" + Number(req.user.userId); }
+    });
 
     // Companion alerts are a notification-only bridge: the website remains the
     // game client and the backend remains authoritative. Keep chess match IDs
@@ -1926,17 +1955,27 @@ module.exports = function (pool, authenticateToken, io, pushService) {
     });
 
     // POST /api/chess/:id/move -> locked, server-authoritative chess move.
-    router.post("/:id/move", authenticateToken, async function(req, res) {
+    router.post("/:id/move", authenticateToken, chessMoveRateLimit, async function(req, res) {
         const matchId = Number(req.params.id);
         const userId = Number(req.user.userId);
         const from = String(req.body && req.body.from || "").toLowerCase();
         const to = String(req.body && req.body.to || "").toLowerCase();
         const requestedPromotion = String(req.body && req.body.promotion || "q").toLowerCase();
+        const body = req.body || {};
+        const hasExpectedFen = Object.prototype.hasOwnProperty.call(body, "expectedFen");
+        const hasExpectedPly = Object.prototype.hasOwnProperty.call(body, "expectedPly");
+        const expectedFen = hasExpectedFen ? String(body.expectedFen || "").trim() : "";
+        const expectedPly = body.expectedPly;
         if (!Number.isInteger(matchId) || matchId <= 0 || !/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) {
             return res.status(400).json({ success: false, message: "Invalid chess move." });
         }
         if (!/^[qrbn]$/.test(requestedPromotion)) {
             return res.status(400).json({ success: false, message: "Invalid promotion piece." });
+        }
+        if (hasExpectedFen !== hasExpectedPly || (hasExpectedFen &&
+            (expectedFen.length > 160 || expectedFen.split(/\s+/).length !== 6 ||
+             !Number.isSafeInteger(expectedPly) || expectedPly < 0))) {
+            return res.status(400).json({ success: false, message: "Invalid expected chess position." });
         }
 
         const client = await pool.connect();
@@ -1962,6 +2001,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const color = getPlayerColor(match, userId);
             if (!color) return reject(403, "You are not a player in this match.");
             if (match.status !== "active") return reject(409, "This match is not active.");
+            if (hasExpectedFen && (expectedFen !== match.fen || expectedPly !== chessPlyFromFen(match.fen))) {
+                return reject(409, "The match position changed. Refresh before moving.");
+            }
             if (match.active_color !== color) return reject(409, "It is not your turn.");
 
             const times = calculateRemainingTime(match);
@@ -1985,7 +2027,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return res.json({ success: true, timeout: true, match: publicMatchState(updated, userId) });
             }
 
-            const chess = new Chess(match.fen);
+            const chess = createMatchPosition(match);
+            if (!chess) return reject(409, "Chess match history is inconsistent. Refresh the match before moving.");
             let move;
             try {
                 move = chess.move({ from: from, to: to, promotion: requestedPromotion });
@@ -2057,4 +2100,5 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 };
 
 module.exports.settleMatch = settleMatch;
+module.exports.createMatchPosition = createMatchPosition;
 
