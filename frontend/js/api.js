@@ -19,7 +19,7 @@
     var API_BASE = window.GG_API_BASE ||
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
     var TOKEN_KEY = "goalGambitToken";
-    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk?v=1.2.0";
+    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk?v=1.2.1";
     // The APK is a static GitHub Pages asset, so download links must continue
     // working when the player's phone cannot reach the companion API.
     var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL;

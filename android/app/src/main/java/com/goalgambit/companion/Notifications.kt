@@ -225,9 +225,10 @@ object Notifications {
     }
 
     @JvmStatic
-    fun chessMatchIdFromEventKey(eventKey: String): Long {
-        if (!eventKey.startsWith("chess-match:")) return 0L
-        val parts = eventKey.split(":")
+    fun chessMatchIdFromEventKey(eventKey: String?): Long {
+        val key = eventKey.orEmpty()
+        if (!key.startsWith("chess-match:")) return 0L
+        val parts = key.split(":")
         if (parts.size != 4 || (parts[2] != "turn" && parts[2] != "finished")) return 0L
         val id = parts[1].toLongOrNull() ?: return 0L
         if (id <= 0) return 0L
