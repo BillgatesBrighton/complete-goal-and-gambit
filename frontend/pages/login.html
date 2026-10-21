@@ -227,6 +227,9 @@
 <script src="../js/api.js?v=20261019-companion-onboarding"></script>
 <script>
 (function openDashboardOnlyForValidSession() {
+    // Allow the support recovery form to be reached even from a browser that
+    // still has a valid signed-in session.
+    if (new URLSearchParams(location.search).get("recovery") === "1") return;
     if (!GG.getToken()) return;
     // A stale token must not redirect the user away from this page: doing so
     // hides the forgot-password flow and can trap them on the invalid-session
@@ -272,6 +275,11 @@ document.getElementById("loginForm").addEventListener("submit", async function (
 
 var resetPanel=document.getElementById("passwordResetPanel");
 var resetToggle=document.getElementById("openPasswordReset");
+var recoveryMode=new URLSearchParams(location.search).get("recovery") === "1";
+if(recoveryMode){
+    resetPanel.hidden=false;
+    resetToggle.setAttribute("aria-expanded","true");
+}
 resetToggle.addEventListener("click",function(){
     resetPanel.hidden=!resetPanel.hidden;
     resetToggle.setAttribute("aria-expanded",String(!resetPanel.hidden));
