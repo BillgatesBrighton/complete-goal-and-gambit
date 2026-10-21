@@ -42,7 +42,9 @@ function notificationBody(eventKey) {
     if (key.includes("maintenance")) return "Website maintenance update available.";
     if (key.startsWith("admin-announcement:") && key.includes(":reminder:")) return "Check out your games — competition starts soon!";
     if (key.startsWith("admin-announcement:")) return "New announcement available.";
-    if (key.includes("chess-schedule-reminder") || key.includes("match-start")) return "Your match starts soon. Get ready!";
+        if (key.startsWith("chess-match:") && key.includes(":turn:")) return "It is your turn in chess. Open your chessboard to continue.";
+        if (key.startsWith("chess-match:") && key.includes(":finished:")) return "Your chess match has ended. Open GOAL$GAMBIT to view the result.";
+        if (key.includes("chess-schedule-reminder") || key.includes("match-start")) return "Your match starts soon. Get ready!";
     if (key.includes("cancel")) return "Your match status has changed. Open GOAL$GAMBIT.";
     return "New GOAL$GAMBIT update available.";
 }
@@ -61,6 +63,7 @@ function preferenceEnabledSql(eventAlias, preferenceAlias) {
           THEN COALESCE(${preferenceAlias}.admin_announcements,TRUE)
         WHEN ${eventAlias}.event_key LIKE 'chess-schedule-reminder-%'
           OR ${eventAlias}.event_key LIKE 'chess-schedule-%'
+          OR ${eventAlias}.event_key LIKE 'chess-match:%'
           OR ${eventAlias}.event_key LIKE 'efootball-match:%'
           THEN COALESCE(${preferenceAlias}.match_reminders,TRUE)
         WHEN ${eventAlias}.event_key LIKE 'support-reply:%'

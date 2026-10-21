@@ -44,13 +44,20 @@ function matchRow(overrides = {}) {
     };
 }
 
-async function startChessApi(pool, io, userId = 41) {
+async function startChessApi(pool, io, userId = 41, pushService) {
     const app = express();
     app.use(express.json());
-    app.use("/api/chess", chessRoutes(pool, (req, _res, next) => {
+    const routePool = Object.create(pool);
+    if (typeof pool.query !== "function") {
+        routePool.query = async function (sql) {
+            if (String(sql).includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            throw new Error("Unexpected top-level SQL in test: " + String(sql).slice(0, 120));
+        };
+    }
+    app.use("/api/chess", chessRoutes(routePool, (req, _res, next) => {
         req.user = { userId };
         next();
-    }, io));
+    }, io, pushService));
     const server = http.createServer(app);
     await new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -90,6 +97,70 @@ test("ordinary active match GET returns without opening a settlement transaction
     assert.equal(body.match.matchId, 501);
     assert.equal(matchReads, 1);
     assert.equal(transactionStarts, 0);
+});
+
+test("a successful chess move queues a private turn alert for only the opponent without using the eFootball match id column", async t => {
+    let current = matchRow();
+    const notifications = [];
+    let resolveQueued;
+    const queued = new Promise(resolve => { resolveQueued = resolve; });
+    let connections = 0;
+    const pool = {
+        async query(sql) {
+            const text = String(sql);
+            if (text.includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            if (text.includes("FROM chess_matches m")) return { rows: [current] };
+            throw new Error("Unexpected top-level SQL in chess notification test: " + text.slice(0, 120));
+        },
+        async connect() {
+            connections++;
+            if (connections === 1) {
+                return {
+                    async query(sql, params) {
+                        const text = String(sql).trim();
+                        if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
+                        if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
+                        if (text.startsWith("UPDATE chess_matches SET fen=$1")) {
+                            current = matchRow({ fen: params[0], pgn: params[1], white_time_ms: params[2], black_time_ms: params[3], active_color: params[4], last_move_at: new Date() });
+                            return { rows: [] };
+                        }
+                        throw new Error("Unexpected chess move query: " + text.slice(0, 120));
+                    },
+                    release() {}
+                };
+            }
+            return {
+                async query(sql) {
+                    const text = String(sql).trim();
+                    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT chess_push_0|RELEASE SAVEPOINT chess_push_0)$/.test(text)) return { rows: [] };
+                    throw new Error("Unexpected chess notification transaction query: " + text);
+                },
+                release() {}
+            };
+        }
+    };
+    const pushService = {
+        async enqueueNotification(_client, userId, notification) {
+            notifications.push({ userId, notification });
+            resolveQueued();
+            return { created: true };
+        }
+    };
+    const api = await startChessApi(pool, null, 41, pushService);
+    t.after(api.close);
+
+    const response = await fetch(api.base + "/501/move", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: "e2", to: "e4" })
+    });
+    assert.equal(response.status, 200);
+    await Promise.race([queued, new Promise(resolve => setTimeout(resolve, 250))]);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].userId, 42);
+    assert.equal(notifications[0].notification.eventKey, "chess-match:501:turn:1");
+    assert.equal(notifications[0].notification.matchId, undefined, "chess IDs must not enter the existing eFootball-only push match_id column");
+    assert.equal(notifications[0].notification.androidOnly, true);
 });
 
 test("expired-clock GET rechecks under the existing row lock before settling", async t => {
@@ -225,17 +296,38 @@ class FakeElement {
     constructor() {
         this.children = [];
         this.dataset = {};
-        this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
+        this.attributes = {};
         this.style = {};
         this.listeners = {};
         this.disabled = false;
         this.hidden = false;
+        this.appendCount = 0;
+        this.textWriteCount = 0;
+        this._className = "";
+        this._textContent = "";
+        this._innerHTML = "";
+        this.classList = {
+            add: (...names) => { const classes = new Set(this.className.split(/\s+/).filter(Boolean)); names.forEach(name => classes.add(name)); this.className = [...classes].join(" "); },
+            remove: (...names) => { const classes = new Set(this.className.split(/\s+/).filter(Boolean)); names.forEach(name => classes.delete(name)); this.className = [...classes].join(" "); },
+            toggle: (name, force) => { const present = this.classList.contains(name); const next = force === undefined ? !present : Boolean(force); if (next) this.classList.add(name); else this.classList.remove(name); return next; },
+            contains: name => this.className.split(/\s+/).includes(name)
+        };
     }
+    get className() { return this._className; }
+    set className(value) { this._className = String(value || ""); }
+    get textContent() { return this._textContent; }
+    set textContent(value) { this._textContent = String(value ?? ""); this.textWriteCount++; this.children = []; }
+    get innerHTML() { return this._innerHTML; }
+    set innerHTML(value) { this._innerHTML = String(value ?? ""); if (this._innerHTML === "") this.children = []; }
     addEventListener(name, callback) { this.listeners[name] = callback; }
-    appendChild(child) { this.children.push(child); return child; }
-    append(...children) { this.children.push(...children); }
-    setAttribute() {}
+    appendChild(child) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child); this.children.push(child); child.parentElement = this; child.parentNode = this; this.appendCount++; return child; }
+    append(...children) { children.forEach(child => this.appendChild(child)); }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return this.attributes[name] ?? null; }
     focus() {}
+    setPointerCapture(pointerId) { this.pointerCapture = pointerId; }
+    releasePointerCapture(pointerId) { if (this.pointerCapture === pointerId) this.pointerCapture = null; }
+    hasPointerCapture(pointerId) { return this.pointerCapture === pointerId; }
 }
 
 class FakeSocket {
@@ -266,7 +358,7 @@ function responseFor(data) {
     return { ok: true, status: 200, json: async () => data };
 }
 
-function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, storage = new Map(), online = true } = {}) {
+function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, storage = new Map(), online = true, clock = { now: () => globalThis.performance.now() }, indexedDB = null } = {}) {
     const elements = new Map();
     const documentListeners = {};
     const windows = [];
@@ -276,10 +368,13 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         hidden: false,
         getElementById(id) { if (!elements.has(id)) elements.set(id, new FakeElement()); return elements.get(id); },
         createElement() { return new FakeElement(); },
+        elementFromPoint() { return null; },
         addEventListener(name, callback) { documentListeners[name] = callback; }
     };
     const windowObject = {
         GG_API_BASE: "https://api.test",
+        performance: clock,
+        indexedDB,
         addEventListener(name, callback) { windowListeners[name] = callback; },
         io() { const socket = new FakeSocket(); windows.push(socket); return socket; }
     };
@@ -313,14 +408,37 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         .replace(/^import\s+\{\s*Chess\s*\}\s+from\s+["'][^"']+["'];\s*/m, "");
     context.Chess = BrowserChess;
     vm.createContext(context);
-    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,getState:()=>state,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict};", context);
-    return { board: context.__boardTest, document, documentListeners, windowListeners, sockets: windows, delays, storage, setOnline(value) { context.navigator.onLine = value; } };
+    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
+    return { board: context.__boardTest, document, elements, documentListeners, windowListeners, sockets: windows, delays, storage, clock, setOnline(value) { context.navigator.onLine = value; } };
 }
 
 function deferred() {
     let resolve;
     const promise = new Promise(done => { resolve = done; });
     return { promise, resolve };
+}
+
+function delayedIndexedDb(delayMs = 35) {
+    const records = new Map();
+    const database = {
+        objectStoreNames: { contains: () => true },
+        transaction(_storeName, mode) {
+            const transaction = { oncomplete: null, onerror: null, onabort: null, error: null };
+            transaction.objectStore = () => ({
+                get(key) {
+                    const request = { result: records.get(Number(key)) || null, onsuccess: null, onerror: null, error: null };
+                    setTimeout(() => request.onsuccess?.(), delayMs);
+                    return request;
+                },
+                put(record) {
+                    records.set(Number(record.matchId), structuredClone(record));
+                    setTimeout(() => transaction.oncomplete?.(), delayMs);
+                }
+            });
+            return transaction;
+        }
+    };
+    return { records, open() { const request = { result: database, onsuccess: null, onerror: null, onblocked: null }; queueMicrotask(() => request.onsuccess?.()); return request; } };
 }
 
 function latencyPercentile(samples, percentile) {
@@ -442,6 +560,136 @@ test("piece selection calculates legal hints locally without a legal-moves API r
     assert.deepEqual(harness.board.getLegalTargets().map(move => move.to), ["e3", "e4"]);
     assert.equal(requests, 0);
     t.diagnostic("Local legal selection/highlighting (30 samples, chess.js + mocked DOM; no network or browser paint): p50 " + latencyPercentile(selectionSamples, 0.5).toFixed(3) + " ms, p95 " + latencyPercentile(selectionSamples, 0.95).toFixed(3) + " ms.");
+});
+
+test("board updates reuse the same accessible squares and click handlers", () => {
+    const harness = createBoardHarness(async () => { throw new Error("Rendering must not make requests"); }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    const board = harness.document.getElementById("chessBoard");
+    const initialNodes = board.children.slice();
+    const initialHandlers = initialNodes.map(square => square.listeners.click);
+    const initialAppends = board.appendCount;
+
+    harness.board.selectPiece("e2");
+    harness.board.renderBoard();
+
+    assert.equal(board.children.length, 64);
+    assert.equal(board.appendCount, initialAppends, "ordinary updates must not detach and rebuild board squares");
+    assert.deepEqual(board.children, initialNodes, "all 64 square elements should retain their identity and order");
+    assert.deepEqual(board.children.map(square => square.listeners.click), initialHandlers, "rendering must not add or replace per-square click handlers");
+    assert.match(harness.board.getBoardSquares().get("e2").element.getAttribute("aria-label"), /e2 white p/);
+    assert.ok(harness.board.getBoardSquares().get("e2").element.classList.contains("selected"));
+    assert.ok(harness.board.getBoardSquares().get("e4").element.classList.contains("possible-move"));
+});
+
+test("measures synchronous local move response separately from storage and network", async t => {
+    const harness = createBoardHarness(async () => { throw new Error("Offline local benchmark must not call the backend"); }, { search: "", online: false });
+    harness.board.setMatchId(1);
+    const expected = new BrowserChess(INITIAL_FEN);
+    expected.move({ from: "e2", to: "e4" });
+    const samples = [];
+    for (let index = 0; index < 30; index++) {
+        harness.board.applyState(browserMatch(1));
+        const startedAt = performance.now();
+        const pendingSync = harness.board.sendMove("e2", "e4");
+        samples.push(performance.now() - startedAt);
+        assert.equal(harness.board.getState().fen, expected.fen(), "the local board must update before the persistence promise resolves");
+        await pendingSync;
+    }
+    t.diagnostic("Synchronous legal move-to-board update (30 samples, mocked DOM; excludes storage/network): p50 " + latencyPercentile(samples, 0.5).toFixed(3) + " ms, p95 " + latencyPercentile(samples, 0.95).toFixed(3) + " ms.");
+});
+
+test("pointer dragging selects locally and makes the dropped legal move immediately", async () => {
+    const harness = createBoardHarness(async () => { throw new Error("Offline drag must not submit a request"); }, { search: "", online: false });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    const squares = harness.board.getBoardSquares();
+    let prevented = false;
+    harness.board.handleBoardPointerDown({ target: squares.get("e2").element, pointerId: 7, isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    harness.board.handleBoardPointerMove({ target: harness.document.getElementById("chessBoard"), pointerId: 7, clientX: 40, clientY: 40, preventDefault() { prevented = true; } });
+    harness.document.elementFromPoint = () => squares.get("e4").element;
+    harness.board.handleBoardPointerUp({ target: harness.document.getElementById("chessBoard"), pointerId: 7, clientX: 100, clientY: 100 });
+
+    const local = new BrowserChess(INITIAL_FEN);
+    local.move({ from: "e2", to: "e4" });
+    assert.equal(prevented, true, "pointer movement should be captured only after crossing the drag threshold");
+    assert.equal(harness.board.getState().fen, local.fen(), "the board should change on drop without waiting for local storage");
+    assert.equal(harness.board.getState().activeColor, "b");
+    await new Promise(resolve => setImmediate(resolve));
+});
+
+test("local board paints before delayed recovery storage and guards against unloading an unwritten move", async () => {
+    const indexedDB = delayedIndexedDb(30);
+    let posts = 0;
+    const confirmed = new BrowserChess(INITIAL_FEN);
+    confirmed.move({ from: "e2", to: "e4" });
+    const serverState = browserMatch(1, confirmed.pgn());
+    serverState.fen = confirmed.fen();
+    serverState.activeColor = "b";
+    const harness = createBoardHarness(async (url, options = {}) => {
+        if (url.endsWith("/move") && options.method === "POST") { posts++; return responseFor({ success: true, match: serverState }); }
+        throw new Error("Unexpected delayed storage request: " + url);
+    }, { search: "", indexedDB });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+
+    const moveCompletion = harness.board.sendMove("e2", "e4");
+    assert.equal(harness.board.getState().fen, confirmed.fen(), "local position should update in the same interaction turn");
+    assert.equal(harness.board.getPendingMovePersistence(), 1);
+    assert.equal(posts, 0, "network sync should wait for the durable local recovery write");
+    let prompted = false;
+    const unloadEvent = { preventDefault() { prompted = true; }, returnValue: undefined };
+    harness.windowListeners.beforeunload(unloadEvent);
+    assert.equal(prompted, true, "the browser should warn if a move could be lost by an immediate reload");
+
+    assert.equal(await moveCompletion, true);
+    assert.equal(posts, 1);
+    assert.equal(harness.board.getPendingMovePersistence(), 0);
+    prompted = false;
+    harness.windowListeners.beforeunload({ preventDefault() { prompted = true; }, returnValue: undefined });
+    assert.equal(prompted, false, "a fully persisted move should not block normal navigation");
+});
+
+test("recovery persistence failure is visible and prevents sending an unrecorded move", async () => {
+    const indexedDB = { open() { const request = { result: null, onsuccess: null, onerror: null, onblocked: null, error: new Error("IndexedDB unavailable") }; queueMicrotask(() => request.onerror?.()); return request; } };
+    const harness = createBoardHarness(async () => { throw new Error("An unrecorded move must never reach the backend"); }, { search: "", indexedDB });
+    const originalSet = harness.storage.set.bind(harness.storage);
+    harness.storage.set = (key, value) => {
+        if (String(key).startsWith("goalGambitChessOffline:")) throw new Error("Local storage unavailable");
+        return originalSet(key, value);
+    };
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    const pending = harness.board.sendMove("e2", "e4");
+    const expected = new BrowserChess(INITIAL_FEN);
+    expected.move({ from: "e2", to: "e4" });
+    assert.equal(harness.board.getState().fen, expected.fen(), "the attempted move remains visible immediately");
+    assert.equal(await pending, false);
+    assert.match(harness.document.getElementById("connectionStatus").textContent, /could not save this move/i);
+    assert.match(harness.document.getElementById("gameStatus").textContent, /recovery storage failed/i);
+});
+
+test("displayed bullet clock uses monotonic elapsed time and skips unchanged text writes", () => {
+    let now = 500;
+    const clock = { now: () => now };
+    const harness = createBoardHarness(async () => { throw new Error("Clock display must not make requests"); }, { search: "", clock });
+    harness.board.setMatchId(1);
+    const position = browserMatch(1);
+    position.timeControl = "1+0";
+    position.whiteTimeMs = 6000;
+    position.blackTimeMs = 6000;
+    harness.board.applyState(position);
+    const whiteClock = harness.document.getElementById("whiteClock");
+    const firstWriteCount = whiteClock.textWriteCount;
+
+    now = 650;
+    harness.board.updateClocks();
+    assert.equal(whiteClock.textWriteCount, firstWriteCount, "sub-second timer ticks should not rewrite an unchanged display");
+    now = 1500;
+    harness.board.updateClocks();
+    assert.equal(whiteClock.textContent, "00:05", "elapsed clock time should follow performance.now even if wall time does not change");
+    assert.equal(whiteClock.textWriteCount, firstWriteCount + 1);
 });
 
 test("local rules cover castling, en passant, check safety and all promotion choices", async () => {
@@ -713,6 +961,115 @@ test("move confirmation avoids a duplicate GET when an overlapping refresh alrea
     assert.equal(harness.board.getState().fen, confirmed.fen);
 });
 
+test("optimistic local moves stay interactive while backend submissions remain ordered", async () => {
+    const firstResponse = deferred();
+    const secondResponse = deferred();
+    let firstStarted;
+    let secondStarted;
+    const firstRequestStarted = new Promise(resolve => { firstStarted = resolve; });
+    const secondRequestStarted = new Promise(resolve => { secondStarted = resolve; });
+    const submitted = [];
+    const harness = createBoardHarness(async (url, options = {}) => {
+        if (url.endsWith("/move") && options.method === "POST") {
+            submitted.push(JSON.parse(options.body));
+            if (submitted.length === 1) { firstStarted(); return firstResponse.promise; }
+            if (submitted.length === 2) { secondStarted(); return secondResponse.promise; }
+        }
+        throw new Error("Unexpected queued move request: " + url);
+    }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    await new Promise(resolve => setImmediate(resolve));
+
+    const firstMove = harness.board.sendMove("e2", "e4");
+    const afterWhite = new BrowserChess(INITIAL_FEN);
+    afterWhite.move({ from: "e2", to: "e4" });
+    assert.equal(harness.board.getState().fen, afterWhite.fen(), "the first move should render synchronously");
+    assert.equal(await harness.board.sendMove("e7", "e5"), false, "turn enforcement must still reject a second move by white");
+    await firstRequestStarted;
+
+    const afterBlack = new BrowserChess(INITIAL_FEN);
+    afterBlack.move({ from: "e2", to: "e4" });
+    afterBlack.move({ from: "e7", to: "e5" });
+    const authoritativeAfterBlack = browserMatch(1, afterBlack.pgn());
+    authoritativeAfterBlack.fen = afterBlack.fen();
+    authoritativeAfterBlack.activeColor = "w";
+    harness.board.applyState(authoritativeAfterBlack);
+    harness.board.selectPiece("g1");
+    assert.equal(harness.board.getSelectedSquare(), "g1", "a delayed earlier HTTP response must not block the next legitimate turn");
+
+    const secondMove = harness.board.sendMove("g1", "f3");
+    const afterKnight = new BrowserChess(INITIAL_FEN);
+    afterKnight.move({ from: "e2", to: "e4" });
+    afterKnight.move({ from: "e7", to: "e5" });
+    afterKnight.move({ from: "g1", to: "f3" });
+    assert.equal(harness.board.getState().fen, afterKnight.fen(), "the later legal move should also render immediately");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(submitted.length, 1, "the per-match queue must wait for the earlier response before posting the next move");
+
+    const confirmedWhite = browserMatch(1, afterWhite.pgn());
+    confirmedWhite.fen = afterWhite.fen();
+    confirmedWhite.activeColor = "b";
+    firstResponse.resolve(responseFor({ success: true, match: confirmedWhite }));
+    await secondRequestStarted;
+    assert.deepEqual(submitted.map(move => [move.from, move.to]), [["e2", "e4"], ["g1", "f3"]]);
+
+    const confirmedKnight = browserMatch(1, afterKnight.pgn());
+    confirmedKnight.fen = afterKnight.fen();
+    confirmedKnight.activeColor = "b";
+    secondResponse.resolve(responseFor({ success: true, match: confirmedKnight }));
+    assert.deepEqual(await Promise.all([firstMove, secondMove]), [true, true]);
+    assert.equal(harness.board.getState().fen, confirmedKnight.fen, "an older acknowledgement must not roll back the newer board state");
+    await new Promise(resolve => setImmediate(resolve));
+    const saved = await harness.board.readOfflineRecord(1);
+    assert.ok(saved.moves.every(move => move.serverAcknowledged), "both ordered local records should retain their server acknowledgement");
+});
+
+test("two player boards exchange turns through authoritative match snapshots", async () => {
+    const serverRules = new BrowserChess(INITIAL_FEN);
+    let serverMatch = browserMatch(1);
+    const serverStateFor = color => ({ ...serverMatch, playerColor: color });
+    const createServerFetch = color => async (url, options = {}) => {
+        if (url.endsWith("/move") && options.method === "POST") {
+            const submitted = JSON.parse(options.body);
+            assert.equal(serverRules.turn(), color, "the server mock should accept only the authoritative side to move");
+            const move = serverRules.move({ from: submitted.from, to: submitted.to, promotion: submitted.promotion });
+            assert.ok(move, "the server mock should reject illegal moves");
+            serverMatch = { ...serverMatch, fen: serverRules.fen(), pgn: serverRules.pgn(), activeColor: serverRules.turn(), lastMove: { from: move.from, to: move.to } };
+            return responseFor({ success: true, match: serverStateFor(color) });
+        }
+        if (url.endsWith("/api/chess/1")) return responseFor({ success: true, match: serverStateFor(color) });
+        throw new Error("Unexpected two-board request: " + url);
+    };
+    const white = createBoardHarness(createServerFetch("w"), { search: "" });
+    const blackStorage = new Map([["goalGambitUserId", "42"], ["goalGambitUsername", "black-player"]]);
+    const black = createBoardHarness(createServerFetch("b"), { search: "", storage: blackStorage });
+    white.board.setMatchId(1);
+    black.board.setMatchId(1);
+    white.board.applyState(serverStateFor("w"));
+    black.board.applyState(serverStateFor("b"));
+
+    assert.equal(await black.board.sendMove("e7", "e5"), false, "black cannot move while the authoritative turn is white");
+    const whiteMove = white.board.sendMove("e2", "e4");
+    const expectedAfterWhite = new BrowserChess(INITIAL_FEN);
+    expectedAfterWhite.move({ from: "e2", to: "e4" });
+    assert.equal(white.board.getState().fen, expectedAfterWhite.fen(), "white should see its local move immediately");
+    assert.equal(await whiteMove, true);
+    black.board.applyState(serverStateFor("b"));
+
+    const blackMove = black.board.sendMove("e7", "e5");
+    const expectedFinal = new BrowserChess(INITIAL_FEN);
+    expectedFinal.move({ from: "e2", to: "e4" });
+    expectedFinal.move({ from: "e7", to: "e5" });
+    assert.equal(black.board.getState().fen, expectedFinal.fen(), "black should also see its move immediately");
+    assert.equal(await blackMove, true);
+    white.board.applyState(serverStateFor("w"));
+
+    assert.equal(white.board.getState().fen, serverRules.fen());
+    assert.equal(black.board.getState().fen, serverRules.fen());
+    assert.equal(white.board.getState().pgn, black.board.getState().pgn);
+});
+
 test("measures move-confirmation client processing separately from network latency", async t => {
     let requests = 0;
     const harness = createBoardHarness(async (url, options = {}) => {
@@ -741,7 +1098,7 @@ test("measures move-confirmation client processing separately from network laten
     t.diagnostic("Move confirmation client path (30 samples, mocked immediate API; excludes network/server latency): p50 " + latencyPercentile(samples, 0.5).toFixed(3) + " ms, p95 " + latencyPercentile(samples, 0.95).toFixed(3) + " ms.");
 });
 
-test("move confirmation refreshes when the board already advanced beyond the HTTP response", async () => {
+test("move confirmation keeps a newer authoritative snapshot that already includes the move", async () => {
     const postResponse = deferred();
     let postStarted;
     const started = new Promise(resolve => { postStarted = resolve; });
@@ -774,6 +1131,6 @@ test("move confirmation refreshes when the board already advanced beyond the HTT
     await confirmation;
     await new Promise(resolve => setImmediate(resolve));
 
-    assert.equal(getRequests, 1, "a follow-up GET is needed when an already-applied state differs from the move response");
+    assert.equal(getRequests, 0, "a newer authoritative snapshot already includes the submitted move, so another GET is redundant");
     assert.equal(harness.board.getState().pgn, newer.pgn, "the more recent authoritative state must be retained");
 });

@@ -10,9 +10,10 @@ const { recordJournal } = require("../services/financialLedger");
 const {
     ensureTournamentRound, ensureLeagueRound,
 } = require("../services/efootballtournament");
+const { getEfootballScheduleState } = require("../services/efootballScheduleRules");
 const { analyzeScreenshot, matchesExpected } = require("../services/imageverification");
 
-module.exports = function (pool, authenticateToken, io, pushService) {
+module.exports = function (pool, authenticateToken, io, pushService, efootballScheduler) {
 
     const router = express.Router();
     const SEARCH_PRESENCE_TTL_SECONDS = 120;
@@ -172,17 +173,19 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            const clock = await client.query("SELECT NOW() AS now");
+            const schedule = getEfootballScheduleState(clock.rows[0].now);
             const stale = await client.query(
-                `SELECT id, creator_id, stake_amount
+                `SELECT id, creator_id, stake_amount, league_fixture_id, tournament_fixture_id
                    FROM efootball_matches
                   WHERE status='waiting'
                     AND opponent_id IS NULL
-                    AND (search_last_seen_at IS NULL OR search_last_seen_at < NOW() - ($1::int * INTERVAL '1 second'))
+                    AND ((search_last_seen_at IS NULL OR search_last_seen_at < NOW() - ($1::int * INTERVAL '1 second')) OR $3::boolean)
                     AND ($2::int IS NULL OR creator_id=$2)
                   ORDER BY COALESCE(search_last_seen_at, created_at), id
                   LIMIT 100
                   FOR UPDATE`,
-                [SEARCH_PRESENCE_TTL_SECONDS, onlyUserId]
+                [SEARCH_PRESENCE_TTL_SECONDS, onlyUserId, !schedule.isMatchmakingOpen]
             );
 
             for (const match of stale.rows) {
@@ -221,24 +224,54 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
                 await client.query(
                     `UPDATE efootball_matches
-                        SET status='cancelled', result_status='search_expired',
+                        SET status='cancelled', result_status=$2,
                             finished_at=NOW(), settled_at=NOW()
                       WHERE id=$1 AND status='waiting' AND opponent_id IS NULL`,
-                    [match.id]
+                    [match.id, !schedule.isMatchmakingOpen ? "daily_window_closed" : "search_expired"]
                 );
+                if (match.league_fixture_id) {
+                    await client.query(
+                        "UPDATE efootball_league_fixtures SET match_id=NULL,status='scheduled' WHERE id=$1 AND match_id=$2 AND status='playing'",
+                        [match.league_fixture_id, match.id]
+                    );
+                }
+                if (match.tournament_fixture_id) {
+                    await client.query(
+                        "UPDATE efootball_tournament_fixtures SET match_id=NULL,status='scheduled' WHERE id=$1 AND match_id=$2 AND status='playing'",
+                        [match.tournament_fixture_id, match.id]
+                    );
+                }
+                const closedMessage = "Daily eFootball matchmaking is closed until 4:00 PM EAT. Your unmatched stake was returned; any league or tournament fixture remains scheduled for the next playing window.";
                 await createSystemNotification(
                     client,
                     match.creator_id,
-                    "match_search_expired",
-                    "Match search expired",
-                    stake > 0
-                        ? "Your search expired after the Match Hub stopped checking in. Your locked stake was refunded."
-                        : "Your search expired after the Match Hub stopped checking in. Start a new search when ready.",
+                    !schedule.isMatchmakingOpen ? "match_search_window_closed" : "match_search_expired",
+                    !schedule.isMatchmakingOpen ? "Matchmaking closed" : "Match search expired",
+                    !schedule.isMatchmakingOpen
+                        ? closedMessage
+                        : stake > 0
+                            ? "Your search expired after the Match Hub stopped checking in. Your locked stake was refunded."
+                            : "Your search expired after the Match Hub stopped checking in. Start a new search when ready.",
                     match.id
                 );
+                await queuePush(client, match.creator_id, {
+                    eventKey: "efootball-match:" + match.id + ":search-expired",
+                    matchId: match.id,
+                    title: !schedule.isMatchmakingOpen ? "Matchmaking closed" : "Match search expired",
+                    body: !schedule.isMatchmakingOpen ? "New eFootball searches reopen at 4:00 PM EAT. Your unmatched stake was returned." : "Your unmatched eFootball search expired; any locked stake was returned.",
+                    page: "match-hub"
+                });
             }
 
             await client.query("COMMIT");
+            for (const match of stale.rows) {
+                emitMatchUpdate(
+                    Number(match.creator_id),
+                    Number(match.id),
+                    !schedule.isMatchmakingOpen ? "daily-window-closed" : "search-expired"
+                );
+            }
+            if (stale.rows.length) wakePushQueue();
             return stale.rows.length;
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
@@ -268,6 +301,46 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         return null;
     }
 
+    async function announceCompetitionRound(client, type, competitionId, round) {
+        if (!round || !round.deadline_at) return;
+        const isTournament = type === "tournament";
+        const participants = await client.query(
+            isTournament
+                ? `SELECT DISTINCT participant_id FROM (
+                       SELECT home_id AS participant_id FROM efootball_tournament_fixtures
+                        WHERE tournament_id=$1 AND round_number=$2 AND away_id IS NOT NULL AND status IN ('scheduled','playing')
+                       UNION ALL
+                       SELECT away_id AS participant_id FROM efootball_tournament_fixtures
+                        WHERE tournament_id=$1 AND round_number=$2 AND away_id IS NOT NULL AND status IN ('scheduled','playing')
+                   ) players WHERE participant_id IS NOT NULL ORDER BY participant_id`
+                : `SELECT DISTINCT participant_id FROM (
+                       SELECT home_id AS participant_id FROM efootball_league_fixtures
+                        WHERE league_id=$1 AND round_number=$2 AND away_id IS NOT NULL AND status IN ('scheduled','playing')
+                       UNION ALL
+                       SELECT away_id AS participant_id FROM efootball_league_fixtures
+                        WHERE league_id=$1 AND round_number=$2 AND away_id IS NOT NULL AND status IN ('scheduled','playing')
+                   ) players WHERE participant_id IS NOT NULL ORDER BY participant_id`,
+            [Number(competitionId), Number(round.round_number)]
+        );
+        for (const row of participants.rows) {
+            const userId = Number(row.participant_id);
+            const key = isTournament && Number(round.round_number) === 1
+                ? "efootball-tournament:" + Number(competitionId) + ":started"
+                : isTournament
+                    ? "efootball-tournament:" + Number(competitionId) + ":round:" + Number(round.round_number) + ":ready:" + userId
+                    : "efootball-league:" + Number(competitionId) + ":round:" + Number(round.round_number) + ":ready:" + userId;
+            const queued = await queuePush(client, userId, {
+                eventKey: key,
+                title: "eFootball fixtures are ready",
+                body: "Your " + type + " round " + Number(round.round_number) + " fixture is ready in the Match Hub.",
+                page: "match-hub"
+            });
+            if (queued && queued.created && io) {
+                io.to("user_" + userId).emit("efootball:match-update", { scheduleChanged: true, reason: "fixtures-scheduled" });
+            }
+        }
+    }
+
     function emitMatchUpdate(userId, matchId, reason) {
         if (!io || !userId) return;
         io.to("user_" + Number(userId)).emit("efootball:match-update", {
@@ -280,6 +353,14 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         if (pushService && typeof pushService.sendPendingJobs === "function") {
             pushService.sendPendingJobs().catch(() => {});
         }
+    }
+
+    async function recordMatchmakingRejection(userId, reason, mode) {
+        await pool.query(
+            `INSERT INTO efootball_matchmaking_rejections(user_id,reason,mode)
+             VALUES($1,$2,$3)`,
+            [Number(userId), String(reason).slice(0, 40), String(mode || "ranked").slice(0, 30)]
+        ).catch(() => {});
     }
 
     async function settleTournamentWalkover(matchId) {
@@ -787,6 +868,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 leagueId = Number(member.rows[0].id);
                 const round = await ensureLeagueRound(client, leagueId, true);
                 if (!round || round.completed_at) throw Object.assign(new Error("This league round has ended. Refresh the fixtures for the next round."), { status: 409 });
+                await announceCompetitionRound(client, "league", leagueId, round);
                 const fixture = await client.query(
                     `SELECT f.id,f.home_id,f.away_id,f.match_id,m.status AS match_status
                        FROM efootball_league_fixtures f
@@ -816,6 +898,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 if (!member.rows[0].group_code) throw Object.assign(new Error("Your tournament group is not assigned yet. Please refresh and try again."), { status: 409 });
                 const round = await ensureTournamentRound(client, tournamentId, true);
                 if (!round || round.completed_at) throw Object.assign(new Error("This tournament round has ended. Refresh the fixtures for the next round."), { status: 409 });
+                await announceCompetitionRound(client, "tournament", tournamentId, round);
                 let fixture = await client.query(
                     `SELECT f.id, f.home_id, f.away_id, f.match_id, m.status AS match_status
                        FROM efootball_tournament_fixtures f
@@ -869,10 +952,42 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return res.json({ success: true, matched: Boolean(match.opponentFound), match: match });
             }
 
+            const clock = await client.query("SELECT NOW() AS now");
+            const schedule = getEfootballScheduleState(clock.rows[0].now);
+            if (!schedule.isMatchmakingOpen) {
+                const error = Object.assign(
+                    new Error("New eFootball matchmaking is closed. It opens daily at 4:00 PM EAT and closes at 12:50 AM EAT."),
+                    { status: 409, code: "MATCHMAKING_WINDOW_CLOSED" }
+                );
+                throw error;
+            }
+
             const candidate = await client.query(
                 `SELECT waiting.id, waiting.creator_id
                    FROM efootball_matches waiting
                    JOIN users waiting_player ON waiting_player.id=waiting.creator_id
+                   LEFT JOIN LATERAL (
+                       SELECT
+                           (SELECT COUNT(*) FROM efootball_matches day_match
+                             WHERE day_match.mode='ranked' AND day_match.opponent_id IS NOT NULL
+                               AND (day_match.creator_id=waiting.creator_id OR day_match.opponent_id=waiting.creator_id)
+                               AND day_match.status<>'cancelled'
+                               AND day_match.created_at >= ((NOW() AT TIME ZONE 'Africa/Nairobi')::date::timestamp AT TIME ZONE 'Africa/Nairobi')
+                               AND day_match.created_at < (((NOW() AT TIME ZONE 'Africa/Nairobi')::date + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'))
+                         + (SELECT COUNT(*) FROM efootball_league_fixtures f
+                             JOIN efootball_league_rounds r ON r.league_id=f.league_id AND r.round_number=f.round_number
+                            WHERE (f.home_id=waiting.creator_id OR f.away_id=waiting.creator_id)
+                              AND f.away_id IS NOT NULL AND f.status IN ('scheduled','playing','completed','walkover','draw')
+                              AND r.starts_at >= ((NOW() AT TIME ZONE 'Africa/Nairobi')::date::timestamp AT TIME ZONE 'Africa/Nairobi')
+                              AND r.starts_at < (((NOW() AT TIME ZONE 'Africa/Nairobi')::date + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'))
+                         + (SELECT COUNT(*) FROM efootball_tournament_fixtures f
+                             JOIN efootball_tournament_rounds r ON r.tournament_id=f.tournament_id AND r.round_number=f.round_number
+                            WHERE (f.home_id=waiting.creator_id OR f.away_id=waiting.creator_id)
+                              AND f.away_id IS NOT NULL AND f.status IN ('scheduled','playing','completed','walkover','draw')
+                              AND r.starts_at >= ((NOW() AT TIME ZONE 'Africa/Nairobi')::date::timestamp AT TIME ZONE 'Africa/Nairobi')
+                              AND r.starts_at < (((NOW() AT TIME ZONE 'Africa/Nairobi')::date + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'))
+                           AS scheduled_count
+                   ) daily ON TRUE
                   WHERE waiting.status='waiting' AND waiting.opponent_id IS NULL
                     AND waiting.creator_id<>$1 AND waiting.mode=$2
                     AND waiting.league IS NOT DISTINCT FROM $3
@@ -890,7 +1005,16 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                            AND other.status IN ('waiting','ready','playing','awaiting_verification','disputed')
                            AND (other.creator_id=waiting.creator_id OR other.opponent_id=waiting.creator_id)
                     )
-                  ORDER BY waiting.created_at, waiting.id LIMIT 1 FOR UPDATE OF waiting SKIP LOCKED`,
+                  ORDER BY
+                    CASE WHEN COALESCE(daily.scheduled_count,0) < 4 THEN 0 ELSE 1 END,
+                    COALESCE(daily.scheduled_count,0),
+                    (
+                        SELECT COUNT(*) FROM efootball_matches prior
+                         WHERE prior.mode='ranked' AND prior.opponent_id IS NOT NULL
+                           AND prior.status NOT IN ('cancelled','waiting')
+                           AND ((prior.creator_id=waiting.creator_id AND prior.opponent_id=$1)
+                             OR (prior.creator_id=$1 AND prior.opponent_id=waiting.creator_id))
+                    ), waiting.created_at, waiting.id LIMIT 1 FOR UPDATE OF waiting SKIP LOCKED`,
                 [userId, mode, league, roundName, tournamentId, stake, SEARCH_PRESENCE_TTL_SECONDS, tournamentFixtureId, leagueFixtureId]
             );
 
@@ -1003,6 +1127,18 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             return res.status(201).json({ success: true, matched: false, message: "Searching for an opponent.", match: match });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
+            if (error.code === "MATCHMAKING_WINDOW_CLOSED") await recordMatchmakingRejection(userId, "outside_gaming_window", mode);
+            else if (error.status === 402) await recordMatchmakingRejection(userId, "insufficient_funds", mode);
+            else if (error.status >= 400 && error.status < 500) {
+                const reason = error.status === 403
+                    ? "account_or_competition_ineligible"
+                    : error.status === 409
+                        ? "active_match_or_fixture_unavailable"
+                        : error.status === 400
+                            ? "invalid_matchmaking_request"
+                            : "matchmaking_request_rejected";
+                await recordMatchmakingRejection(userId, reason, mode);
+            }
             if (error.status) return res.status(error.status).json({ success: false, message: error.message });
             console.error("eFootball matchmaking error:", error.message);
             return res.status(500).json({ success: false, message: "Unable to start eFootball matchmaking." });
@@ -1431,6 +1567,18 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 if (!["waiting", "ready"].includes(match.status)) {
                     await client.query("ROLLBACK");
                     return res.status(409).json({ success: false, message: "This match is no longer waiting for players to get ready." });
+                }
+
+                const clock = await client.query("SELECT NOW() AS now");
+                const schedule = getEfootballScheduleState(clock.rows[0].now);
+                if (!schedule.isSessionActive) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({
+                        success: false,
+                        code: "EFOOTBALL_SESSION_CLOSED",
+                        nextOpensAt: schedule.nextOpensAt,
+                        message: "The eFootball session has ended for today. Your confirmed match is saved; both players can mark ready after 4:00 PM EAT."
+                    });
                 }
 
                 if (!match.code_sent || !match.external_room_code || match.code_correction_requested_at) {
@@ -2549,9 +2697,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         async (req, res) => {
 
             try {
-
-                const result =
-                    await pool.query(
+                const result = await pool.query(
                         `
                         UPDATE system_notifications
 
@@ -2610,8 +2756,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             try {
 
-                const result =
-                    await pool.query(
+                const [result, clock] = await Promise.all([
+                    pool.query(
                         `
                         SELECT
                             COUNT(*) FILTER (
@@ -2631,11 +2777,24 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                             OR opponent_id = $1
                         `,
                         [req.user.userId]
-                    );
+                    ),
+                    pool.query("SELECT NOW() AS now")
+                ]);
+                const daily = efootballScheduler && typeof efootballScheduler.dailyCounts === "function"
+                    ? await efootballScheduler.dailyCounts(pool, Number(req.user.userId))
+                    : { scheduled_fixtures: 0, completed_games: 0 };
 
                 return res.json({
                     success: true,
-                    status: result.rows[0]
+                    status: result.rows[0],
+                    gamingWindow: getEfootballScheduleState(clock.rows[0].now),
+                    dailyFixtures: {
+                        assigned: Number(daily.assigned_fixtures || 0),
+                        scheduled: Number(daily.assigned_fixtures || 0),
+                        completed: Number(daily.completed_games || 0),
+                        target: 4,
+                        remaining: Math.max(0, 4 - Number(daily.assigned_fixtures || 0))
+                    }
                 });
 
             } catch (error) {

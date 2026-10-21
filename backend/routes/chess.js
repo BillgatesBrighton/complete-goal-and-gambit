@@ -1347,9 +1347,70 @@ try {
 // helpers that survived. Create-match, matchmaking, move, draw offer
 // and flag-timer routes still need to be restored/written.
 //
-module.exports = function (pool, authenticateToken, io) {
+module.exports = function (pool, authenticateToken, io, pushService) {
 
     const router = express.Router();
+
+    // Companion alerts are a notification-only bridge: the website remains the
+    // game client and the backend remains authoritative. Keep chess match IDs
+    // in the event key because push_notification_events.match_id references
+    // eFootball matches in the existing schema.
+    function queueChessNotifications(matchId, recipientIds, suffix, title, body) {
+        if (!pushService || typeof pushService.enqueueNotification !== "function") return;
+        const id = Number(matchId);
+        const recipients = Array.from(new Set((recipientIds || []).map(Number)))
+            .filter(function (userId) { return Number.isSafeInteger(userId) && userId > 0; });
+        if (!Number.isSafeInteger(id) || id <= 0 || !recipients.length) return;
+
+        (async function () {
+            const client = await pool.connect();
+            let inTransaction = false;
+            try {
+                await client.query("BEGIN");
+                inTransaction = true;
+                for (let index = 0; index < recipients.length; index++) {
+                    const savepoint = "chess_push_" + index;
+                    await client.query("SAVEPOINT " + savepoint);
+                    try {
+                        await pushService.enqueueNotification(client, recipients[index], {
+                            eventKey: "chess-match:" + id + ":" + suffix,
+                            title: title,
+                            body: body,
+                            page: "chess",
+                            androidOnly: true
+                        });
+                        await client.query("RELEASE SAVEPOINT " + savepoint);
+                    } catch (error) {
+                        await client.query("ROLLBACK TO SAVEPOINT " + savepoint).catch(function () {});
+                        await client.query("RELEASE SAVEPOINT " + savepoint).catch(function () {});
+                        console.error("Chess companion alert could not be queued.");
+                    }
+                }
+                await client.query("COMMIT");
+                inTransaction = false;
+            } catch (error) {
+                if (inTransaction) await client.query("ROLLBACK").catch(function () {});
+                console.error("Chess companion alerts could not be queued.");
+            } finally {
+                client.release();
+            }
+        })().catch(function () {
+            console.error("Chess companion alerts could not be queued.");
+        });
+    }
+
+    function queueChessTurnNotification(matchId, match, color, ply) {
+        const nextUserId = Number(color === "w" ? match.player_white_id : match.player_black_id);
+        if (!Number.isSafeInteger(nextUserId) || nextUserId <= 0 || !Number.isInteger(ply) || ply <= 0) return;
+        queueChessNotifications(matchId, [nextUserId], "turn:" + ply,
+            "Chess · Your turn", "It is your turn in chess. Open your chessboard to continue.");
+    }
+
+    function queueChessFinishedNotifications(matchId, match, result) {
+        const recipients = [Number(match.player_white_id), Number(match.player_black_id)];
+        queueChessNotifications(matchId, recipients, "finished:" + String(result || "completed"),
+            "Chess match finished", "Your chess match has ended. Open GOAL$GAMBIT to view the result.");
+    }
 
     async function registerTournamentEntry(client, userId, control, stake) {
         const entry = await client.query(
@@ -1371,6 +1432,7 @@ module.exports = function (pool, authenticateToken, io) {
         let inTransaction = false;
         let result = null;
         let winnerId = null;
+        let match = null;
         try {
             await client.query("BEGIN");
             inTransaction = true;
@@ -1383,7 +1445,7 @@ module.exports = function (pool, authenticateToken, io) {
                 inTransaction = false;
                 return null;
             }
-            const match = locked.rows[0];
+            match = locked.rows[0];
             if (match.status === "settling" && match.result) {
                 result = match.result;
                 winnerId = match.winner_id ? Number(match.winner_id) : null;
@@ -1414,6 +1476,7 @@ module.exports = function (pool, authenticateToken, io) {
         if (!result) return null;
         const settled = await settleMatch(pool, matchId, result, winnerId);
         const updated = await getMatch(pool, matchId);
+        queueChessFinishedNotifications(matchId, match, settled.result);
         if (io && updated && updated.status === "completed") {
             io.to("chess_match_" + matchId).emit("chess:game_over", {
                 success: true, matchId: matchId, result: settled.result,
@@ -1475,7 +1538,16 @@ module.exports = function (pool, authenticateToken, io) {
                 });
             }
 
-            if (match.status === "active" || match.status === "settling") {
+            let shouldCheckClock = match.status === "settling";
+            if (match.status === "active") {
+                const times = calculateRemainingTime(match);
+                const sideTime = match.active_color === "w"
+                    ? times.whiteTimeMs
+                    : times.blackTimeMs;
+                shouldCheckClock = sideTime <= 0;
+            }
+
+            if (shouldCheckClock) {
                 const afterClock = await settleExpiredClock(matchId);
                 if (afterClock) match = afterClock;
                 else match = await getMatch(pool, matchId);
@@ -1548,6 +1620,7 @@ module.exports = function (pool, authenticateToken, io) {
             );
 
             const updated = await getMatch(pool, matchId);
+            queueChessFinishedNotifications(matchId, match, settled.result);
 
             if (io && updated) {
                 io.to("chess_match_" + matchId).emit("chess:game_over", {
@@ -1904,6 +1977,7 @@ module.exports = function (pool, authenticateToken, io) {
                 inTransaction = false;
                 const settled = await settleMatch(pool, matchId, result, winnerId);
                 const updated = await getMatch(pool, matchId);
+                queueChessFinishedNotifications(matchId, match, settled.result);
                 if (io) io.to("chess_match_" + matchId).emit("chess:game_over", {
                     success: true, matchId: matchId, result: settled.result,
                     winnerId: settled.winnerId, reason: "timeout"
@@ -1943,7 +2017,12 @@ module.exports = function (pool, authenticateToken, io) {
             await client.query("COMMIT");
             inTransaction = false;
 
-            if (result) await settleMatch(pool, matchId, result, winnerId);
+            if (result) {
+                const settled = await settleMatch(pool, matchId, result, winnerId);
+                queueChessFinishedNotifications(matchId, match, settled.result);
+            } else {
+                queueChessTurnNotification(matchId, match, chess.turn(), chess.history().length);
+            }
             const updated = await getMatch(pool, matchId);
             const publicState = publicMatchState(updated, userId);
             if (io) {
@@ -1954,7 +2033,7 @@ module.exports = function (pool, authenticateToken, io) {
                     });
                 } else {
                     io.to("chess_match_" + matchId).emit("chess:move", {
-                        success: true, matchId: matchId, move: move
+                        success: true, matchId: matchId, actorUserId: userId, move: move
                     });
                 }
             }
@@ -1971,7 +2050,7 @@ module.exports = function (pool, authenticateToken, io) {
         }
     });
     router.post("/:id/draw", authenticateToken, async function(req,res){const matchId=Number(req.params.id),uid=Number(req.user.userId);const m=await getMatch(pool,matchId);if(!m)return res.status(404).json({success:false,message:"Chess match not found."});if(!getPlayerColor(m,uid))return res.status(403).json({success:false,message:"You are not a player in this match."});if(m.status!=="active")return res.status(400).json({success:false,message:"Match is not active."});await pool.query(`UPDATE chess_matches SET draw_offer_user_id=$1 WHERE id=$2`,[uid,matchId]);if(io)io.to("chess_match_"+matchId).emit("chess:draw_offer",{success:true,matchId,userId:uid});res.json({success:true,message:"Draw offer sent."});});
-    router.post("/:id/draw/respond", authenticateToken, async function(req,res){const matchId=Number(req.params.id),uid=Number(req.user.userId),accept=Boolean(req.body&&req.body.accept);const m=await getMatch(pool,matchId);if(!m)return res.status(404).json({success:false,message:"Chess match not found."});if(!getPlayerColor(m,uid))return res.status(403).json({success:false,message:"You are not a player in this match."});if(Number(m.draw_offer_user_id)===uid)return res.status(400).json({success:false,message:"You cannot accept your own draw offer."});if(!m.draw_offer_user_id)return res.status(400).json({success:false,message:"No draw offer is pending."});if(!accept){await pool.query(`UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1`,[matchId]);if(io)io.to("chess_match_"+matchId).emit("chess:draw_declined",{success:true,matchId});return res.json({success:true,message:"Draw declined."});}const settled=await settleMatch(pool,matchId,"draw",null);const updated=await getMatch(pool,matchId);if(io)io.to("chess_match_"+matchId).emit("chess:game_over",{success:true,matchId,result:settled.result,winnerId:null,reason:"agreed_draw"});res.json({success:true,match:publicMatchState(updated,uid)});});
+    router.post("/:id/draw/respond", authenticateToken, async function(req,res){const matchId=Number(req.params.id),uid=Number(req.user.userId),accept=Boolean(req.body&&req.body.accept);const m=await getMatch(pool,matchId);if(!m)return res.status(404).json({success:false,message:"Chess match not found."});if(!getPlayerColor(m,uid))return res.status(403).json({success:false,message:"You are not a player in this match."});if(Number(m.draw_offer_user_id)===uid)return res.status(400).json({success:false,message:"You cannot accept your own draw offer."});if(!m.draw_offer_user_id)return res.status(400).json({success:false,message:"No draw offer is pending."});if(!accept){await pool.query(`UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1`,[matchId]);if(io)io.to("chess_match_"+matchId).emit("chess:draw_declined",{success:true,matchId});return res.json({success:true,message:"Draw declined."});}const settled=await settleMatch(pool,matchId,"draw",null);queueChessFinishedNotifications(matchId,m,settled.result);const updated=await getMatch(pool,matchId);if(io)io.to("chess_match_"+matchId).emit("chess:game_over",{success:true,matchId,result:settled.result,winnerId:null,reason:"agreed_draw"});res.json({success:true,match:publicMatchState(updated,uid)});});
 
     return router;
 

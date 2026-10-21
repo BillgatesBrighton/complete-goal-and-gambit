@@ -11,7 +11,7 @@ const financialRateLimit = require("../middleware/financialRateLimit");
 const companionGuideVersion = require("./companion").GUIDE_VERSION;
 const companionTermsVersion = require("./companion").TERMS_VERSION;
 
-module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
+module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler) {
     const router = express.Router();
     const walletAdjustmentLimit = financialRateLimit("admin-wallet-adjustment", { windowMs: 10 * 60 * 1000, max: 30 });
     async function getOrCreateSupportThread(userId, queryable) {
@@ -55,6 +55,19 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             res.status(500).json({success:false,message:"Could not verify administrator access."});
         }
     }
+
+    router.get("/efootball-scheduler", authenticateToken, adminOnly, async function(req, res) {
+        if (!efootballScheduler || typeof efootballScheduler.snapshot !== "function") {
+            return res.status(503).json({ success: false, message: "eFootball scheduler status is unavailable." });
+        }
+        try {
+            const snapshot = await efootballScheduler.snapshot();
+            return res.json({ success: true, schedule: snapshot });
+        } catch (error) {
+            console.error("Admin eFootball scheduler status failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not load the eFootball scheduler status." });
+        }
+    });
 
     // The dashboard HTML lives outside the public frontend directory and is
     // returned only after the authenticated account's current database role is checked.

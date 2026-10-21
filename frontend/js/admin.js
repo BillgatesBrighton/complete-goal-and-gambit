@@ -383,6 +383,55 @@ async function loadCompanionTracker() {
     $("companionNext").disabled = companionPage >= companionPages;
     $("companionTrackerMessage").textContent = "A download record means the APK was served. Confirmed installation requires an authenticated app registration; setup completes only after current terms and the website guide are acknowledged.";
 }
+function eatDate(value) {
+    var d = new Date(value);
+    return value && !isNaN(d.getTime()) ? d.toLocaleString("en-KE", { timeZone: "Africa/Nairobi", dateStyle: "medium", timeStyle: "short" }) + " EAT" : "—";
+}
+async function loadEfootballScheduler() {
+    var r = await GG.api("/api/admin/efootball-scheduler", { noRedirect: true });
+    if (!r.ok) {
+        $("efootballSchedulerMessage").textContent = r.data.message || "Could not load scheduler status.";
+        ["schedulerTournamentList", "schedulerLeagueList", "schedulerPlayerList", "schedulerRejectionList", "schedulerPostponedList", "schedulerFailureList"].forEach(function(id) {
+            $(id).innerHTML = '<div class="empty">Scheduler status unavailable.</div>';
+        });
+        return;
+    }
+    var data = r.data.schedule || {}, windowInfo = data.window || {};
+    var windowLabels = { open: "Accepting new matches", matchmaking_closed_session_active: "New matches closed · sessions open to 1:00 AM", closed: "Closed until 4:00 PM EAT" };
+    $("schedulerWindowState").textContent = windowLabels[windowInfo.status] || "Unknown";
+    $("schedulerNextOpen").textContent = eatDate(windowInfo.nextOpensAt);
+    $("schedulerNextClose").textContent = eatDate(windowInfo.nextClosesAt);
+    $("schedulerBelowTargetCount").textContent = Number(data.playersBelowFourFixturesTotal || 0).toLocaleString();
+    $("efootballSchedulerMessage").textContent = "The four-game target counts real fixture assignments by the East Africa calendar date. Completed games are tracked separately; the scheduler does not fabricate results or change competition formats.";
+    var tournaments = data.tournaments || [];
+    $("schedulerTournamentList").innerHTML = tournaments.length ? tournaments.map(function(item) {
+        var state = item.status === "scheduled" && item.capacity_full ? "FULL · SCHEDULED" : String(item.status || "unknown").toUpperCase();
+        return '<article class="card"><div class="card-top"><strong>' + esc(item.name || "Tournament") + '</strong><span class="badge ' + (item.capacity_full ? "wait" : "") + '">' + esc(state) + '</span></div><div class="meta">' + Number(item.players) + ' / ' + Number(item.max_players) + ' players · ' + Number(item.scheduled_fixtures) + ' scheduled · ' + Number(item.active_fixtures) + ' active · ' + Number(item.completed_fixtures) + ' completed · ' + Number(item.forfeited_fixtures) + ' forfeited · start ' + esc(eatDate(item.starts_at)) + '</div></article>';
+    }).join("") : '<div class="empty">No tournaments are configured.</div>';
+    var leagues = data.leagues || [];
+    $("schedulerLeagueList").innerHTML = leagues.length ? leagues.map(function(item) {
+        return '<article class="card"><div class="card-top"><strong>' + esc(item.name || "League") + '</strong><span class="badge">' + esc(String(item.status || "unknown").toUpperCase()) + '</span></div><div class="meta">' + Number(item.players) + ' / ' + Number(item.max_players) + ' players · round ' + Number(item.current_round) + ' · ' + Number(item.scheduled_fixtures) + ' scheduled · ' + Number(item.active_fixtures) + ' active · ' + Number(item.completed_fixtures) + ' completed · ' + Number(item.forfeited_fixtures) + ' forfeited</div></article>';
+    }).join("") : '<div class="empty">No leagues are configured.</div>';
+    var players = data.playersBelowFourFixtures || [];
+    $("schedulerPlayerList").innerHTML = players.length ? players.map(function(player) {
+        return '<article class="card"><strong>' + esc(player.username || "Player") + '</strong><div class="meta">' + Number(player.scheduled_fixtures) + ' of 4 fixture assignments today · account ' + Number(player.id) + '</div></article>';
+    }).join("") + (Number(data.playersBelowFourFixturesTotal || 0) > players.length ? '<div class="foot">Showing ' + players.length + ' of ' + Number(data.playersBelowFourFixturesTotal).toLocaleString() + ' players.</div>' : '') : '<div class="empty">All eligible eFootball players have reached the four-fixture target today.</div>';
+    var rejections = data.rejectionSummary || [];
+    $("schedulerRejectionList").innerHTML = rejections.length ? rejections.map(function(item) {
+        return '<article class="card"><strong>' + esc(String(item.reason || "unknown").replace(/_/g, " ")) + '</strong><div class="meta">' + Number(item.count) + ' · ' + esc(item.mode || "eFootball") + '</div></article>';
+    }).join("") : '<div class="empty">No rejected matchmaking requests in the last 24 hours.</div>';
+    var postponed = data.recentPostponements || [];
+    $("schedulerPostponedList").innerHTML = postponed.length ? postponed.map(function(item) {
+        var details = item.details || {}, label = item.event_type === "round_postponed"
+            ? String(details.competitionType || "competition") + " round " + Number(details.roundNumber || 0) + " moved to " + eatDate(details.startsAt)
+            : "Ranked matches " + (Array.isArray(details.matchIds) ? details.matchIds.map(function(id) { return "#" + id; }).join(", ") : "") + " paused until " + eatDate(details.nextOpensAt);
+        return '<article class="card"><strong>' + esc(label) + '</strong><div class="meta">' + esc(date(item.created_at)) + ' · ' + Number(details.notified || details.notificationsQueued || 0) + ' players notified</div></article>';
+    }).join("") : '<div class="empty">No postponed matches reported.</div>';
+    var failures = data.schedulerFailures || [];
+    $("schedulerFailureList").innerHTML = failures.length ? failures.map(function(item) {
+        return '<article class="card"><strong>' + esc(item.message || "Scheduler failure") + '</strong><div class="meta">' + esc(date(item.created_at)) + ' · ' + esc(JSON.stringify(item.details || {})) + '</div></article>';
+    }).join("") : '<div class="empty">No scheduler failures reported.</div>';
+}
 async function openCompanionMember(userId) {
     $("companionView").innerHTML = '<div class="empty">Loading companion details…</div>';
     $("companionDialog").showModal();
@@ -656,6 +705,7 @@ async function refresh(force) {
         if(force||!editing("competitionSelect"))tasks.push(loadCompetitionList());
         if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
         if(location.hash==="#companionTracker"&&(force||!editing("companionTracker")))tasks.push(loadCompanionTracker());
+        if(location.hash==="#efootballScheduler")tasks.push(loadEfootballScheduler());
         tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
         $("live").textContent="Live · "+new Date().toLocaleTimeString();
     } catch(_){$("live").textContent="Some data could not refresh.";}
@@ -836,6 +886,7 @@ $("toggleClearedMatches").addEventListener("click",function(){includeClearedMatc
 $("clearAllMatches").addEventListener("click",clearAllMatches);
 
 $("refresh").addEventListener("click",function(){refresh(true);});
+$("refreshEfootballScheduler").addEventListener("click",loadEfootballScheduler);
 $("logout").addEventListener("click",function(){GG.logout();});
 $("searchUsers").addEventListener("click",loadUsers);
 $("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadUsers();}});
@@ -885,12 +936,13 @@ $("clearSelectedSupport").addEventListener("click",function(){if(selectedUser!=n
 $("replyForm").addEventListener("submit",async function(e){e.preventDefault();if(selectedUser==null)return;var input=$("reply"),message=input.value.trim();if(!message)return;$("sendReply").disabled=true;$("convheadLabel").textContent="Sending…";var r=await GG.api("/api/admin/support/"+encodeURIComponent(selectedUser),{method:"POST",body:{message:message}});if(!r.ok){$("sendReply").disabled=false;$("convheadLabel").textContent=r.data.message||"Reply not sent; your text is still here.";return;}input.value="";messageSig=null;$("sendReply").disabled=false;await loadThreads();await loadMessages(true);input.focus();});
 
 function updateAdminPage() {
-    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."],companionTracker:["Companion App Tracker","Review guide acknowledgement, APK downloads, registered Companion apps, recent activity, and notification permission."]};
+    var page=String(location.hash||"#overview").slice(1),titles={overview:["Admin overview","Review results, handle player complaints, and manage the service."],results:["Result disputes","Review match screenshots, compare score reports, and clear resolved result cases."],matchManagement:["Match management","Filter Chess and eFootball matches, settle verified scores, cancel unsettled matches, and refund any locked stakes."],complaints:["Player complaints","Investigate open reports and review resolved complaints."],support:["Support inbox","Read and reply to player support messages."],accounts:["Account access","Review player accounts, suspend or close access, and inspect activity."],competitions:["Competition tables","Review live league and tournament standings and record audited corrections."],efootballScheduler:["eFootball daily scheduler","View the EAT gaming window, tournament capacity, fixtures, matchmaking rejections, and scheduler failures."],adminWallet:["Admin wallet","Adjust player balances and review administrator funds and withdrawals."],announcements:["Player announcements","Publish updates visible on player dashboards."],companionTracker:["Companion App Tracker","Review guide acknowledgement, APK downloads, registered Companion apps, recent activity, and notification permission."]};
     if(!titles[page])page="overview";
-    ["results","matchManagement","complaints","support","accounts","competitions","adminWallet","announcements","companionTracker"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
+    ["results","matchManagement","complaints","support","accounts","competitions","efootballScheduler","adminWallet","announcements","companionTracker"].forEach(function(id){var panel=$(id);if(panel)panel.hidden=page!=="overview"&&page!==id;});
     $("adminStats").hidden=page!=="overview";$("pageTitle").textContent=titles[page][0];$("pageDescription").textContent=titles[page][1];
     Array.from(document.querySelectorAll("[data-admin-page]")).forEach(function(link){if(link.dataset.adminPage===page)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
     if(page==="companionTracker"&&adminAuthorized)loadCompanionTracker();
+    if(page==="efootballScheduler"&&adminAuthorized)loadEfootballScheduler();
 }
 window.addEventListener("hashchange",updateAdminPage);
 updateAdminPage();

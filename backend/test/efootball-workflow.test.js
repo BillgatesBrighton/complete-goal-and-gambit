@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const http = require("http");
 const express = require("express");
 const createEfootballRoutes = require("../routes/efootball");
+const { eatDateTimeToUtc } = require("../services/efootballScheduleRules");
 
 function makeFixture(overrides) {
     return {
@@ -34,7 +35,7 @@ function makeFixture(overrides) {
     };
 }
 
-async function startWorkflowServer(userId, fixture, t) {
+async function startWorkflowServer(userId, fixture, t, now = eatDateTimeToUtc(2026, 10, 20, 17, 0)) {
     const notifications = [];
     const pushEvents = [];
     const socketEvents = [];
@@ -48,6 +49,7 @@ async function startWorkflowServer(userId, fixture, t) {
         if (/SELECT\s+\*\s+FROM\s+efootball_matches\s+WHERE id\s*=\s*\$1/i.test(sql)) {
             return { rows: [{ ...fixture }] };
         }
+        if (sql.trim() === "SELECT NOW() AS now") return { rows: [{ now }] };
         if (/UPDATE efootball_matches\s+SET opponent_ready\s*=\s*true/i.test(sql)) {
             fixture.opponent_ready = true;
             return { rows: [], rowCount: 1 };
@@ -185,6 +187,21 @@ test("receiver can mark ready after confirming the room code", async (t) => {
     assert.equal(fixture.creator_ready, false);
     assert.equal(fixture.status, "waiting");
     assert.ok(receiver.socketEvents.some(event => event.room === "user_2" && event.data.reason === "ready-updated"));
+});
+
+test("a confirmed ranked match remains saved but cannot start after the 1:00 AM EAT session boundary", async (t) => {
+    const fixture = makeFixture({
+        code_received_at: new Date().toISOString(),
+        code_received_by: 2
+    });
+    const receiver = await startWorkflowServer(2, fixture, t, eatDateTimeToUtc(2026, 10, 20, 1, 0));
+    const response = await receiver.request("/api/efootball/matches/5/ready", { method: "POST" });
+    const body = await response.json();
+    assert.equal(response.status, 409, JSON.stringify(body));
+    assert.equal(body.code, "EFOOTBALL_SESSION_CLOSED");
+    assert.equal(fixture.opponent_ready, false);
+    assert.equal(fixture.creator_ready, false);
+    assert.equal(fixture.status, "waiting");
 });
 
 test("sending a room code alerts only the receiver without putting the code in push", async (t) => {

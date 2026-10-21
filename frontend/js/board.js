@@ -11,6 +11,7 @@ const DEFAULT_CHESS_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 
 const OFFLINE_DB_NAME = "goal-gambit-chess-offline";
 const OFFLINE_DB_VERSION = 1;
 const OFFLINE_STORE_NAME = "matches";
+const MOVE_SYNC_TIMEOUT_MS = 15000;
 let config = {};
 let matchId = Number(params.get("matchId") || 0) || null;
 let playerColor = "w";
@@ -24,13 +25,24 @@ let localWhiteMs = 0;
 let localBlackMs = 0;
 let localClockAt = 0;
 let legalTargets = [];
+const boardSquares = new Map();
+const renderedSquareStates = new Map();
+const moveSyncQueues = new Map();
+const pendingNativeEngineChecks = new Map();
+let renderedOrientation = null;
+let renderedMovePgn = null;
+let lastWhiteClockLabel = null;
+let lastBlackClockLabel = null;
 let illegalSquares = new Set();
 let illegalFeedbackTimer = null;
 let pendingPromotion = null;
-let movePending = false;
 let cancelPending = false;
 let resignPending = false;
 let timeoutCheckAt = 0;
+let dragState = null;
+let suppressSquareClickUntil = 0;
+let boardPointerHandlersInstalled = false;
+let pendingMovePersistence = 0;
 let stateVersion = 0;
 let boardEpoch = 0;
 let activeRefresh = null;
@@ -51,6 +63,7 @@ const chessBoard = document.getElementById("chessBoard");
 const gameModeElement = document.getElementById("gameMode");
 const gameStatusElement = document.getElementById("gameStatus");
 const connectionStatusElement = document.getElementById("connectionStatus");
+const companionEngineStatusElement = document.getElementById("companionEngineStatus");
 const blackClockElement = document.getElementById("blackClock");
 const whiteClockElement = document.getElementById("whiteClock");
 const blackNameElement = document.getElementById("blackName");
@@ -95,6 +108,10 @@ const symbols = {
 
 function token(){ return localStorage.getItem("goalGambitToken") || ""; }
 function username(){ return localStorage.getItem("goalGambitUsername") || "You"; }
+function monotonicNow(){
+  const clock=window.performance;
+  return clock&&typeof clock.now==="function"?clock.now():Date.now();
+}
 function apiBase(){
   const configured = window.GG_API_BASE || (window.GG && window.GG.API_BASE);
   if(configured) return String(configured).replace(/\/+$/, "");
@@ -103,6 +120,56 @@ function apiBase(){
   const frontendPorts=["3000","5173","5500","8080"];
   if(location.protocol==="file:"||(isLocal&&(!location.port||frontendPorts.includes(location.port)))) return "http://localhost:5000";
   return "";
+}
+function chessPlyFromFen(fen){
+  const fields=String(fen||"").trim().split(/\s+/);
+  const fullMove=Number(fields[5]);
+  if(!Number.isInteger(fullMove)||fullMove<1)return 0;
+  return (fullMove-1)*2+(fields[1]==="b"?1:0);
+}
+function setCompanionEngineStatus(message,show){
+  if(!companionEngineStatusElement)return;
+  companionEngineStatusElement.textContent=message||"";
+  companionEngineStatusElement.hidden=!show||!message;
+}
+function notifyNativeEngineOfConfirmedMove(id,entry,confirmedMatch){
+  if(!socket||!socket.connected||socketMatchId!==Number(id)||offlineMode||!confirmedMatch||!entry)return;
+  const ply=chessPlyFromFen(confirmedMatch.fen);
+  if(!ply)return;
+  const requestId="gg-"+Number(id)+"-"+ply+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+  const timer=setTimeout(()=>pendingNativeEngineChecks.delete(requestId),15000);
+  pendingNativeEngineChecks.set(requestId,{matchId:Number(id),fen:confirmedMatch.fen,timer});
+  socket.emit("chess:engine:move",{
+    requestId,
+    matchId:Number(id),
+    ply,
+    fenBefore:entry.fenBefore,
+    expectedFen:confirmedMatch.fen,
+    move:{from:entry.from,to:entry.to,promotion:entry.promotion||null}
+  });
+}
+function handleNativeEngineResult(data){
+  if(!data||Number(data.matchId)!==Number(matchId))return;
+  const pending=pendingNativeEngineChecks.get(String(data.requestId||""));
+  if(!pending)return;
+  clearTimeout(pending.timer);
+  pendingNativeEngineChecks.delete(String(data.requestId));
+  if(data.available===false){
+    setCompanionEngineStatus("Companion engine unavailable · website validation remains active",true);
+    return;
+  }
+  if(data.stale)return;
+  if(pending.fen!==data.resultingFen)return;
+  if(data.agreesWithServer&&data.legal){
+    const finding=data.checkmate?"checkmate":data.stalemate?"stalemate":data.draw?"draw":data.check?"check":"position";
+    setCompanionEngineStatus("Native Android engine confirmed "+finding+" · server remains authoritative",true);
+  }else{
+    setCompanionEngineStatus("Native engine differs · server result remains authoritative",true);
+  }
+  setTimeout(()=>{
+    if(companionEngineStatusElement&&companionEngineStatusElement.textContent.startsWith("Native Android engine"))
+      setCompanionEngineStatus("",false);
+  },4500);
 }
 async function api(path, options={}){
   const headers={Accept:"application/json"};
@@ -226,12 +293,12 @@ function persistServerSnapshot(m){
       record.baseline=snapshot;record.latest=snapshot;
       record.sync={...(record.sync||{}),status:"synced",lastError:""};
     }else{
-      const matching=(record.moves||[]).findIndex(move=>move.fenAfter===snapshot.fen&&move.pgnAfter===snapshot.pgn);
+      const matching=lastMatchingLocalMoveIndex(record.moves||[],snapshot);
       if(matching>=0){
         record.moves.forEach((move,index)=>{if(index<=matching)move.serverAcknowledged=true});
         const pending=(record.moves||[]).some(move=>!move.serverAcknowledged);
         record.sync={...(record.sync||{}),status:pending?"pending":"synced",lastError:""};
-        if(!pending)record.baseline=snapshot;
+        if(!pending){record.baseline=snapshot;record.latest=snapshot}
       }else if(snapshot.fen!==record.baseline?.fen||snapshot.pgn!==record.baseline?.pgn){
         record.sync={...(record.sync||{}),status:"conflict",lastError:"The server match differs from the saved local move history."};
       }
@@ -256,12 +323,12 @@ function recordLocalMove(entry,latest,terminal){
 function acknowledgeLocalMoves(match){
   return updateOfflineRecord(match.matchId,record=>{
     if(!record)return null;
-    const index=(record.moves||[]).findIndex(move=>move.fenAfter===match.fen&&move.pgnAfter===match.pgn);
+    const index=lastMatchingLocalMoveIndex(record.moves||[],match);
     if(index>=0)record.moves.forEach((move,position)=>{if(position<=index)move.serverAcknowledged=true});
     const pending=(record.moves||[]).some(move=>!move.serverAcknowledged);
     record.serverSnapshot=matchSnapshot(match);
     record.sync={...(record.sync||{}),status:pending?"pending":"synced",lastError:""};
-    if(!pending)record.baseline=record.serverSnapshot;
+    if(!pending){record.baseline=record.serverSnapshot;record.latest=record.serverSnapshot}
     record.updatedAt=Date.now();
     return record;
   });
@@ -270,7 +337,7 @@ function finishOfflineOnTime(reason){
   if(!state||state.status!=="active")return;
   const losingColor=state.activeColor;
   const finished={...state,whiteTimeMs:remaining("w"),blackTimeMs:remaining("b"),status:"offline_pending",result:null,claimedResult:losingColor==="w"?"black_win":"white_win",terminationReason:reason,savedAt:Date.now()};
-  state=finished;stateVersion++;movePending=false;
+  state=finished;stateVersion++;
   setStatus("Local clock ended · result awaits server verification.","waiting");
   setConnectionStatus("Offline result saved locally · not official until server verification.","offline");
   renderBoard();updateMatchActions();
@@ -300,7 +367,7 @@ function parseSquare(s){return {r:8-Number(s[1]),c:files.indexOf(s[0])}}
 function formatClock(ms){ms=Math.max(0,Math.floor(ms));const sec=Math.ceil(ms/1000),m=Math.floor(sec/60),s=sec%60;return String(m).padStart(2,"0")+":"+String(s).padStart(2,"0")}
 function remaining(color){
   let ms=color==="w"?localWhiteMs:localBlackMs;
-  if(state&&state.activeColor===color&&state.status==="active"&&localClockAt) ms-=Date.now()-localClockAt;
+  if(state&&state.activeColor===color&&state.status==="active") ms-=monotonicNow()-localClockAt;
   return Math.max(0,ms);
 }
 function currentBoard(){return parseFen(state&&state.fen || "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")}
@@ -333,36 +400,78 @@ function setPlayers(){
   [whiteRatingElement,sideWhiteRatingElement].forEach(x=>{if(x)x.textContent=wr});
   [blackRatingElement,sideBlackRatingElement].forEach(x=>{if(x)x.textContent=br});
 }
+function createBoardSquare(name){
+  const square=document.createElement("button");
+  square.type="button";square.className="square";square.dataset.square=name;
+  const glyph=document.createElement("span");glyph.className="piece-glyph";glyph.setAttribute("aria-hidden","true");
+  const fileLabel=document.createElement("span");fileLabel.className="coord-file";fileLabel.setAttribute("aria-hidden","true");
+  const rankLabel=document.createElement("span");rankLabel.className="coord-rank";rankLabel.setAttribute("aria-hidden","true");
+  square.append(glyph,fileLabel,rankLabel);
+  square.addEventListener("click",()=>{
+    if(Date.now()<suppressSquareClickUntil)return;
+    clickSquare(square.dataset.square);
+  });
+  boardSquares.set(name,{element:square,glyph,fileLabel,rankLabel});
+  chessBoard.appendChild(square);
+  return boardSquares.get(name);
+}
+function ensureBoardSquares(){
+  if(!chessBoard)return;
+  if(boardSquares.size<64){
+    for(let r=0;r<8;r++)for(let c=0;c<8;c++)createBoardSquare(squareName(r,c));
+  }
+  installBoardPointerHandlers();
+}
 function renderBoard(){
   if(!chessBoard)return;
-  chessBoard.innerHTML="";
+  ensureBoardSquares();
   const b=currentBoard();
+  const targets=new Map(legalTargets.map(move=>[move.to,move]));
   for(let vr=0;vr<8;vr++){
     for(let vc=0;vc<8;vc++){
       const r=boardFlipped?7-vr:vr, c=boardFlipped?7-vc:vc;
-      const sq=document.createElement("button"); sq.type="button"; sq.className="square";
-      sq.dataset.square=squareName(r,c);
-      if((r+c)%2===0)sq.classList.add("light");else sq.classList.add("dark");
-      if(selectedSquare===sq.dataset.square)sq.classList.add("selected");
-      if(illegalSquares.has(sq.dataset.square))sq.classList.add("illegal-move");
-      if(state?.lastMove&&(state.lastMove.from===sq.dataset.square||state.lastMove.to===sq.dataset.square))sq.classList.add("last-move");
-      const target=legalTargets.find(x=>x.to===sq.dataset.square);
-      if(target)sq.classList.add(target.capture?"possible-capture":"possible-move");
-      if(state?.checkSquare===sq.dataset.square)sq.classList.add("in-check");
+      const name=squareName(r,c),cell=boardSquares.get(name),sq=cell.element;
+      const target=targets.get(name);
+      const classes=["square",(r+c)%2===0?"light":"dark"];
+      if(selectedSquare===name)classes.push("selected");
+      if(illegalSquares.has(name))classes.push("illegal-move");
+      if(state?.lastMove&&(state.lastMove.from===name||state.lastMove.to===name))classes.push("last-move");
+      if(target)classes.push(target.capture?"possible-capture":"possible-move");
+      if(state?.checkSquare===name)classes.push("in-check");
+      const className=classes.join(" ");
+      const previous=renderedSquareStates.get(name)||{};
+      if(previous.className!==className)sq.className=className;
+      if(renderedOrientation!==boardFlipped){
+        sq.style.gridRow=String(vr+1);sq.style.gridColumn=String(vc+1);
+      }
       const p=b[r][c];
-      const label=sq.dataset.square+(p?" "+(p.color==="w"?"white ":"black ")+p.type:" empty")+(target?" legal move":"");
-      sq.setAttribute("aria-label",label);
-      if(p){const glyph=document.createElement("span");glyph.className="piece-glyph "+(p.color==="w"?"white-piece":"black-piece");glyph.textContent=symbols[p.color][p.type];sq.appendChild(glyph);}
-      if(vr===7){const fileLabel=document.createElement("span");fileLabel.className="coord-file";fileLabel.textContent=files[c];sq.appendChild(fileLabel)}
-      if(vc===0){const rankLabel=document.createElement("span");rankLabel.className="coord-rank";rankLabel.textContent=String(8-r);sq.appendChild(rankLabel)}
-      sq.addEventListener("click",()=>clickSquare(sq.dataset.square)); chessBoard.appendChild(sq);
+      const pieceKey=p?p.color+p.type:"";
+      if(previous.pieceKey!==pieceKey){
+        cell.glyph.textContent=p?symbols[p.color][p.type]:"";
+        cell.glyph.className="piece-glyph"+(p?" "+(p.color==="w"?"white-piece":"black-piece"):"");
+        cell.glyph.style.transform="";
+      }
+      const label=name+(p?" "+(p.color==="w"?"white ":"black ")+p.type:" empty")+(target?" legal move":"");
+      if(previous.label!==label)sq.setAttribute("aria-label",label);
+      if(renderedOrientation!==boardFlipped||previous.fileVisible!==(vr===7)){
+        cell.fileLabel.hidden=vr!==7;
+        if(vr===7)cell.fileLabel.textContent=files[c];
+      }
+      if(renderedOrientation!==boardFlipped||previous.rankVisible!==(vc===0)){
+        cell.rankLabel.hidden=vc!==0;
+        if(vc===0)cell.rankLabel.textContent=String(8-r);
+      }
+      renderedSquareStates.set(name,{className,pieceKey,label,fileVisible:vr===7,rankVisible:vc===0});
     }
   }
-  renderMoves(); updateClocks();
+  renderedOrientation=boardFlipped;
+  renderMoves();updateClocks();
 }
 function renderMoves(){
   if(!moveListElement)return;
   const pgn=state?.pgn||"";
+  if(renderedMovePgn===pgn)return;
+  renderedMovePgn=pgn;
   const moves=pgn.match(/(?:O-O-O|O-O|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?)/g)||[];
   moveListElement.innerHTML="";
   if(!moves.length){moveListElement.innerHTML='<div class="empty-moves">No moves yet</div>';return}
@@ -376,11 +485,11 @@ function renderMoves(){
 }
 function updateClocks(){
   const white=remaining("w"),black=remaining("b");
-  if(whiteClockElement){whiteClockElement.textContent=formatClock(white);whiteClockElement.classList.toggle("active",!!state&&state.status==="active"&&state.activeColor==="w");whiteClockElement.classList.toggle("critical",!!state&&state.status==="active"&&state.activeColor==="w"&&white<=10000)}
-  if(blackClockElement){blackClockElement.textContent=formatClock(black);blackClockElement.classList.toggle("active",!!state&&state.status==="active"&&state.activeColor==="b");blackClockElement.classList.toggle("critical",!!state&&state.status==="active"&&state.activeColor==="b"&&black<=10000)}
+  if(whiteClockElement){const label=formatClock(white);if(label!==lastWhiteClockLabel){whiteClockElement.textContent=label;lastWhiteClockLabel=label}whiteClockElement.classList.toggle("active",!!state&&state.status==="active"&&state.activeColor==="w");whiteClockElement.classList.toggle("critical",!!state&&state.status==="active"&&state.activeColor==="w"&&white<=10000)}
+  if(blackClockElement){const label=formatClock(black);if(label!==lastBlackClockLabel){blackClockElement.textContent=label;lastBlackClockLabel=label}blackClockElement.classList.toggle("active",!!state&&state.status==="active"&&state.activeColor==="b");blackClockElement.classList.toggle("critical",!!state&&state.status==="active"&&state.activeColor==="b"&&black<=10000)}
   const active=state&&state.status==="active"?(state.activeColor==="w"?white:black):null;
-  if(active!==null&&active<=0&&Date.now()-timeoutCheckAt>1000){
-    timeoutCheckAt=Date.now();
+  if(active!==null&&active<=0&&monotonicNow()-timeoutCheckAt>1000){
+    timeoutCheckAt=monotonicNow();
     if(offlineMode)finishOfflineOnTime("timeout");else loadMatch();
   }
 }
@@ -391,12 +500,20 @@ function setStatus(text, cls){
   const bar=document.getElementById("statusBar");if(bar){bar.classList.remove("ready","waiting");if(cls)bar.classList.add(cls)}
 }
 function currentRulesPosition(){
-  try{return state&&state.fen?new Chess(state.fen):null}
+  try{
+    if(!state||!state.fen)return null;
+    if(state.pgn){
+      const replayed=new Chess();replayed.loadPgn(state.pgn);
+      return replayed.fen()===state.fen?replayed:null;
+    }
+    return new Chess(state.fen);
+  }
   catch(_){return null}
 }
 function selectPiece(sq){
   const chess=currentRulesPosition();
   if(!chess){setStatus("The current board could not be validated. Refresh the match before moving.","waiting");return}
+  if(chess.turn()!==state.activeColor){setStatus("The board is syncing with the server. Wait for the current position to load.","waiting");if(!offlineMode)loadMatch();return}
   const piece=chess.get(sq);
   const movableColor=offlineMode?chess.turn():playerColor;
   selectedSquare=sq;
@@ -419,6 +536,78 @@ function clearIllegalFeedback(){
   if(illegalFeedbackTimer)clearTimeout(illegalFeedbackTimer);
   illegalFeedbackTimer=null;illegalSquares.clear();
 }
+function boardCanInteract(){
+  return !!state&&state.status==="active"&&(!state.result)&&(offlineMode||state.activeColor===playerColor);
+}
+function squareFromTarget(target){
+  let element=target;
+  while(element&&element!==chessBoard){
+    if(element.dataset&&element.dataset.square)return element;
+    element=element.parentElement;
+  }
+  return null;
+}
+function clearDragVisual(){
+  if(!dragState)return;
+  const glyph=dragState.glyph;
+  if(glyph){glyph.style.transform="";glyph.classList.remove("dragging")}
+  const id=dragState.pointerId;
+  if(chessBoard&&id!=null&&typeof chessBoard.releasePointerCapture==="function"){
+    try{if(!chessBoard.hasPointerCapture||chessBoard.hasPointerCapture(id))chessBoard.releasePointerCapture(id)}catch(_){}
+  }
+}
+function handleBoardPointerDown(event){
+  if(!boardCanInteract()||pendingPromotion||event.isPrimary===false||(event.button!=null&&event.button!==0))return;
+  const square=squareFromTarget(event.target);
+  if(!square)return;
+  const piece=currentRulesPosition()?.get(square.dataset.square);
+  const movableColor=offlineMode?state.activeColor:playerColor;
+  if(!piece||piece.color!==movableColor)return;
+  dragState={pointerId:event.pointerId,from:square.dataset.square,x:Number(event.clientX)||0,y:Number(event.clientY)||0,dragging:false,glyph:null};
+}
+function handleBoardPointerMove(event){
+  if(!dragState||(dragState.pointerId!=null&&event.pointerId!==dragState.pointerId))return;
+  const dx=(Number(event.clientX)||0)-dragState.x,dy=(Number(event.clientY)||0)-dragState.y;
+  if(!dragState.dragging&&Math.hypot(dx,dy)<8)return;
+  if(!dragState.dragging){
+    dragState.dragging=true;
+    selectPiece(dragState.from);
+    dragState.glyph=boardSquares.get(dragState.from)?.glyph||null;
+    if(dragState.glyph)dragState.glyph.classList.add("dragging");
+    if(chessBoard&&dragState.pointerId!=null&&typeof chessBoard.setPointerCapture==="function"){
+      try{chessBoard.setPointerCapture(dragState.pointerId)}catch(_){}
+    }
+  }
+  if(typeof event.preventDefault==="function")event.preventDefault();
+  if(dragState.glyph)dragState.glyph.style.transform="translate3d("+dx+"px,"+dy+"px,0) scale(1.08)";
+}
+function handleBoardPointerUp(event){
+  if(!dragState||(dragState.pointerId!=null&&event.pointerId!==dragState.pointerId))return;
+  const finished=dragState;
+  let target=null;
+  if(finished.dragging){
+    const hit=document.elementFromPoint&&Number.isFinite(Number(event.clientX))&&Number.isFinite(Number(event.clientY))
+      ?document.elementFromPoint(event.clientX,event.clientY):null;
+    target=squareFromTarget(hit)||squareFromTarget(event.target);
+  }
+  clearDragVisual();dragState=null;
+  if(finished.dragging){
+    suppressSquareClickUntil=Date.now()+400;
+    if(target&&target.dataset.square!==finished.from)clickSquare(target.dataset.square);
+  }
+}
+function handleBoardPointerCancel(event){
+  if(!dragState||(dragState.pointerId!=null&&event.pointerId!==dragState.pointerId))return;
+  clearDragVisual();dragState=null;
+}
+function installBoardPointerHandlers(){
+  if(!chessBoard||boardPointerHandlersInstalled)return;
+  boardPointerHandlersInstalled=true;
+  chessBoard.addEventListener("pointerdown",handleBoardPointerDown);
+  chessBoard.addEventListener("pointermove",handleBoardPointerMove);
+  chessBoard.addEventListener("pointerup",handleBoardPointerUp);
+  chessBoard.addEventListener("pointercancel",handleBoardPointerCancel);
+}
 function openPromotionChooser(from,to){
   pendingPromotion={from,to};
   if(promotionTitleElement)promotionTitleElement.textContent="Choose a piece for your pawn on "+to.toUpperCase();
@@ -440,11 +629,11 @@ function choosePromotion(piece){
   const isLegal=legalTargets.some(candidate=>candidate.from===move.from&&candidate.to===move.to&&candidate.promotion===piece);
   cancelPromotion();
   if(!isLegal){flashIllegalMove(move.from,move.to);setStatus("That promotion is not legal in the current position.","waiting");return}
-  selectedSquare=null;legalTargets=[];renderBoard();
+  selectedSquare=null;legalTargets=[];
   return sendMove(move.from,move.to,piece);
 }
 function clickSquare(sq){
-  if(!state||state.status!=="active"||(!offlineMode&&state.activeColor!==playerColor)||state.result||movePending)return;
+  if(!boardCanInteract())return;
   const b=currentBoard(),{r,c}=parseSquare(sq),p=b[r][c];
   const movableColor=offlineMode?state.activeColor:playerColor;
   if(selectedSquare){
@@ -452,7 +641,7 @@ function clickSquare(sq){
     if(targets.length){
       const from=selectedSquare;
       if(targets.some(move=>move.promotion)){openPromotionChooser(from,sq);return}
-      selectedSquare=null;legalTargets=[];renderBoard();sendMove(from,sq);return;
+      selectedSquare=null;legalTargets=[];sendMove(from,sq);return;
     }
     if(p&&p.color===movableColor){selectPiece(sq);return}
     if(sq!==selectedSquare){flashIllegalMove(selectedSquare,sq);setStatus("That move is illegal. Choose a highlighted square.","waiting");return}
@@ -460,10 +649,19 @@ function clickSquare(sq){
   if(p&&p.color===movableColor){selectPiece(sq);return}
   selectedSquare=null;legalTargets=[];renderBoard();
 }
+function enqueueMoveSynchronization(id,task){
+  const key=Number(id),previous=moveSyncQueues.get(key)||Promise.resolve();
+  const operation=previous.then(task,task);
+  const tail=operation.catch(()=>{});
+  moveSyncQueues.set(key,tail);
+  tail.then(()=>{if(moveSyncQueues.get(key)===tail)moveSyncQueues.delete(key)});
+  return operation;
+}
 async function sendMove(from,to,promotion){
-  if(!state||state.status!=="active"||(!offlineMode&&state.activeColor!==playerColor)||movePending)return false;
+  if(!boardCanInteract())return false;
   const chess=currentRulesPosition();
   if(!chess){setStatus("The current board could not be validated. Refresh the match before moving.","waiting");return false}
+  if(chess.turn()!==state.activeColor){setStatus("The board is syncing with the server. Wait for the current position to load.","waiting");if(!offlineMode)loadMatch();return false}
   const candidates=chess.moves({square:from,verbose:true}).filter(move=>move.to===to);
   if(!candidates.length){flashIllegalMove(from,to);setStatus("That move is illegal. The board has not changed.","waiting");return false}
   const promotionRequired=candidates.some(move=>Boolean(move.promotion));
@@ -475,7 +673,7 @@ async function sendMove(from,to,promotion){
   catch(_){flashIllegalMove(from,to);setStatus("That move is illegal. The board has not changed.","waiting");return false}
   if(!move){flashIllegalMove(from,to);setStatus("That move is illegal. The board has not changed.","waiting");return false}
   const submittedMatchId=Number(matchId),submittedEpoch=boardEpoch;
-  const movedAt=Date.now(),moverColor=state.activeColor;
+  const movedAt=monotonicNow(),movedAtWall=Date.now(),moverColor=state.activeColor;
   const clocksBefore={whiteTimeMs:remaining("w"),blackTimeMs:remaining("b")};
   const incrementMatch=String(state.timeControl||config.timeControl||"").match(/\+(\d+)$/);
   const incrementMs=incrementMatch?Number(incrementMatch[1])*1000:0;
@@ -488,53 +686,95 @@ async function sendMove(from,to,promotion){
   else if(chess.isDraw()||chess.isStalemate()||chess.isThreefoldRepetition()||chess.isInsufficientMaterial())terminal={result:"draw",reason:chess.isStalemate()?"stalemate":"draw"};
   const nextState={...state,fen:chess.fen(),pgn:chess.pgn(),activeColor:chess.turn(),lastMove:{from:move.from,to:move.to},checkSquare:calculateCheckSquare(chess),
     whiteTimeMs:clocksAfter.whiteTimeMs,blackTimeMs:clocksAfter.blackTimeMs,status:terminal?"offline_pending":"active",result:null,
-    claimedResult:terminal?.result||null,terminationReason:terminal?.reason||null,savedAt:movedAt};
+    claimedResult:terminal?.result||null,terminationReason:terminal?.reason||null,savedAt:movedAtWall};
   const entry={actorColor:moverColor,actorUserId:moverColor===playerColor?getUserId():null,from:move.from,to:move.to,promotion:move.promotion||null,san:move.san,flags:move.flags,
     fenBefore:state.fen,pgnBefore:state.pgn||"",fenAfter:chess.fen(),pgnAfter:chess.pgn(),clocksBefore,clocksAfter,
-    elapsedBeforeMoveMs:Math.max(0,movedAt-(localClockAt||movedAt)),movedAt:new Date(movedAt).toISOString(),before:matchSnapshot({...state,...clocksBefore})};
+    elapsedBeforeMoveMs:Math.max(0,movedAt-localClockAt),movedAt:new Date(movedAtWall).toISOString(),before:matchSnapshot({...state,...clocksBefore})};
   state=nextState;stateVersion++;localWhiteMs=clocksAfter.whiteTimeMs;localBlackMs=clocksAfter.blackTimeMs;localClockAt=movedAt;
-  const versionAtSubmit=stateVersion;
-  selectedSquare=null;legalTargets=[];clearIllegalFeedback();movePending=true;
-  setPlayers();renderBoard();setStatus(offlineMode?"Local move saved on this device.":"Move saved locally; confirming with the server…","ready");
-  let record;
-  try{record=await recordLocalMove(entry,nextState,terminal)}catch(error){
-    state=stateBeforeMove(entry);localWhiteMs=clocksBefore.whiteTimeMs;localBlackMs=clocksBefore.blackTimeMs;localClockAt=movedAt;movePending=false;
-    renderBoard();setStatus("This move could not be saved on this device, so it was not submitted.","waiting");
-    setConnectionStatus("Local storage unavailable · match unchanged","offline");return false;
-  }
-  if(offlineMode||navigator.onLine===false){
-    movePending=false;offlineMode=true;offlineConflict=offlineConflict||record.sync.status==="conflict";
-    setConnectionStatus("Offline local board · opponent cannot see these moves; results are unverified.","offline");
-    setStatus(terminal?"Local game finished — awaiting server verification.":"Local position saved. You can continue here, but it is not synchronized.","waiting");
-    scheduleMatchPolling();return true;
-  }
-  setConnectionStatus("");
-  const r=await api("/api/chess/"+submittedMatchId+"/move",{method:"POST",body:{from,to,promotion:promotion||"q"}});
-  movePending=false;
-  if(submittedEpoch!==boardEpoch||submittedMatchId!==Number(matchId))return false;
-  if(!r.ok&&r.status===0){offlineMode=true;retryDelayMs=Math.min(30000,Math.max(4000,retryDelayMs*2));lastConnectionError=r.data.message||"The server is offline.";
-    setConnectionStatus("Offline local board · opponent cannot see these moves; results are unverified.","offline");
-    setStatus(terminal?"Local game finished — awaiting server verification.":"Move saved locally. You can continue here, but it is not synchronized.","waiting");scheduleMatchPolling();return true}
-  if(!r.ok){offlineMode=true;offlineConflict=true;await markOfflineConflict(submittedMatchId,r.data.message||"The server rejected this move history.");
-    if(r.status===400)flashIllegalMove(from,to);setConnectionStatus("Saved local history conflicts with the server · result is unverified.","offline");setStatus(r.data.message||"Server could not verify this local move.","waiting");return false}
-  const confirmedState=r.data.match||r.data;
-  if(!sameSavedPosition(nextState,confirmedState)){
-    await markOfflineConflict(submittedMatchId,"The server response did not confirm the locally saved move.",confirmedState);
-    offlineMode=true;offlineConflict=true;
-    applyState(confirmedState);
-    setConnectionStatus("Server position differs from the saved move · local evidence is preserved for review.","offline");
-    setStatus("The server did not confirm this move. Your local record was saved for review.","waiting");
+  const versionAtSubmit=stateVersion,offlineAtMove=offlineMode||navigator.onLine===false;
+  selectedSquare=null;legalTargets=[];clearIllegalFeedback();
+  setPlayers();renderBoard();setStatus(offlineAtMove?"Move shown locally; saving recovery data…":"Move shown locally; syncing with the server…","ready");
+  pendingMovePersistence++;
+  let durableMove;
+  try{durableMove=recordLocalMove(entry,nextState,terminal)}catch(error){durableMove=Promise.reject(error)}
+  const recordPromise=Promise.resolve(durableMove).then(record=>{pendingMovePersistence=Math.max(0,pendingMovePersistence-1);return record},error=>{pendingMovePersistence=Math.max(0,pendingMovePersistence-1);throw error});
+  return enqueueMoveSynchronization(submittedMatchId,async()=>{
+    const isCurrent=()=>submittedEpoch===boardEpoch&&submittedMatchId===Number(matchId);
+    let record;
+    try{record=await recordPromise}catch(error){
+      if(isCurrent()){
+        offlineMode=true;offlineConflict=true;
+        setConnectionStatus("Local recovery could not save this move. It was not sent; keep this match open.","offline");
+        setStatus("Move is visible locally, but recovery storage failed. Do not refresh this page.","waiting");
+      }else setConnectionStatus("A move from the previous match could not be saved locally. Reopen that match for recovery review.","recovery");
+      return false;
+    }
+    if(offlineAtMove||offlineMode||navigator.onLine===false){
+      if(isCurrent()){
+        offlineMode=true;offlineConflict=offlineConflict||record.sync.status==="conflict";
+        setConnectionStatus("Offline local board · opponent cannot see these moves; results are unverified.","offline");
+        setStatus(terminal?"Local game finished — awaiting server verification.":"Local position saved. You can continue here, but it is not synchronized.","waiting");
+        scheduleMatchPolling();
+      }
+      return true;
+    }
+    if(offlineConflict){
+      if(isCurrent()){setConnectionStatus("Saved local history conflicts with the server · result is unverified.","offline");setStatus("Move saved locally but not sent because this match needs recovery.","waiting")}
+      return false;
+    }
+    if(isCurrent())setConnectionStatus("");
+    const controller=new AbortController();
+    const requestTimeout=setTimeout(()=>controller.abort(),MOVE_SYNC_TIMEOUT_MS);
+    let r;
+    try{r=await api("/api/chess/"+submittedMatchId+"/move",{method:"POST",body:{from,to,promotion:promotion||"q"},signal:controller.signal})}
+    finally{clearTimeout(requestTimeout)}
+    if(!r.ok&&r.status===0){
+      await updateOfflineRecord(submittedMatchId,current=>{if(!current)return null;current.sync={...(current.sync||{}),status:"pending",lastError:r.data.message||"The server is offline."};current.updatedAt=Date.now();return current}).catch(()=>{});
+      if(isCurrent()){
+        offlineMode=true;retryDelayMs=Math.min(30000,Math.max(4000,retryDelayMs*2));lastConnectionError=r.data.message||"The server is offline.";
+        setConnectionStatus("Offline local board · opponent cannot see these moves; results are unverified.","offline");
+        setStatus(terminal?"Local game finished — awaiting server verification.":"Move saved locally. The opponent cannot see it yet.","waiting");scheduleMatchPolling();
+      }
+      return true;
+    }
+    if(!r.ok){
+      await markOfflineConflict(submittedMatchId,r.data.message||"The server rejected this move history.");
+      if(isCurrent()){
+        offlineMode=true;offlineConflict=true;
+        if(r.status===400)flashIllegalMove(from,to);
+        setConnectionStatus("Saved local history conflicts with the server · result is unverified.","offline");
+        setStatus(r.data.message||"Server could not verify this local move.","waiting");
+      }
+      return false;
+    }
+    const confirmedState=r.data.match||r.data;
+    if(!positionInHistory(nextState,confirmedState)){
+      await markOfflineConflict(submittedMatchId,"The server response did not confirm the locally saved move.",confirmedState);
+      if(isCurrent()){
+        offlineMode=true;offlineConflict=true;applyState(confirmedState);
+        setConnectionStatus("Server position differs from the saved move · local evidence is preserved for review.","offline");
+        setStatus("The server did not confirm this move. Your local record was saved for review.","waiting");
+      }
+      return false;
+    }
+    if(isCurrent())notifyNativeEngineOfConfirmedMove(submittedMatchId,entry,confirmedState);
+    await acknowledgeLocalMoves(confirmedState);
+    if(!isCurrent())return true;
+    offlineMode=false;offlineConflict=false;retryDelayMs=2000;lastConnectionError="";setConnectionStatus("");
+    if(stateVersion===versionAtSubmit)applyState(confirmedState);
+    else if(positionInHistory(confirmedState,state)){
+      // A newer server snapshot already includes this acknowledged move.
+    }else if(positionInHistory(state,confirmedState))applyState(confirmedState);
+    else loadMatch();
+    return true;
+  }).catch(error=>{
+    console.error("Chess move synchronization failed:",error);
+    if(submittedEpoch===boardEpoch&&submittedMatchId===Number(matchId)){
+      setConnectionStatus("Move is saved locally; server confirmation is still pending.","offline");
+      setStatus("Move is saved locally and will be checked again when the connection returns.","waiting");
+    }
     return false;
-  }
-  await acknowledgeLocalMoves(confirmedState);
-  offlineMode=false;offlineConflict=false;retryDelayMs=2000;lastConnectionError="";setConnectionStatus("");
-  if(stateVersion===versionAtSubmit)applyState(confirmedState);
-  else if(!sameAuthoritativeMatchState(state,confirmedState))loadMatch();
-  return true;
-}
-function stateBeforeMove(entry){
-  const before=entry.before||{};
-  return {...state,...before,fen:entry.fenBefore,pgn:entry.pgnBefore,activeColor:entry.actorColor,status:"active",result:null,claimedResult:null};
+  });
 }
 function markOfflineConflict(id,message,serverMatch){
   return updateOfflineRecord(id,record=>{
@@ -544,16 +784,13 @@ function markOfflineConflict(id,message,serverMatch){
     record.updatedAt=Date.now();return record;
   });
 }
-function sameAuthoritativeMatchState(left,right){
-  return !!left&&!!right&&Number(left.matchId)===Number(right.matchId)&&left.fen===right.fen&&left.pgn===right.pgn&&left.status===right.status&&left.result===right.result&&Number(left.winnerId||0)===Number(right.winnerId||0)&&left.activeColor===right.activeColor&&Number(left.drawOfferUserId||0)===Number(right.drawOfferUserId||0);
-}
 function applyState(m){
   if(!m)return;
   if(m.matchId&&Number(m.matchId)!==Number(matchId))return;
-  if(state&&state.fen!==m.fen){selectedSquare=null;legalTargets=[];clearIllegalFeedback();cancelPromotion();movePending=false}
+  if(state&&state.fen!==m.fen){selectedSquare=null;legalTargets=[];clearIllegalFeedback();cancelPromotion();clearDragVisual();dragState=null}
   stateVersion++;
   state=m; playerColor=m.playerColor||playerColor;
-  if(!orientationSet&&m.playerColor){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=Date.now();
+  if(!orientationSet&&m.playerColor){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=monotonicNow();
   const check=m.checkSquare?" · CHECK":"";
   setInfo();setPlayers();setStatus(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:(m.status==="waiting"?"Searching for an opponent…":m.status==="settling"?"Settling result…":m.status==="cancelled"?"Search cancelled":"Game finished"),m.status==="waiting"||m.status==="settling"?"waiting":"ready");
   if(m.status==="waiting"){
@@ -577,6 +814,42 @@ function getUserId(){
 function sameSavedPosition(left,right){
   return !!left&&!!right&&left.fen===right.fen&&(left.pgn||"")===(right.pgn||"");
 }
+function pgnPosition(position){
+  if(!position||!position.fen)return null;
+  try{
+    const chess=new Chess();
+    let initialFen=DEFAULT_CHESS_FEN;
+    if(position.pgn){
+      chess.loadPgn(position.pgn);
+      const headers=chess.getHeaders();
+      const fenHeader=Object.keys(headers).find(key=>key.toLowerCase()==="fen");
+      initialFen=fenHeader?headers[fenHeader]:DEFAULT_CHESS_FEN;
+    }else{
+      chess.load(position.fen);
+      initialFen=position.fen;
+    }
+    if(chess.fen()!==position.fen)return null;
+    const moves=chess.history({verbose:true}).map(move=>move.from+move.to+(move.promotion||""));
+    return {initialFen,moves};
+  }catch(_){return null}
+}
+function positionInHistory(ancestor,descendant){
+  if(!ancestor||!descendant)return false;
+  const ancestorId=Number(ancestor.matchId||0),descendantId=Number(descendant.matchId||0);
+  if(ancestorId&&descendantId&&ancestorId!==descendantId)return false;
+  if(sameSavedPosition(ancestor,descendant))return true;
+  const first=pgnPosition(ancestor),later=pgnPosition(descendant);
+  if(!first||!later||first.initialFen!==later.initialFen||first.moves.length>later.moves.length)return false;
+  return first.moves.every((move,index)=>move===later.moves[index]);
+}
+function lastMatchingLocalMoveIndex(moves,match){
+  let matchIndex=-1;
+  for(let index=0;index<moves.length;index++){
+    const move=moves[index];
+    if(positionInHistory({matchId:match.matchId,fen:move.fenAfter,pgn:move.pgnAfter},match))matchIndex=index;
+  }
+  return matchIndex;
+}
 async function restoreOfflineMatch(id){
   const record=await readOfflineRecord(id);
   if(!record||Number(record.matchId)!==Number(id)||Number(record.userId)!==Number(getUserId())||!record.latest)return false;
@@ -592,8 +865,8 @@ async function restoreOfflineMatch(id){
     }
   }
   matchId=Number(id);state=restored;playerColor=record.playerColor||restored.playerColor||playerColor;
-  localWhiteMs=Number(restored.whiteTimeMs||0);localBlackMs=Number(restored.blackTimeMs||0);localClockAt=Date.now();
-  offlineMode=true;offlineConflict=record.sync?.status==="conflict"||record.sync?.status==="awaiting-verification";movePending=false;
+  localWhiteMs=Number(restored.whiteTimeMs||0);localBlackMs=Number(restored.blackTimeMs||0);localClockAt=monotonicNow();
+  offlineMode=true;offlineConflict=record.sync?.status==="conflict"||record.sync?.status==="awaiting-verification";
   setInfo();setPlayers();updateMatchActions();renderBoard();
   setConnectionStatus(offlineConflict?"Saved local match · awaiting server review; result is not official.":"Offline local board · opponent cannot see these moves; results are unverified.","offline");
   setStatus(restored.status==="offline_pending"?"Local game finished — awaiting server verification.":"Saved local position restored. This board is not synchronized with your opponent.","waiting");
@@ -615,7 +888,7 @@ async function reconcileServerMatch(serverMatch){
       applyState(serverMatch);return true;
     }
     await markOfflineConflict(matchId,"The locally observed clock result does not match a completed server result.",serverMatch);
-    offlineMode=true;offlineConflict=true;movePending=false;
+    offlineMode=true;offlineConflict=true;
     setConnectionStatus("The server result differs from the local clock claim · saved evidence needs review.","offline");
     setStatus("The server could not confirm the local clock result. The saved match is preserved for review.","waiting");
     return false;
@@ -624,12 +897,12 @@ async function reconcileServerMatch(serverMatch){
     offlineMode=false;offlineConflict=false;retryDelayMs=2000;lastConnectionError="";setConnectionStatus("");
     applyState(serverMatch);return true;
   }
-  if(sameSavedPosition(record.latest,serverMatch)){
+  if(positionInHistory(record.latest,serverMatch)){
     await acknowledgeLocalMoves(serverMatch);
     offlineMode=false;offlineConflict=false;retryDelayMs=2000;lastConnectionError="";setConnectionStatus("");
     applyState(serverMatch);return true;
   }
-  const alreadyAccepted=(record.moves||[]).find(move=>!move.serverAcknowledged&&move.fenAfter===serverMatch.fen&&move.pgnAfter===(serverMatch.pgn||""));
+  const alreadyAccepted=(record.moves||[]).find(move=>!move.serverAcknowledged&&positionInHistory({matchId:serverMatch.matchId,fen:move.fenAfter,pgn:move.pgnAfter},serverMatch));
   if(alreadyAccepted){
     await acknowledgeLocalMoves(serverMatch);
     return reconcileServerMatch(serverMatch);
@@ -646,9 +919,9 @@ async function reconcileServerMatch(serverMatch){
     const response=await api("/api/chess/"+matchId+"/move",{method:"POST",body:{from:next.from,to:next.to,promotion:next.promotion||"q"}});
     if(response.ok){
       const confirmed=response.data.match||response.data;
-      if(!sameSavedPosition({fen:next.fenAfter,pgn:next.pgnAfter},confirmed)){
+      if(!positionInHistory({matchId:matchId,fen:next.fenAfter,pgn:next.pgnAfter},confirmed)){
         await markOfflineConflict(matchId,"The server response did not confirm the locally saved move.",confirmed);
-        offlineMode=true;offlineConflict=true;movePending=false;
+        offlineMode=true;offlineConflict=true;
         applyState(confirmed);
         setConnectionStatus("Server position differs from the saved move · local evidence is preserved for review.","offline");
         setStatus("The server did not confirm this move. Your local record was saved for review.","waiting");
@@ -665,7 +938,7 @@ async function reconcileServerMatch(serverMatch){
     }
   }
   await markOfflineConflict(matchId,"The saved moves do not match the current server position or cannot be verified from this device.");
-  offlineMode=true;offlineConflict=true;movePending=false;
+  offlineMode=true;offlineConflict=true;
   setConnectionStatus("Saved local history conflicts with the server · result is unverified.","offline");
   setStatus("Local game preserved. The server position differs, so no result was submitted.","waiting");
   return false;
@@ -807,7 +1080,7 @@ function setMatchId(value){
   clearIllegalFeedback();cancelPromotion();
   matchId=next;state=null;selectedSquare=null;legalTargets=[];
   offlineMode=false;offlineConflict=false;
-  movePending=false;localWhiteMs=0;localBlackMs=0;localClockAt=0;orientationSet=false;
+  localWhiteMs=0;localBlackMs=0;localClockAt=0;orientationSet=false;
   setInfo();updateMatchActions();renderBoard();
   return true;
 }
@@ -828,10 +1101,18 @@ function setupSocket(){
     candidate.on("connect",()=>{
       if(!isCurrent())return;
       candidate.emit("chess:join",{matchId:targetMatchId});
+      candidate.emit("chess:engine:watch",{matchId:targetMatchId});
       loadMatch();
       scheduleMatchPolling();
     });
     candidate.on("disconnect",()=>{if(isCurrent())scheduleMatchPolling()});
+    candidate.on("chess:engine:status",data=>{
+      if(!isCurrent()||Number(data&&data.matchId)!==targetMatchId)return;
+      setCompanionEngineStatus(data&&data.available?"Native Android chess engine connected":"",Boolean(data&&data.available));
+    });
+    candidate.on("chess:engine:result",data=>{
+      if(isCurrent())handleNativeEngineResult(data);
+    });
     candidate.on("chess:move",data=>{
       if(!isCurrent()||Number(data&&data.matchId)!==targetMatchId)return;
       if(Number(data.actorUserId)===Number(getUserId()))return;
@@ -839,6 +1120,7 @@ function setupSocket(){
     });
     candidate.on("chess:match_ready",data=>{
       if(!isCurrent()||(data&&data.matchId!=null&&Number(data.matchId)!==targetMatchId))return;
+      candidate.emit("chess:engine:watch",{matchId:targetMatchId});
       loadMatch();
     });
     candidate.on("chess:game_over",data=>{
@@ -920,6 +1202,9 @@ if(cancelPromotionButton)cancelPromotionButton.addEventListener("click",cancelPr
 document.addEventListener("keydown",event=>{if(event.key==="Escape"&&pendingPromotion)cancelPromotion()});
 window.addEventListener("online",()=>{retryDelayMs=2000;if(matchId)loadMatch()});
 window.addEventListener("offline",()=>{offlineMode=true;setConnectionStatus("Server unavailable · local moves stay on this device and are unverified.","offline");scheduleMatchPolling()});
+window.addEventListener("beforeunload",event=>{
+  if(pendingMovePersistence>0){event.preventDefault();event.returnValue=""}
+});
 window.addEventListener("gg-chess-socket-ready",()=>setupSocket());
 window.addEventListener("message",event=>{if(!event.data||event.data.type!=="GOAL_GAMBIT_INIT")return;initializeBoard(event.data.config||{}).catch(error=>console.error("Chess board initialization failed:",error));window.parent.postMessage({type:"GOAL_GAMBIT_BOARD_READY"},"*")});
 

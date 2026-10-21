@@ -232,6 +232,24 @@ body {
     font-weight: 800;
 }
 
+.schedule-notice {
+    margin: -18px 0 22px;
+    padding: 14px 18px;
+    border: 1px solid #6d5718;
+    border-radius: 10px;
+    background: #171307;
+    color: #f0cf55;
+    font-size: 14px;
+    line-height: 1.55;
+    text-align: center;
+}
+
+.schedule-notice small {
+    display: block;
+    margin-top: 4px;
+    color: #d4d0c4;
+}
+
 .message {
     display: none;
 
@@ -484,6 +502,8 @@ body {
         </p>
 
     </section>
+
+    <div class="schedule-notice" id="scheduleNotice" role="status" aria-live="polite" hidden></div>
 
 
     <section class="card">
@@ -815,6 +835,38 @@ function showMessage(message) {
 
 }
 
+async function refreshGamingSchedule() {
+    const notice = document.getElementById("scheduleNotice");
+    if (!notice || !window.GG || typeof GG.api !== "function" || !localStorage.getItem("goalGambitToken")) return;
+    try {
+        const response = await GG.api("/api/efootball/status", { noRedirect: true });
+        if (!response || !response.ok || !response.data.gamingWindow) return;
+        const windowState = response.data.gamingWindow;
+        const daily = response.data.dailyFixtures || {};
+        const formatEat = value => value
+            ? new Intl.DateTimeFormat("en-KE", {
+                timeZone: "Africa/Nairobi", dateStyle: "medium", timeStyle: "short"
+            }).format(new Date(value)) + " EAT"
+            : "";
+        let message;
+        if (windowState.isMatchmakingOpen) {
+            message = "Matchmaking is open. New searches close at " + formatEat(windowState.nextClosesAt) + ".";
+        } else if (windowState.isSessionActive) {
+            message = "New matchmaking is closed. Confirmed sessions end at 1:00 AM EAT; new searches reopen at " + formatEat(windowState.nextOpensAt) + ".";
+        } else {
+            message = "Matchmaking is closed. It reopens at " + formatEat(windowState.nextOpensAt) + ".";
+        }
+        notice.replaceChildren();
+        notice.append(document.createTextNode(message));
+        const dailyLine = document.createElement("small");
+        dailyLine.textContent = "Today's fixtures: " + Number(daily.assigned ?? daily.scheduled ?? 0) + "/" + Number(daily.target || 4) + " assigned · " + Number(daily.completed || 0) + " completed.";
+        notice.append(dailyLine);
+        notice.hidden = false;
+    } catch (_) {
+        // A transient status read must not block matchmaking or page controls.
+    }
+}
+
 
 /* =========================================================
    BALANCE
@@ -839,6 +891,8 @@ function updateBalanceDisplay() {
 
 
 updateBalanceDisplay();
+refreshGamingSchedule();
+setInterval(refreshGamingSchedule, 60000);
 
 
 /* =========================================================

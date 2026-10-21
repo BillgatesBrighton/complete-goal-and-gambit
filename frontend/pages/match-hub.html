@@ -3596,7 +3596,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
     }
     window.addEventListener("gg:match-update", function (event) {
-        if (!event.detail || !currentMatch || !currentMatch.backendId || String(event.detail.matchId) === String(currentMatch.backendId)) {
+        if (!event.detail || event.detail.scheduleChanged || !currentMatch || !currentMatch.backendId || String(event.detail.matchId) === String(currentMatch.backendId)) {
             syncFromServer();
         }
     });

@@ -109,7 +109,7 @@ function formatDate(value) {
   if (!value) return "Start time to be announced";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Start time to be announced";
-  return "Starts " + date.toLocaleString();
+  return "Starts " + date.toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }) + " EAT";
 }
 
 function tournamentCard(tournament) {
@@ -121,14 +121,17 @@ function tournamentCard(tournament) {
   const forfeited = tournament.forfeited === true;
   const canCancel = tournament.can_cancel === true;
   const canForfeit = tournament.can_forfeit === true;
-  const isOpen = String(tournament.status || "").toLowerCase() === "open";
+  const status = String(tournament.status || "").toLowerCase();
+  const isOpen = status === "open";
+  const fullScheduled = tournament.capacity_full === true && status === "scheduled";
+  const isActive = status === "in_progress";
   const canJoin = isOpen && remaining > 0 && !joined && !forfeited;
   const fee = Number(tournament.entry_fee) || 0;
   const feeLabel = fee > 0 ? "KSh " + fee.toLocaleString("en-KE") : "Free";
   const prizeAmounts = fee > 0 ? [fee * 5, fee * 4, fee * 3] : [];
   const progress = Math.min(100, Math.round(players / capacity * 100));
-  const badge = joined ? "Entered" : forfeited ? "Forfeited" : !isOpen ? "Closed" : remaining === 0 ? "Full" : "Open";
-  const badgeClass = joined || canJoin ? "state" : "state closed";
+  const badge = fullScheduled ? "Full · scheduled" : isActive ? "In progress" : joined ? "Entered" : forfeited ? "Forfeited" : !isOpen ? "Closed" : remaining === 0 ? "Full" : "Open";
+  const badgeClass = fullScheduled ? "state" : joined || canJoin ? "state" : "state closed";
   const buttonText = canJoin ? "Join tournament" : remaining === 0 && isOpen ? "Tournament full" : "Registration closed";
   const feeText = fee > 0
     ? "The entry fee is locked from your available wallet balance when you join."
@@ -143,7 +146,7 @@ function tournamentCard(tournament) {
     (prizeAmounts.length ? '<div class="facts awards"><div class="fact"><span>1st place</span><strong>KSh ' + prizeAmounts[0].toLocaleString("en-KE") + '</strong></div><div class="fact"><span>2nd place</span><strong>KSh ' + prizeAmounts[1].toLocaleString("en-KE") + '</strong></div><div class="fact"><span>3rd place</span><strong>KSh ' + prizeAmounts[2].toLocaleString("en-KE") + '</strong></div></div>' : '') +
     '<div class="progress" aria-label="' + players + ' of ' + capacity + ' places filled"><span data-tournament-progress style="width:' + progress + '%"></span></div>' +
     '<div class="capacity"><span data-tournament-count>' + players + ' entered</span><span>' + capacity + ' places</span></div>' +
-    '<p class="card-help">' + (forfeited ? "You forfeited this tournament; your entry stake was sent to the admin wallets." : joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
+    '<p class="card-help">' + (fullScheduled ? "All places are filled. The tournament starts automatically at the displayed EAT time; your fixtures will appear in the Match Hub." : isActive ? "This tournament is active. Open your group and fixtures in the Match Hub." : forfeited ? "You forfeited this tournament; your entry stake was sent to the admin wallets." : joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
     '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">' + (joined ? 'Open your group &amp; fixtures' : 'View groups &amp; fixtures') + '</a>' +
     (joined ? (canCancel ? '<button class="join cancel-entry" type="button" data-cancel-id="' + id + '">Cancel entry and refund stake</button>' : canForfeit ? '<button class="join forfeit-entry" type="button" data-forfeit-id="' + id + '">Forfeit tournament · send stake to admins</button>' : '') : forfeited ? '' : '<button class="join" type="button" data-join-id="' + id + '"' + (canJoin ? '' : ' disabled') + '>' + escape(buttonText) + '</button>') +
     '</article>';

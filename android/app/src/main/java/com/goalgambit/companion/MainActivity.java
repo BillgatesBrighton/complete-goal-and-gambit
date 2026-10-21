@@ -50,9 +50,11 @@ public final class MainActivity extends Activity {
     private TextView welcomeGreetingView;
     private TextView welcomeNameView;
     private TextView serviceStatusView;
+    private TextView chessEngineStatusView;
     private TextView upcomingStatusView;
     private TextView announcementsStatusView;
     private TextView supportStatusView;
+    private View chessMatchNoticeCard;
     private LinearLayout announcementsList;
     private LinearLayout supportMessages;
     private Button notificationsShortcut;
@@ -61,11 +63,15 @@ public final class MainActivity extends Activity {
     private EditText supportComposer;
     private Spinner supportCategory;
     private long selectedMatchId;
+    private long selectedChessMatchId;
+    private String selectedChessMatchEventKey;
     private long selectedAnnouncementId;
     private long selectedPushEventId;
     private boolean companionRefreshInFlight;
     private boolean pushReceiverRegistered;
     private boolean companionTermsAccepted;
+    private ChessEngineSocket chessEngineSocket;
+    private String chessEngineToken;
     private String termsStatusInFlightToken;
     private String termsStatusCheckedToken;
 
@@ -82,6 +88,9 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         Notifications.createChannel(this);
         selectedMatchId = getIntent().getLongExtra(Notifications.EXTRA_MATCH_ID, 0);
+        selectedChessMatchEventKey = getIntent().getStringExtra(Notifications.EXTRA_EVENT_KEY);
+        selectedChessMatchId = getIntent().getLongExtra(Notifications.EXTRA_CHESS_MATCH_ID,
+            Notifications.chessMatchIdFromEventKey(selectedChessMatchEventKey));
         selectedAnnouncementId = getIntent().getLongExtra(Notifications.EXTRA_ANNOUNCEMENT_ID, 0);
         selectedPushEventId = getIntent().getLongExtra(Notifications.EXTRA_PUSH_EVENT_ID, 0);
         buildScreen();
@@ -100,6 +109,7 @@ public final class MainActivity extends Activity {
         }
         String bearer = TokenStore.read(this);
         if (bearer != null && companionTermsAccepted) {
+            ensureChessEngineSocket(bearer);
             syncCompanionInstallation();
             if (!SupportQueueStore.pending(this, TokenStore.accountUserId(bearer)).isEmpty()) enqueueSupportSync();
             refreshCompanionData();
@@ -117,14 +127,24 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        stopChessEngineSocket();
+        super.onDestroy();
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
         selectedMatchId = intent.getLongExtra(Notifications.EXTRA_MATCH_ID, 0);
+        selectedChessMatchEventKey = intent.getStringExtra(Notifications.EXTRA_EVENT_KEY);
+        selectedChessMatchId = intent.getLongExtra(Notifications.EXTRA_CHESS_MATCH_ID,
+            Notifications.chessMatchIdFromEventKey(selectedChessMatchEventKey));
         selectedAnnouncementId = intent.getLongExtra(Notifications.EXTRA_ANNOUNCEMENT_ID, 0);
         selectedPushEventId = intent.getLongExtra(Notifications.EXTRA_PUSH_EVENT_ID, 0);
         markSelectedNotificationRead();
         if (selectedMatchId > 0) loadMatch(selectedMatchId);
+        if (selectedChessMatchId > 0 && companionTermsAccepted) addChessMatchNotice(selectedChessMatchId, selectedChessMatchEventKey);
         refreshCompanionData();
         refreshNotificationCount();
         if (intent.getBooleanExtra(Notifications.EXTRA_OPEN_SUPPORT, false) && supportMessages != null) {
@@ -152,7 +172,7 @@ public final class MainActivity extends Activity {
         TextView title = text("GOAL$GAMBIT", 27, Color.rgb(237, 195, 53), true);
         content.addView(title, params(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         String buildLabel = BuildConfig.DEBUG ? "TRIAL BUILD" : "RELEASE BUILD";
-        TextView subtitle = text("Notification companion · " + buildLabel + " · v" + BuildConfig.VERSION_NAME, 13, Color.LTGRAY, false);
+        TextView subtitle = text("Chess engine and notification companion · " + buildLabel + " · v" + BuildConfig.VERSION_NAME, 13, Color.LTGRAY, false);
         content.addView(subtitle, marginParams(-1, -2, 0, 4, 0, 8));
         welcomeGreetingView = text("Welcome back,", 14, Color.rgb(201, 184, 111), false);
         welcomeGreetingView.setVisibility(View.GONE);
@@ -179,6 +199,7 @@ public final class MainActivity extends Activity {
         content.removeViews(5, Math.max(0, content.getChildCount() - 5));
         String bearer = TokenStore.read(this);
         if (bearer == null) {
+            stopChessEngineSocket();
             companionTermsAccepted = false;
             termsStatusCheckedToken = null;
             if (welcomeGreetingView != null) welcomeGreetingView.setVisibility(View.GONE);
@@ -366,10 +387,13 @@ public final class MainActivity extends Activity {
         content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 14));
         signOut.setOnClickListener(view -> disableNotifications(true));
         serviceStatusView = text("Checking companion services…", 13, Color.LTGRAY, false);
+        chessEngineStatusView = text("Native chess engine: connecting…", 13, Color.LTGRAY, false);
+        content.addView(chessEngineStatusView, marginParams(-1, -2, 0, 0, 0, 9));
         upcomingStatusView = text("Checking upcoming games…", 15, Color.WHITE, false);
         upcomingStatusView.setPadding(dp(12), dp(12), dp(12), dp(12));
         upcomingStatusView.setBackgroundColor(Color.rgb(25, 25, 25));
         content.addView(serviceStatusView, marginParams(-1, -2, 0, 0, 0, 10));
+        ensureChessEngineSocket(TokenStore.read(this));
         content.addView(text("UPCOMING GAMES", 17, Color.rgb(237, 195, 53), true), marginParams(-1, -2, 0, 8, 0, 7));
         content.addView(upcomingStatusView, marginParams(-1, -2, 0, 0, 0, 8));
         Button openHub = button("OPEN MATCH HUB");
@@ -411,6 +435,7 @@ public final class MainActivity extends Activity {
         String supportCategoryExtra = getIntent().getStringExtra("supportCategory");
         if ("suggestion".equals(supportCategoryExtra) && supportCategory != null) supportCategory.setSelection(1);
         if (selectedMatchId > 0) addMatchLoading(selectedMatchId);
+        if (selectedChessMatchId > 0) addChessMatchNotice(selectedChessMatchId, selectedChessMatchEventKey);
         refreshCompanionData();
     }
 
@@ -697,6 +722,28 @@ public final class MainActivity extends Activity {
         startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
     }
 
+    private void ensureChessEngineSocket(String bearer) {
+        if (bearer == null || bearer.trim().isEmpty() || !companionTermsAccepted) {
+            stopChessEngineSocket();
+            return;
+        }
+        if (chessEngineSocket != null && bearer.equals(chessEngineToken)) return;
+        stopChessEngineSocket();
+        chessEngineToken = bearer;
+        chessEngineSocket = new ChessEngineSocket(bearer, message -> {
+            if (chessEngineStatusView != null) chessEngineStatusView.setText("Native chess engine: " + message);
+        });
+        chessEngineSocket.connect();
+    }
+
+    private void stopChessEngineSocket() {
+        if (chessEngineSocket != null) {
+            chessEngineSocket.close();
+            chessEngineSocket = null;
+        }
+        chessEngineToken = null;
+    }
+
     private String formatTimestamp(String value) {
         return formatTimestamp(value, null);
     }
@@ -741,6 +788,7 @@ public final class MainActivity extends Activity {
     }
 
     private void disableNotifications(boolean signOut) {
+        if (signOut) stopChessEngineSocket();
         String bearer = TokenStore.read(this);
         statusView.setText(signOut ? "Signing out…" : "Disabling Android notifications…");
         API_EXECUTOR.execute(() -> {
@@ -826,6 +874,31 @@ public final class MainActivity extends Activity {
     private void loadMatch(long matchId) {
         if (content == null || TokenStore.read(this) == null) return;
         renderAccountState();
+    }
+
+    private void addChessMatchNotice(long matchId, String eventKey) {
+        if (matchId <= 0 || content == null || !companionTermsAccepted) return;
+        if (chessMatchNoticeCard != null && chessMatchNoticeCard.getParent() instanceof ViewGroup) {
+            ((ViewGroup) chessMatchNoticeCard.getParent()).removeView(chessMatchNoticeCard);
+        }
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackgroundColor(Color.rgb(25, 25, 25));
+        String message = eventKey != null && eventKey.contains(":finished:")
+            ? "Your chess match has finished. Open the website board to view the official result."
+            : "It is your turn in chess. Continue on the GOAL$GAMBIT website board.";
+        card.addView(text("CHESS MATCH UPDATE · #" + matchId, 16, Color.rgb(237, 195, 53), true), marginParams(-1, -2, 0, 0, 0, 5));
+        card.addView(text(message, 14, Color.LTGRAY, false), marginParams(-1, -2, 0, 0, 0, 8));
+        Button openBoard = button("OPEN CHESSBOARD");
+        card.addView(openBoard, marginParams(-1, -2, 0, 0, 0, 0));
+        openBoard.setOnClickListener(view -> {
+            String url = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/board.html?matchId=" + matchId;
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        });
+        content.addView(card, marginParams(-1, -2, 0, 0, 0, 12));
+        chessMatchNoticeCard = card;
+        if (screenScroll != null) screenScroll.post(() -> screenScroll.smoothScrollTo(0, card.getTop()));
     }
 
     private void confirmReceipt(long matchId, Button button, TextView match) {

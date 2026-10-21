@@ -29,7 +29,9 @@ const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
 const createChessScheduleReminders = require("./services/chessScheduleReminders");
+const createChessEngineRelay = require("./services/chessEngineRelay");
 const createAdminAnnouncementReminders = require("./services/adminAnnouncementReminders");
+const createEfootballScheduler = require("./services/efootballScheduler");
 const tournamentRoutes = require("./routes/tournaments");
 const leagueRoutes = require("./routes/leagues");
 const mpesaRoutes = require("./routes/mpesa");
@@ -316,7 +318,10 @@ const io = new Server(
 
 );
 
+const chessEngineRelay = createChessEngineRelay(pool, io);
+
 const onlineUserSockets = new Map();
+const efootballScheduler = createEfootballScheduler(pool, pushService, io);
 
 function getOnlineUserIds() {
     return Array.from(onlineUserSockets.keys());
@@ -412,6 +417,8 @@ io.use(
 io.on(
     "connection",
     function(socket) {
+
+        chessEngineRelay.attachSocket(socket);
 
         console.log(
             "Socket connected:",
@@ -821,7 +828,8 @@ app.use(
     chessRoutes(
         pool,
         authenticateToken,
-        io
+        io,
+        pushService
     )
 );
 
@@ -833,7 +841,8 @@ app.use(
         pool,
         authenticateToken,
         io,
-        pushService
+        pushService,
+        efootballScheduler
     )
 );
 
@@ -841,7 +850,8 @@ app.use(
     "/api/tournaments",
     tournamentRoutes(
         pool,
-        authenticateToken
+        authenticateToken,
+        pushService
     )
 );
 
@@ -872,7 +882,7 @@ app.use(
 
 app.use(
     "/api/admin",
-    adminRoutes(pool, authenticateToken, getOnlineUserIds, pushService)
+    adminRoutes(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler)
 );
 
 app.use(
@@ -1243,6 +1253,7 @@ app.use(
 async function shutdown(signal) {
 
     pushService.stop();
+    efootballScheduler.stop();
 
     console.log(
         `\n${signal} received. Shutting down GOAL$GAMBIT...`
@@ -1325,6 +1336,7 @@ async function startServer() {
     }
 
     pushService.start();
+    efootballScheduler.start();
     server.listen(PORT, HOST, function() {
 
         console.log(

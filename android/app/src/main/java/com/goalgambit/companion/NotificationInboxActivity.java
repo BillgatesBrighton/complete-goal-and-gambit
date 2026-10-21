@@ -165,6 +165,8 @@ public final class NotificationInboxActivity extends Activity {
             .putExtra(Notifications.EXTRA_PUSH_EVENT_ID, eventId)
             .putExtra(Notifications.EXTRA_EVENT_KEY, eventKey)
             .putExtra(Notifications.EXTRA_MATCH_ID, matchId);
+        long chessMatchId = Notifications.chessMatchIdFromEventKey(eventKey);
+        if (chessMatchId > 0) intent.putExtra(Notifications.EXTRA_CHESS_MATCH_ID, chessMatchId);
         if (eventKey.startsWith("support-reply:") || eventKey.startsWith("support-message:")) {
             intent.putExtra(Notifications.EXTRA_OPEN_SUPPORT, true);
         }

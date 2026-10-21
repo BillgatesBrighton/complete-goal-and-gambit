@@ -362,14 +362,14 @@ test("companion onboarding requires authenticated app registration, current term
     assert.equal(status.onboardingComplete, false);
     assert.equal(status.termsAccepted, false);
     assert.equal(status.termsVersion, companionRoutes.TERMS_VERSION);
-    assert.equal(status.apk.version, "1.0.9", "the companion download reports the newly built app version");
+    assert.equal(status.apk.version, "1.2.0", "the companion download reports the newly built app version");
     assert.equal((await readStatus({})).status, 401, "status is private to an authenticated account");
     assert.equal((await fetch(base + "/terms/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 401,
         "an unauthenticated request cannot record terms acceptance");
 
     const registrationBeforeTerms = await fetch(base + "/register", {
         method: "POST", headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ installationId: "616f3b9c-48e4-4e89-a263-df5bc7b6144f", appVersion: "1.0.9", platform: "android", notificationPermissionStatus: "granted" })
+        body: JSON.stringify({ installationId: "616f3b9c-48e4-4e89-a263-df5bc7b6144f", appVersion: "1.2.0", platform: "android", notificationPermissionStatus: "granted" })
     });
     assert.equal(registrationBeforeTerms.status, 403, "the backend blocks app registration until current terms are accepted");
     assert.deepEqual(registrationUsers, [], "a blocked registration cannot confirm an installation");

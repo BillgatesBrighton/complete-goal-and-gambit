@@ -379,6 +379,12 @@ CREATE INDEX IF NOT EXISTS idx_efootball_waiting_search_activity
 CREATE INDEX IF NOT EXISTS idx_efootball_ranked_waiting_queue
     ON efootball_matches (stake_amount, created_at, id)
     WHERE mode='ranked' AND status='waiting' AND opponent_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_efootball_ranked_creator_daily
+    ON efootball_matches (creator_id, created_at)
+    WHERE mode='ranked' AND opponent_id IS NOT NULL AND status<>'cancelled';
+CREATE INDEX IF NOT EXISTS idx_efootball_ranked_opponent_daily
+    ON efootball_matches (opponent_id, created_at)
+    WHERE mode='ranked' AND opponent_id IS NOT NULL AND status<>'cancelled';
 
 CREATE TABLE IF NOT EXISTS efootball_leagues (
     id                  SERIAL PRIMARY KEY,
@@ -437,6 +443,11 @@ CREATE TABLE IF NOT EXISTS efootball_league_fixtures (
 );
 CREATE INDEX IF NOT EXISTS efootball_league_fixtures_round_idx
     ON efootball_league_fixtures(league_id, round_number, status);
+CREATE INDEX IF NOT EXISTS idx_efootball_league_fixtures_home
+    ON efootball_league_fixtures(home_id,league_id,round_number,status);
+CREATE INDEX IF NOT EXISTS idx_efootball_league_fixtures_away
+    ON efootball_league_fixtures(away_id,league_id,round_number,status)
+    WHERE away_id IS NOT NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS league_fixture_id BIGINT REFERENCES efootball_league_fixtures(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS efootball_tournaments (
@@ -496,7 +507,34 @@ CREATE TABLE IF NOT EXISTS efootball_tournament_fixtures (
 );
 CREATE INDEX IF NOT EXISTS efootball_tournament_fixtures_round_idx
     ON efootball_tournament_fixtures(tournament_id, round_number, group_code, status);
+CREATE INDEX IF NOT EXISTS idx_efootball_tournament_fixtures_home
+    ON efootball_tournament_fixtures(home_id,tournament_id,round_number,status);
+CREATE INDEX IF NOT EXISTS idx_efootball_tournament_fixtures_away
+    ON efootball_tournament_fixtures(away_id,tournament_id,round_number,status)
+    WHERE away_id IS NOT NULL;
 ALTER TABLE efootball_matches ADD COLUMN IF NOT EXISTS tournament_fixture_id BIGINT REFERENCES efootball_tournament_fixtures(id) ON DELETE SET NULL;
+
+-- Keep backend scheduling decisions auditable for administrators. These rows
+-- contain operational status/rejection reasons, never wallet credentials.
+CREATE TABLE IF NOT EXISTS efootball_matchmaking_rejections (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reason      VARCHAR(40) NOT NULL,
+    mode        VARCHAR(30) NOT NULL DEFAULT 'ranked',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_matchmaking_rejections_recent
+    ON efootball_matchmaking_rejections(created_at DESC,reason);
+
+CREATE TABLE IF NOT EXISTS efootball_scheduler_logs (
+    id              BIGSERIAL PRIMARY KEY,
+    event_type      VARCHAR(40) NOT NULL,
+    message         VARCHAR(300) NOT NULL,
+    details         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_scheduler_logs_recent
+    ON efootball_scheduler_logs(created_at DESC,event_type);
 
 
 -- ======================================================

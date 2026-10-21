@@ -160,9 +160,12 @@ module.exports = function (pool, authenticateToken) {
         try {
             await client.query("BEGIN");
 
-            const u = await client.query("SELECT game FROM users WHERE id = $1", [uid]);
-            if (u.rows.length && u.rows[0].game === "chess") {
-                throw new Error("Your account is registered for Chess only.");
+            const u = await client.query("SELECT game,account_status FROM users WHERE id = $1", [uid]);
+            if (!u.rows.length || u.rows[0].account_status !== "active") {
+                throw Object.assign(new Error("Your account cannot join an eFootball league."), { status: 403 });
+            }
+            if (!['konami','both'].includes(u.rows[0].game)) {
+                throw Object.assign(new Error("Your account is not registered for eFootball."), { status: 403 });
             }
 
             const foundLeague = await findLeague(client, req.params.id);

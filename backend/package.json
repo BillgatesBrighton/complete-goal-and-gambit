@@ -11,7 +11,7 @@
     "server:on": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File server-on.ps1",
     "server:off": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File server-off.ps1",
     "setup-db": "node db/setup.js",
-    "test": "node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/admin-match-management.test.js && node test/admin-wallet.test.js && node test/user-history.test.js && node test/chess-competitions.test.js && node test/chat.test.js && node test/announcement-companion.test.js && node test/wallet-financial-rules.test.js"
+    "test": "node test/efootball-schedule-rules.test.js && node test/efootball-scheduler.test.js && node test/efootball-schedule-endpoints.test.js && node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/admin-match-management.test.js && node test/admin-wallet.test.js && node test/user-history.test.js && node test/chess-competitions.test.js && node test/chat.test.js && node test/announcement-companion.test.js && node test/wallet-financial-rules.test.js"
   },
   "author": "GOAL$GAMBIT",
   "license": "ISC",

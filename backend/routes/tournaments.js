@@ -6,6 +6,7 @@ const gameAccess = require("../middleware/gameAccess");
 const { ensureTournamentRound, recordFixtureResult } = require("../services/efootballtournament");
 const { creditPlatform, refundReservedPlatformFee } = require("../services/adminWalletAccounting");
 const { recordJournal } = require("../services/financialLedger");
+const { getEfootballScheduleState } = require("../services/efootballScheduleRules");
 
 function httpError(status, message) {
     const error = new Error(message);
@@ -18,9 +19,29 @@ function parseId(value) {
     return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-module.exports = function (pool, authenticateToken) {
+module.exports = function (pool, authenticateToken, pushService) {
     const router = express.Router();
     const requireKonamiCompanion = gameAccess(pool, "konami");
+
+    async function notifyTournamentUsers(client, tournamentId, userIds, eventSuffix, title, body) {
+        if (!pushService || typeof pushService.enqueueNotification !== "function") return;
+        for (const userId of userIds) {
+            await client.query("SAVEPOINT tournament_push_enqueue");
+            try {
+                await pushService.enqueueNotification(client, Number(userId), {
+                    eventKey: "efootball-tournament:" + Number(tournamentId) + ":" + eventSuffix,
+                    title,
+                    body,
+                    page: "match-hub"
+                });
+                await client.query("RELEASE SAVEPOINT tournament_push_enqueue");
+            } catch (error) {
+                await client.query("ROLLBACK TO SAVEPOINT tournament_push_enqueue").catch(() => {});
+                await client.query("RELEASE SAVEPOINT tournament_push_enqueue").catch(() => {});
+                console.error("Tournament notification enqueue failed:", error.message);
+            }
+        }
+    }
 
     // The listing is user-specific because each card shows whether the
     // signed-in player has already entered.
@@ -31,6 +52,8 @@ module.exports = function (pool, authenticateToken) {
                 `SELECT t.id, t.name, t.tier, t.entry_fee, t.max_players,
                         t.status, t.starts_at, t.created_at,
                         COUNT(tm.id)::int AS players,
+                        (COUNT(tm.id)>=t.max_players) AS capacity_full,
+                        GREATEST(t.max_players-COUNT(tm.id),0)::int AS slots_remaining,
                         EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.forfeited_at IS NULL
@@ -43,7 +66,7 @@ module.exports = function (pool, authenticateToken) {
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.first_match_at IS NULL
                                AND own.forfeited_at IS NULL
-                               AND t.status IN ('open','in_progress')
+                               AND t.status IN ('open','scheduled','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
@@ -55,7 +78,7 @@ module.exports = function (pool, authenticateToken) {
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$1 AND own.forfeited_at IS NULL
                                AND own.played > 0
-                               AND t.status IN ('open','in_progress')
+                               AND t.status IN ('open','scheduled','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
@@ -99,6 +122,8 @@ module.exports = function (pool, authenticateToken) {
                 `SELECT t.id, t.name, t.tier, t.entry_fee, t.max_players,
                         t.status, t.starts_at, t.created_at,
                         COUNT(tm.id)::int AS players,
+                        (COUNT(tm.id)>=t.max_players) AS capacity_full,
+                        GREATEST(t.max_players-COUNT(tm.id),0)::int AS slots_remaining,
                         EXISTS (
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.forfeited_at IS NULL
@@ -111,7 +136,7 @@ module.exports = function (pool, authenticateToken) {
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.first_match_at IS NULL
                                AND own.forfeited_at IS NULL
-                               AND t.status IN ('open','in_progress')
+                               AND t.status IN ('open','scheduled','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
@@ -123,7 +148,7 @@ module.exports = function (pool, authenticateToken) {
                             SELECT 1 FROM efootball_tournament_members own
                              WHERE own.tournament_id=t.id AND own.user_id=$2 AND own.forfeited_at IS NULL
                                AND own.played > 0
-                               AND t.status IN ('open','in_progress')
+                               AND t.status IN ('open','scheduled','in_progress')
                                AND NOT EXISTS (
                                    SELECT 1 FROM efootball_matches played
                                     WHERE played.tournament_id=t.id
@@ -241,7 +266,7 @@ module.exports = function (pool, authenticateToken) {
             inTransaction = true;
 
             const user = await client.query(
-                "SELECT game FROM users WHERE id = $1",
+                "SELECT game,account_status FROM users WHERE id = $1",
                 [req.user.userId]
             );
             if (!user.rows.length) {
@@ -249,6 +274,9 @@ module.exports = function (pool, authenticateToken) {
             }
             if (user.rows[0].game === "chess") {
                 throw httpError(403, "Your account is registered for Chess only.");
+            }
+            if (user.rows[0].account_status !== "active" || !["konami", "both"].includes(user.rows[0].game)) {
+                throw httpError(403, "Your account is not eligible to enter an eFootball tournament.");
             }
 
             // Serialize entries for this tournament so two simultaneous joins
@@ -380,6 +408,56 @@ module.exports = function (pool, authenticateToken) {
                 );
             }
 
+            const registeredAfterJoin = Number(count.rows[0].players) + 1;
+            if (registeredAfterJoin === capacity) {
+                const clock = await client.query("SELECT NOW() AS now");
+                const schedule = getEfootballScheduleState(clock.rows[0].now);
+                const participants = await client.query(
+                    `SELECT tm.user_id,
+                            (u.account_status='active' AND u.game IN ('konami','both')) AS eligible
+                       FROM efootball_tournament_members tm
+                       JOIN users u ON u.id=tm.user_id
+                      WHERE tm.tournament_id=$1 AND tm.forfeited_at IS NULL
+                      ORDER BY tm.joined_at,tm.id`,
+                    [id]
+                );
+                const eligible = participants.rows.length === capacity && participants.rows.every(row => row.eligible === true);
+                const startsAt = schedule.isMatchmakingOpen
+                    ? new Date(clock.rows[0].now).toISOString()
+                    : schedule.nextOpensAt;
+                await client.query(
+                    "UPDATE efootball_tournaments SET status='scheduled',starts_at=$2 WHERE id=$1 AND status='open'",
+                    [id, startsAt]
+                );
+
+                let started = false;
+                if (schedule.isMatchmakingOpen && eligible) {
+                    const round = await ensureTournamentRound(client, Number(id), true);
+                    started = Boolean(round && round.deadline_at);
+                }
+
+                await notifyTournamentUsers(
+                    client,
+                    id,
+                    participants.rows.map(row => Number(row.user_id)),
+                    "full",
+                    "Tournament full",
+                    started
+                        ? tournament.name + " is full and has started. Your first fixtures are ready in the Match Hub."
+                        : tournament.name + " is full. It will start automatically at 4:00 PM EAT when all entries pass validation."
+                );
+                if (started) {
+                    await notifyTournamentUsers(
+                        client,
+                        id,
+                        participants.rows.map(row => Number(row.user_id)),
+                        "started",
+                        "Tournament matches are ready",
+                        tournament.name + " has started. Your first fixtures are available in the Match Hub."
+                    );
+                }
+            }
+
             await client.query("COMMIT");
             inTransaction = false;
             return res.status(201).json({
@@ -419,7 +497,7 @@ module.exports = function (pool, authenticateToken) {
         try {
             await client.query("BEGIN");
             const tournament = await client.query(
-                "SELECT id,name,entry_fee FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
+                "SELECT id,name,entry_fee,status,max_players FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
                 [id]
             );
             if (!tournament.rows.length) throw httpError(404, "Tournament not found.");
@@ -537,6 +615,15 @@ module.exports = function (pool, authenticateToken) {
             }
 
             await client.query("DELETE FROM efootball_tournament_members WHERE tournament_id=$1 AND user_id=$2", [id, userId]);
+            if (tournament.rows[0].status === "scheduled") {
+                const remaining = await client.query(
+                    "SELECT COUNT(*)::int AS players FROM efootball_tournament_members WHERE tournament_id=$1 AND forfeited_at IS NULL",
+                    [id]
+                );
+                if (Number(remaining.rows[0].players) < Number(tournament.rows[0].max_players)) {
+                    await client.query("UPDATE efootball_tournaments SET status='open',starts_at=NULL WHERE id=$1 AND status='scheduled'", [id]);
+                }
+            }
             await client.query("COMMIT");
             return res.json({
                 success: true,

@@ -246,10 +246,29 @@ test("Android notification payloads use short private-safe templates and prefere
     assert.equal(createAndroidPushService.notificationBody("admin-announcement:99"), "New announcement available.");
     assert.equal(createAndroidPushService.notificationBody("admin-announcement:99:reminder:1h"), "Check out your games — competition starts soon!");
     assert.equal(createAndroidPushService.notificationBody("efootball-match:3:room-code-sent:1"), "Your match has a room-code update.");
+    assert.equal(createAndroidPushService.notificationBody("chess-match:501:turn:3"), "It is your turn in chess. Open your chessboard to continue.");
+    assert.equal(createAndroidPushService.notificationBody("chess-match:501:finished:draw"), "Your chess match has ended. Open GOAL$GAMBIT to view the result.");
     const preferenceSql = createAndroidPushService.preferenceEnabledSql("e", "p");
     assert.match(preferenceSql, /room_code_requests/);
     assert.match(preferenceSql, /competition_reminders/);
     assert.match(preferenceSql, /support_replies/);
+    assert.match(preferenceSql, /chess-match:%/);
+    assert.match(preferenceSql, /match_reminders/);
+});
+
+test("companion chess alerts open the website board without adding Android chess gameplay or API calls", () => {
+    const androidRoot = path.join(__dirname, "..", "..", "android", "app", "src", "main", "java", "com", "goalgambit", "companion");
+    const notifications = fs.readFileSync(path.join(androidRoot, "Notifications.kt"), "utf8");
+    const activity = fs.readFileSync(path.join(androidRoot, "MainActivity.java"), "utf8");
+    const inbox = fs.readFileSync(path.join(androidRoot, "NotificationInboxActivity.java"), "utf8");
+    assert.match(notifications, /chessMatchIdFromEventKey/);
+    assert.match(notifications, /EXTRA_CHESS_MATCH_ID/);
+    assert.match(activity, /board\.html\?matchId=/);
+    assert.match(activity, /Intent\.ACTION_VIEW/);
+    assert.match(activity, /Continue on the GOAL\$GAMBIT website board/);
+    assert.match(inbox, /EXTRA_CHESS_MATCH_ID/);
+    assert.doesNotMatch(fs.readFileSync(path.join(androidRoot, "Api.java"), "utf8"), /\/api\/chess/);
+    assert.doesNotMatch(fs.readFileSync(path.join(androidRoot, "MainActivity.java"), "utf8"), /Api\.(get|post|send).*Chess/i);
 });
 
 test("browser sender push exposes a button fallback and notification click opens the focused match form", async () => {

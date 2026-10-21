@@ -35,8 +35,8 @@ android {
         applicationId = "com.goalgambit.companion"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10
-        versionName = "1.0.9"
+        versionCode = 12
+        versionName = "1.2.0"
         buildConfigField("String", "API_BASE_URL", "\"$configuredApiBase\"")
     }
 
@@ -85,4 +85,9 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:35.0.0"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.work:work-runtime:2.10.5")
+    implementation("com.github.bhlangonijr:chesslib:1.3.7")
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude(group = "org.json", module = "json")
+    }
+    testImplementation("junit:junit:4.13.2")
 }

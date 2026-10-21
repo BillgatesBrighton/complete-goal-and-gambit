@@ -16,6 +16,7 @@ object Notifications {
     const val CHANNEL_ID = "goal_gambit_matches_v2"
     private const val ROOM_CODE_CHANNEL_ID = "goal_gambit_room_code_v1"
     const val EXTRA_MATCH_ID = "matchId"
+    const val EXTRA_CHESS_MATCH_ID = "chessMatchId"
     const val EXTRA_NOTIFICATION_ID = "notificationId"
     const val EXTRA_EVENT_KEY = "eventKey"
     const val EXTRA_PUSH_EVENT_ID = "pushEventId"
@@ -202,6 +203,8 @@ object Notifications {
             .putExtra(EXTRA_MATCH_ID, matchId)
             .putExtra(EXTRA_EVENT_KEY, eventKey)
             .putExtra(EXTRA_PUSH_EVENT_ID, pushEventId)
+        val chessMatchId = chessMatchIdFromEventKey(eventKey)
+        if (chessMatchId > 0) intent.putExtra(EXTRA_CHESS_MATCH_ID, chessMatchId)
         val announcementId = announcementIdFromEventKey(eventKey)
         if (announcementId > 0) intent.putExtra(EXTRA_ANNOUNCEMENT_ID, announcementId)
         if (eventKey.startsWith("support-reply:") || eventKey.startsWith("support-message:")) {
@@ -219,6 +222,18 @@ object Notifications {
         val prefix = "admin-announcement:"
         if (!eventKey.startsWith(prefix)) return 0L
         return eventKey.removePrefix(prefix).substringBefore(':').toLongOrNull() ?: 0L
+    }
+
+    @JvmStatic
+    fun chessMatchIdFromEventKey(eventKey: String): Long {
+        if (!eventKey.startsWith("chess-match:")) return 0L
+        val parts = eventKey.split(":")
+        if (parts.size != 4 || (parts[2] != "turn" && parts[2] != "finished")) return 0L
+        val id = parts[1].toLongOrNull() ?: return 0L
+        if (id <= 0) return 0L
+        if (parts[2] == "turn" && parts[3].toIntOrNull()?.let { it > 0 } != true) return 0L
+        if (parts[2] == "finished" && parts[3] !in setOf("white_win", "black_win", "draw", "completed")) return 0L
+        return id
     }
 
     private fun channelId(eventKey: String): String =
@@ -244,6 +259,10 @@ object Notifications {
                 "Check out your games — competition starts soon!"
             key.startsWith("admin-announcement:") ->
                 "New announcement available."
+            key.startsWith("chess-match:") && key.contains(":turn:") ->
+                "It is your turn in chess. Open your chessboard to continue."
+            key.startsWith("chess-match:") && key.contains(":finished:") ->
+                "Your chess match has ended. Open GOAL\$GAMBIT to view the result."
             key.contains("chess-schedule-reminder") || key.contains("match-start") ->
                 "Your match starts soon. Get ready!"
             key.contains("room-code-sent") || key.contains("room-code-received") || key.contains("room-code-replaced") ->
@@ -260,7 +279,7 @@ object Notifications {
             isRoomCodeRequest(eventKey) && matchId > 0 -> "goal_gambit.room_code.$matchId"
             key.contains("support-reply:") || key.contains("support-message:") -> "goal_gambit.support"
             key.startsWith("admin-announcement:") || key.contains("chess-schedule-reminder") -> "goal_gambit.competitions"
-            key.contains("efootball-match:") || matchId > 0 -> "goal_gambit.matches"
+            key.startsWith("chess-match:") || key.contains("efootball-match:") || matchId > 0 -> "goal_gambit.matches"
             else -> "goal_gambit.updates"
         }
     }
