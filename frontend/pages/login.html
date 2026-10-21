@@ -229,9 +229,19 @@
 
 <script src="../js/api.js?v=20261019-companion-onboarding"></script>
 <script>
-if (GG.getToken()) {
-    location.replace(GG.takePostLoginDestination() || "dashboard.html");
-}
+(function openDashboardOnlyForValidSession() {
+    if (!GG.getToken()) return;
+    // A stale token must not redirect the user away from this page: doing so
+    // hides the forgot-password flow and can trap them on the invalid-session
+    // screen. Keep the page open unless the backend confirms the session.
+    GG.api("/api/me", { noRedirect: true }).then(function(result) {
+        if (result.ok && result.data && result.data.user) {
+            location.replace(GG.takePostLoginDestination() || "dashboard.html");
+            return;
+        }
+        if (result.status === 401 || result.status === 403) GG.clearSession();
+    });
+})();
 
 document.getElementById("loginForm").addEventListener("submit", async function (event) {
     event.preventDefault();
