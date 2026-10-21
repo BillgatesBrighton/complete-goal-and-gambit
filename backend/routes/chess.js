@@ -727,7 +727,7 @@ return result.rows[0];
 // PUBLIC MATCH STATE
 // ======================================================
 
-function publicMatchState(match, userId) {
+function publicMatchState(match, userId, knownPosition, knownMove) {
 
 const color =
     getPlayerColor(
@@ -749,7 +749,17 @@ const ratingBracket = match.match_type === "ranked" && playerRating != null
     ? getRatingBracket(playerRating)
     : null;
 
-const position = createChess(match.fen);
+let position = null;
+let canReuseKnownMove = false;
+if (knownPosition && typeof knownPosition.fen === "function") {
+    try {
+        if (knownPosition.fen() === match.fen) {
+            position = knownPosition;
+            canReuseKnownMove = Boolean(knownMove && /^[a-h][1-8]$/.test(knownMove.from) && /^[a-h][1-8]$/.test(knownMove.to));
+        }
+    } catch (_) {}
+}
+if (!position) position = createChess(match.fen);
 let checkSquare = null;
 if (position.isCheck()) {
     const board = position.board();
@@ -765,8 +775,8 @@ if (position.isCheck()) {
     }
 }
 
-let lastMove = null;
-if (match.pgn) {
+let lastMove = canReuseKnownMove ? { from: knownMove.from, to: knownMove.to } : null;
+if (!lastMove && match.pgn) {
     try {
         const history = new Chess();
         history.loadPgn(match.pgn);
@@ -2067,7 +2077,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 queueChessTurnNotification(matchId, match, chess.turn(), chess.history().length);
             }
             const updated = await getMatch(pool, matchId);
-            const publicState = publicMatchState(updated, userId);
+            const publicState = publicMatchState(updated, userId, chess, move);
             if (io) {
                 if (result) {
                     io.to("chess_match_" + matchId).emit("chess:game_over", {
@@ -2101,4 +2111,5 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
 module.exports.settleMatch = settleMatch;
 module.exports.createMatchPosition = createMatchPosition;
+module.exports.publicMatchState = publicMatchState;
 

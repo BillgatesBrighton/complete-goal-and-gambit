@@ -132,6 +132,55 @@ test("authoritative move position restores PGN history for threefold repetition 
         "a PGN that does not match the stored FEN must not be used to validate a move");
 });
 
+test("authoritative chess rules accept castling, en passant, and promotion and identify terminal positions", () => {
+    const specialMoves = [
+        { name: "castling", fen: "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", move: { from: "e1", to: "g1" }, flag: "k" },
+        { name: "en passant", fen: "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3", move: { from: "e5", to: "d6" }, flag: "e" },
+        { name: "knight promotion", fen: "4k3/P7/8/8/8/8/8/4K3 w - - 0 1", move: { from: "a7", to: "a8", promotion: "n" }, flag: "p" }
+    ];
+    for (const scenario of specialMoves) {
+        const position = chessRoutes.createMatchPosition({ fen: scenario.fen, pgn: "" });
+        const move = position && position.move(scenario.move);
+        assert.ok(move, scenario.name + " must be legal on the authoritative rules engine");
+        assert.ok(move.flags.includes(scenario.flag), scenario.name + " must retain its special-move semantics");
+    }
+
+    const mate = chessRoutes.createMatchPosition({ fen: "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1", pgn: "" });
+    assert.ok(mate.move({ from: "f7", to: "g7" }));
+    assert.equal(mate.isCheckmate(), true, "the server rules engine must identify checkmate after a legal move");
+
+    const stalemate = chessRoutes.createMatchPosition({ fen: "7k/5K2/6Q1/8/8/8/8/8 b - - 0 1", pgn: "" });
+    assert.equal(stalemate.isStalemate(), true);
+    assert.equal(stalemate.isDraw(), true);
+});
+
+test("successful move response reuses its verified position and move for check and last-move state", () => {
+    const match = matchRow({ pgn: "malformed legacy history" });
+    const verifiedPosition = {
+        fen: () => match.fen,
+        isCheck: () => true,
+        turn: () => "b",
+        board: () => Array.from({ length: 8 }, (_, row) => Array.from({ length: 8 }, (_, col) =>
+            row === 0 && col === 7 ? { type: "k", color: "b" } : null))
+    };
+    const state = chessRoutes.publicMatchState(match, 41, verifiedPosition, { from: "e2", to: "e4" });
+    assert.equal(state.checkSquare, "h8", "the checked king square comes from the already-verified engine position");
+    assert.deepEqual(state.lastMove, { from: "e2", to: "e4" }, "the accepted move is reused instead of replaying PGN");
+});
+
+test("reused move-response calculation matches the normal public match state", () => {
+    const position = new BrowserChess(INITIAL_FEN);
+    position.move({ from: "e2", to: "e4" });
+    position.move({ from: "e7", to: "e5" });
+    const match = matchRow({ fen: position.fen(), pgn: position.pgn(), active_color: position.turn() });
+    const acceptedMove = position.history({ verbose: true }).at(-1);
+    assert.deepEqual(
+        chessRoutes.publicMatchState(match, 41, position, acceptedMove),
+        chessRoutes.publicMatchState(match, 41),
+        "reusing the verified engine must preserve the response fields and values"
+    );
+});
+
 test("successive authoritative moves retain the existing PGN history", async t => {
     let current = matchRow();
     const pool = {
@@ -182,6 +231,70 @@ test("successive authoritative moves retain the existing PGN history", async t =
     assert.equal(body.match.pgn.includes("e4"), true);
     assert.equal(body.match.pgn.includes("e5"), true);
     assert.equal(replayed.fen(), body.match.fen, "stored PGN must describe the authoritative board position");
+});
+
+test("simultaneous same-position move requests serialize and only one can advance the match", async t => {
+    let current = matchRow();
+    let updates = 0;
+    let lockTail = Promise.resolve();
+    const pool = {
+        async query(sql) {
+            const text = String(sql);
+            if (text.includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            if (text.includes("FROM chess_matches m")) return { rows: [current] };
+            throw new Error("Unexpected simultaneous-move read: " + text.slice(0, 120));
+        },
+        async connect() {
+            let unlock = null;
+            const releaseLock = () => {
+                if (!unlock) return;
+                const release = unlock;
+                unlock = null;
+                release();
+            };
+            return {
+                async query(sql, params) {
+                    const text = String(sql).trim();
+                    if (text === "BEGIN") return { rows: [] };
+                    if (text === "COMMIT" || text === "ROLLBACK") {
+                        releaseLock();
+                        return { rows: [] };
+                    }
+                    if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") {
+                        const previous = lockTail;
+                        let releaseTail;
+                        lockTail = new Promise(resolve => { releaseTail = resolve; });
+                        await previous;
+                        unlock = releaseTail;
+                        return { rows: [current] };
+                    }
+                    if (text.startsWith("UPDATE chess_matches SET fen=$1")) {
+                        updates++;
+                        current = matchRow({
+                            fen: params[0], pgn: params[1], white_time_ms: params[2], black_time_ms: params[3],
+                            active_color: params[4], last_move_at: new Date(), status: params[5] ? "settling" : "active",
+                            result: params[5], winner_id: params[6]
+                        });
+                        return { rows: [] };
+                    }
+                    throw new Error("Unexpected simultaneous-move write: " + text.slice(0, 120));
+                },
+                release: releaseLock
+            };
+        }
+    };
+    const api = await startChessApi(pool, null, 41);
+    t.after(api.close);
+    const expected = { expectedFen: current.fen, expectedPly: 0 };
+    const submit = (from, to) => fetch(api.base + "/501/move", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...expected, from, to })
+    });
+
+    const responses = await Promise.all([submit("e2", "e4"), submit("d2", "d4")]);
+    assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+    assert.equal(updates, 1, "only the transaction holding the current row position may write a move");
+    assert.equal(current.active_color, "b");
 });
 
 test("a successful chess move queues a private turn alert for only the opponent without using the eFootball match id column", async t => {
