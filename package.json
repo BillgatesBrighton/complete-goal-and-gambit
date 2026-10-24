@@ -1,0 +1,11 @@
+{
+  "name": "goal-gambit",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix backend run dev",
+    "dev:local": "npm --prefix backend run dev:local",
+    "start": "npm --prefix backend start",
+    "server:on": "npm --prefix backend run server:on",
+    "server:off": "npm --prefix backend run server:off"
+  }
+}
