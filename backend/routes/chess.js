@@ -286,15 +286,23 @@ return {
 function getPlayerColor(match, userId) {
 
 const id = Number(userId);
+const whiteId = Number(match.player_white_id);
+const blackId = Number(match.player_black_id);
+
+// Refuse malformed historical rows rather than treating one account as both
+// players and silently granting it White's seat.
+if (Number.isSafeInteger(whiteId) && whiteId > 0 && whiteId === blackId) {
+    return null;
+}
 
 if (
-    Number(match.player_white_id) === id
+    whiteId === id
 ) {
     return "w";
 }
 
 if (
-    Number(match.player_black_id) === id
+    blackId === id
 ) {
     return "b";
 }
@@ -306,17 +314,23 @@ return null;
 function getOpponentId(match, userId) {
 
 const id = Number(userId);
+const whiteId = Number(match.player_white_id);
+const blackId = Number(match.player_black_id);
 
-if (
-    Number(match.player_white_id) === id
-) {
-    return Number(match.player_black_id);
+if (Number.isSafeInteger(whiteId) && whiteId > 0 && whiteId === blackId) {
+    return null;
 }
 
 if (
-    Number(match.player_black_id) === id
+    whiteId === id
 ) {
-    return Number(match.player_white_id);
+    return Number.isSafeInteger(blackId) && blackId > 0 ? blackId : null;
+}
+
+if (
+    blackId === id
+) {
+    return Number.isSafeInteger(whiteId) && whiteId > 0 ? whiteId : null;
 }
 
 return null;
@@ -810,10 +824,10 @@ return {
     opponentId,
 
     playerWhiteId:
-        Number(match.player_white_id),
+        match.player_white_id == null ? null : Number(match.player_white_id),
 
     playerBlackId:
-        Number(match.player_black_id),
+        match.player_black_id == null ? null : Number(match.player_black_id),
 
     fen:
         match.fen,
@@ -1787,7 +1801,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                       WHERE id=$2`, [userId, id]);
                 await client.query("COMMIT");
                 const m = await getMatch(pool, id);
-                if (io) io.to("chess_match_"+id).emit("chess:match_ready",{success:true,match:publicMatchState(m,userId)});
+                if (io) io.to("chess_match_"+id).emit("chess:match_ready",{success:true,matchId:Number(id)});
                 return res.status(201).json({success:true, matched:true, match:publicMatchState(m,userId)});
             }
 
@@ -1869,6 +1883,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
     router.post("/:id/join", authenticateToken, async function(req, res) {
         const matchId = Number(req.params.id);
         const userId = Number(req.user.userId);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid chess match ID." });
+        }
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -1877,7 +1894,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 ["goal-gambit-chess-user:" + userId]
             );
             const account = await client.query(
-                "SELECT game, account_status FROM users WHERE id=$1 FOR UPDATE",
+                "SELECT rating, game, account_status FROM users WHERE id=$1 FOR UPDATE",
                 [userId]
             );
             if (!account.rows.length || account.rows[0].account_status !== "active") {
@@ -1887,8 +1904,27 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 throw Object.assign(new Error("Your account is not registered for Chess."), { status: 403 });
             }
 
+            // Match the existing one-live-game rule used by /create. The
+            // per-user advisory lock serializes this check against new games.
+            const existingMatch = await client.query(
+                `SELECT id FROM chess_matches
+                  WHERE (player_white_id=$1 OR player_black_id=$1)
+                    AND status IN ('waiting','active','settling')
+                  ORDER BY id DESC LIMIT 1`,
+                [userId]
+            );
+            if (existingMatch.rows.length) {
+                throw Object.assign(new Error("You already have a live Chess match or search. Finish or cancel it before joining another."), { status: 409 });
+            }
+
             const result = await client.query(
-                "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE",
+                `SELECT waiting.*, waiting_player.rating AS waiting_player_rating,
+                        waiting_player.game AS waiting_player_game,
+                        waiting_player.account_status AS waiting_player_account_status
+                   FROM chess_matches waiting
+                   LEFT JOIN users waiting_player ON waiting_player.id=waiting.player_white_id
+                  WHERE waiting.id=$1
+                  FOR UPDATE OF waiting`,
                 [matchId]
             );
             if (!result.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
@@ -1898,6 +1934,30 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
             if (Number(match.player_white_id) === userId) {
                 throw Object.assign(new Error("You cannot join your own match."), { status: 400 });
+            }
+            if (!Number.isSafeInteger(Number(match.player_white_id)) || Number(match.player_white_id) <= 0 ||
+                match.waiting_player_account_status !== "active" ||
+                !["chess", "both"].includes(match.waiting_player_game)) {
+                throw Object.assign(new Error("This waiting player is no longer eligible for Chess."), { status: 409 });
+            }
+
+            if (match.match_type === "ranked") {
+                const playerBracket = getRatingBracket(Number(account.rows[0].rating) || DEFAULT_RATING);
+                const waitingBracket = getRatingBracket(Number(match.waiting_player_rating) || DEFAULT_RATING);
+                if (playerBracket.minimum !== waitingBracket.minimum) {
+                    throw Object.assign(new Error("Ranked Chess opponents must be in the same rating bracket."), { status: 409 });
+                }
+            }
+
+            const waitingPlayerMatch = await client.query(
+                `SELECT id FROM chess_matches
+                  WHERE id<>$1 AND (player_white_id=$2 OR player_black_id=$2)
+                    AND status IN ('waiting','active','settling')
+                  LIMIT 1`,
+                [matchId, Number(match.player_white_id)]
+            );
+            if (waitingPlayerMatch.rows.length) {
+                throw Object.assign(new Error("This waiting player already has another live Chess match."), { status: 409 });
             }
 
             const stake = Number(match.stake_amount || 0);
@@ -1920,7 +1980,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const updated = await getMatch(pool, matchId);
             if (io) io.to("chess_match_" + matchId).emit("chess:match_ready", {
                 success: true,
-                match: publicMatchState(updated, userId)
+                matchId: Number(matchId)
             });
             return res.json({ success: true, match: publicMatchState(updated, userId) });
         } catch (error) {

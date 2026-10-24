@@ -31,6 +31,7 @@ const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
 const createChessScheduleReminders = require("./services/chessScheduleReminders");
 const createChessEngineRelay = require("./services/chessEngineRelay");
+const { beginChessJoinAttempt, isCurrentChessJoinAttempt, hasValidChessMatchSeats, joinChessMatchRoom } = require("./services/chessSocketRooms");
 const createAdminAnnouncementReminders = require("./services/adminAnnouncementReminders");
 const createEfootballScheduler = require("./services/efootballScheduler");
 const tournamentRoutes = require("./routes/tournaments");
@@ -443,6 +444,7 @@ io.on(
         socket.on(
             "chess:join",
             async function(data) {
+                const joinGeneration = beginChessJoinAttempt(socket);
 
                 try {
 
@@ -491,6 +493,10 @@ io.on(
                             [matchId]
                         );
 
+                    // Multiple join requests can finish out of order. Ignore
+                    // stale lookups so they cannot resubscribe an old match.
+                    if (!isCurrentChessJoinAttempt(socket, joinGeneration)) return;
+
                     if (
                         result.rows.length === 0
                     ) {
@@ -529,6 +535,14 @@ io.on(
                             match.player_black_id
                         );
 
+                    if (!hasValidChessMatchSeats(match)) {
+                        socket.emit("chess:error", {
+                            success: false,
+                            message: "This match does not have a valid player assignment."
+                        });
+                        return;
+                    }
+
                     if (
                         whiteId !== userId &&
                         blackId !== userId
@@ -550,17 +564,7 @@ io.on(
 
                     }
 
-                    const room =
-                        "chess_match_" +
-                        matchId;
-
-                    socket.join(room);
-
-                    socket.currentChessMatchId =
-                        matchId;
-
-                    socket.currentChessRoom =
-                        room;
+                    const room = joinChessMatchRoom(socket, matchId);
 
                     console.log(
                         "Player joined chess match:",
@@ -618,6 +622,8 @@ io.on(
                     );
 
                 } catch (error) {
+
+                    if (!isCurrentChessJoinAttempt(socket, joinGeneration)) return;
 
                     console.error(
                         "Chess socket join error:"
