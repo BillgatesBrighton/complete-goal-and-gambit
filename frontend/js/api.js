@@ -969,8 +969,6 @@
         // Put the status at the top of the page so it stays visible while scrolling.
         document.body.insertBefore(banner, document.body.firstChild);
 
-        var wasOffline = false;
-        var recoveryTimer = null;
         var retryTimer = null;
         var consecutiveFailures = 0;
         var healthCheckInFlight = false;
@@ -981,8 +979,6 @@
         healthBase = healthBase.replace(/\/+$/, "");
 
         function showOffline() {
-            window.clearTimeout(recoveryTimer);
-            wasOffline = true;
             banner.textContent = "Server offline";
             banner.style.background = "#fff";
             banner.style.color = "#111";
@@ -994,24 +990,10 @@
         }
 
         function showOnline() {
-            if (wasOffline) {
-                wasOffline = false;
-                banner.textContent = "Server connection restored.";
-                banner.style.background = "#fff";
-                banner.style.color = "#111";
-                banner.style.border = "0";
-                banner.setAttribute("role", "status");
-                banner.setAttribute("aria-live", "polite");
-                banner.hidden = false;
-                banner.style.display = "flex";
-                recoveryTimer = window.setTimeout(function () {
-                    banner.hidden = true;
-                    banner.style.display = "none";
-                }, 4500);
-            } else if (!recoveryTimer) {
-                banner.hidden = true;
-                banner.style.display = "none";
-            }
+            // The status page should only cover the site while the backend is
+            // unavailable. Once health checks pass, return to the page at once.
+            banner.hidden = true;
+            banner.style.display = "none";
         }
 
         function scheduleHealthRetry() {
