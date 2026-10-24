@@ -38,8 +38,29 @@ function ticketInput(body) {
     return UUID_PATTERN.test(ticketId) && TOKEN_PATTERN.test(secret) ? { ticketId, secret } : null;
 }
 
-module.exports = function passwordRecoveryRoutes(pool) {
+function configuredRecoveryPage(options) {
+    const configured = String(options.frontendUrl || process.env.PASSWORD_RESET_FRONTEND_URL || "").trim();
+    try {
+        const url = new URL(configured);
+        if (url.username || url.password || url.search || url.hash) return null;
+        if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) return null;
+        return url;
+    } catch (_) {
+        return null;
+    }
+}
+
+function redirectToPrivateRecoveryPage(res, pageUrl, ticketId, secret) {
+    const url = new URL(pageUrl.toString());
+    url.hash = new URLSearchParams({ ticket: ticketId, secret: secret }).toString();
+    res.status(303).setHeader("Location", url.toString());
+    return res.end();
+}
+
+module.exports = function passwordRecoveryRoutes(pool, options) {
+    options = options || {};
     const router = express.Router();
+    const recoveryPage = configuredRecoveryPage(options);
     const requestLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
         max: 4,
@@ -59,17 +80,26 @@ module.exports = function passwordRecoveryRoutes(pool) {
     router.use(function(_req, res, next) {
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Pragma", "no-cache");
+        res.setHeader("Referrer-Policy", "no-referrer");
         next();
     });
 
+    // The recovery request is a top-level same-browser form submission. Its
+    // response redirects to the configured site page, so the bearer token is
+    // never returned in JSON or exposed to cross-origin JavaScript.
+    router.use(express.urlencoded({ extended: false, limit: "2kb" }));
+
     router.post("/request", requestLimiter, async function(req, res) {
+        if (!recoveryPage) {
+            return res.status(503).type("text/plain").send("Password recovery is temporarily unavailable. Please contact GOAL$GAMBIT support.");
+        }
         const username = normalizeUsername(req.body && req.body.username);
         const phone = normalizePhone(req.body && req.body.phone);
+        const ticketId = crypto.randomUUID();
+        const secret = crypto.randomBytes(32).toString("base64url");
+        const privateRedirect = function() { return redirectToPrivateRecoveryPage(res, recoveryPage, ticketId, secret); };
         if (username.length < 3 || username.length > 30 || !/^[a-z0-9_]+$/.test(username) || !phone) {
-            return res.status(400).json({
-                success: false,
-                message: "Enter your account username and a valid phone number, including its country code if needed."
-            });
+            return privateRedirect();
         }
 
         let client;
@@ -88,35 +118,33 @@ module.exports = function passwordRecoveryRoutes(pool) {
             if (!account.rows.length || normalizePhone(account.rows[0].phone) !== phone) {
                 await client.query("ROLLBACK");
                 transactionOpen = false;
-                return res.status(400).json({
-                    success: false,
-                    message: "Those details could not be verified. Enter the username and phone number saved when you created the account, then try again."
-                });
+                return privateRedirect();
             }
 
             const userId = Number(account.rows[0].id);
-            const ticketId = crypto.randomUUID();
-            const secret = crypto.randomBytes(32).toString("base64url");
+            // A newer request makes all earlier pending or approved links for
+            // this account unusable before the new one is inserted.
+            await client.query(
+                `UPDATE password_recovery_requests
+                    SET status='expired',secret_hash=$1
+                  WHERE user_id=$2 AND status IN ('pending','approved')`,
+                [hashSecret(crypto.randomBytes(32).toString("hex")), userId]
+            );
 
             await client.query(
                 `INSERT INTO password_recovery_requests
                     (id,user_id,requested_username,submitted_phone,secret_hash,status,expires_at)
-                 VALUES($1,$2,$3,$4,$5,'pending',NOW()+INTERVAL '7 days')`,
+                 VALUES($1,$2,$3,$4,$5,'pending',NOW()+INTERVAL '30 minutes')`,
                 [ticketId, userId, username, phone, hashSecret(secret)]
             );
             await client.query("COMMIT");
             transactionOpen = false;
 
-            return res.status(202).json({
-                success: true,
-                ticketId,
-                secret,
-                message: "If the details match an active account, support will review your request. Keep the private recovery link; you will need it after approval."
-            });
+            return privateRedirect();
         } catch (error) {
             if (transactionOpen) await client.query("ROLLBACK").catch(function() {});
-            console.error("Support-assisted password recovery request failed:", error && error.message);
-            return res.status(500).json({ success: false, message: "Could not submit the recovery request. Please try again later." });
+            console.error("Support-assisted password recovery request failed.");
+            return res.status(503).type("text/plain").send("Could not submit the recovery request. Please try again later.");
         } finally {
             if (client) client.release();
         }
@@ -133,7 +161,9 @@ module.exports = function passwordRecoveryRoutes(pool) {
                 [input.ticketId]
             );
             if (!result.rows.length || !secretMatches(result.rows[0].secret_hash, input.secret)) {
-                return res.status(404).json({ success: false, message: "This recovery link is invalid or expired." });
+                // Use the same public state for an unknown link and an
+                // unreviewed request, so this endpoint cannot confirm accounts.
+                return res.json({ success: true, status: "pending", approvalExpiresAt: null });
             }
 
             const request = result.rows[0];

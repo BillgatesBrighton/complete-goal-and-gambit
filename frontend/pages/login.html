@@ -149,23 +149,10 @@
         </form>
 
         <p style="max-width:500px;margin:-16px auto 20px;text-align:right;">
-            <button type="button" id="openPasswordReset" class="text-link" aria-expanded="false" aria-controls="passwordResetPanel" style="border:0;background:none;color:inherit;text-decoration:underline;cursor:pointer;font:inherit;">
+            <a id="openPasswordReset" class="text-link" href="password-recovery.html" style="color:inherit;text-decoration:underline;cursor:pointer;font:inherit;">
                 Forgot or need to change your password?
-            </button>
+            </a>
         </p>
-
-        <section id="passwordResetPanel" hidden style="max-width:500px;margin:0 auto 28px;padding:22px;text-align:left;border:1px solid #3a3525;border-radius:14px;background:#111;">
-            <h3 style="margin-top:0;">Get help resetting your password</h3>
-            <p style="color:#aaa;font-size:14px;">Enter the username and phone number you saved when creating your account. The server checks both before a support request is created. Support must still verify your identity before a reset is approved.</p>
-            <form id="requestRecoveryForm">
-                <label for="recoveryUsername">Username</label>
-                <input id="recoveryUsername" type="text" minlength="3" maxlength="30" autocomplete="username" required style="width:100%;padding:13px;margin:8px 0 12px;">
-                <label for="recoveryPhone">Phone number saved on your account</label>
-                <input id="recoveryPhone" type="tel" maxlength="20" autocomplete="tel" placeholder="e.g. 07… or +254…" required style="width:100%;padding:13px;margin:8px 0 12px;">
-                <button id="requestRecoveryButton" type="submit" class="primary-button" style="border:0;cursor:pointer;width:100%;">Request support review</button>
-            </form>
-            <p id="recoveryMessage" role="status" aria-live="polite" style="color:#f4bd20;min-height:1.5em;margin-bottom:0;"></p>
-        </section>
 
 
 
@@ -271,41 +258,6 @@ document.getElementById("loginForm").addEventListener("submit", async function (
     // right dashboard opens on any device.
     GG.saveSession(result.data.token, result.data.user, result.data.user.game);
     location.replace(GG.takePostLoginDestination() || "dashboard.html");
-});
-
-var resetPanel=document.getElementById("passwordResetPanel");
-var resetToggle=document.getElementById("openPasswordReset");
-var recoveryMode=new URLSearchParams(location.search).get("recovery") === "1";
-if(recoveryMode){
-    resetPanel.hidden=false;
-    resetToggle.setAttribute("aria-expanded","true");
-}
-resetToggle.addEventListener("click",function(){
-    resetPanel.hidden=!resetPanel.hidden;
-    resetToggle.setAttribute("aria-expanded",String(!resetPanel.hidden));
-    if(!resetPanel.hidden){
-        document.getElementById("recoveryUsername").value=document.getElementById("username").value.trim();
-        document.getElementById("recoveryUsername").focus();
-    }
-});
-document.getElementById("requestRecoveryForm").addEventListener("submit",async function(event){
-    event.preventDefault();
-    var button=document.getElementById("requestRecoveryButton"),message=document.getElementById("recoveryMessage");
-    button.disabled=true;message.textContent="Checking your saved account details…";
-    var result=await GG.api("/api/auth/password-recovery/request",{
-        method:"POST",
-        body:{username:document.getElementById("recoveryUsername").value.trim(),phone:document.getElementById("recoveryPhone").value.trim()},
-        noRedirect:true
-    });
-    if(!result.ok||!result.data.ticketId||!result.data.secret){
-        button.disabled=false;
-        message.textContent=result.data.message||"Those details could not be verified. Check the username and phone saved on your account.";
-        return;
-    }
-    message.textContent="Details verified. Opening your support request…";
-    var url=new URL("password-recovery.html",location.href);
-    url.hash=new URLSearchParams({ticket:result.data.ticketId,secret:result.data.secret}).toString();
-    location.assign(url.href);
 });
 
 </script>

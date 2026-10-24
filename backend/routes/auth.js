@@ -3,8 +3,6 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto");
-const passwordResetSms = require("../services/africasTalkingSms");
 
 const rateLimit = require("../middleware/rateLimit");
 const router = express.Router();
@@ -74,18 +72,6 @@ function createToken(user) {
 
 
 // ======================================================
-const passwordResetRequestLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 5,
-    message: "Too many reset requests. Please wait before trying again."
-});
-
-const passwordResetConfirmLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: "Too many code attempts. Please wait before trying again."
-});
-
 function normalizePhoneForSms(value) {
     let phone = String(value || "").trim().replace(/[()\s-]/g, "");
     if (phone.startsWith("00")) phone = "+" + phone.slice(2);
@@ -93,21 +79,6 @@ function normalizePhoneForSms(value) {
     else if (/^254[17]\d{8}$/.test(phone)) phone = "+" + phone;
     else if (/^[1-9]\d{8,14}$/.test(phone)) phone = "+" + phone;
     return /^\+[1-9]\d{8,14}$/.test(phone) ? phone : null;
-}
-
-function passwordResetDigest(userId, code) {
-    const secret = process.env.PASSWORD_RESET_SECRET || process.env.JWT_SECRET;
-    if (!secret) throw new Error("Password reset HMAC secret is not configured.");
-    return crypto.createHmac("sha256", secret)
-        .update(String(userId) + ":" + String(code))
-        .digest("hex");
-}
-
-function safeDigestMatch(expectedHex, actualHex) {
-    if (!/^[a-f0-9]{64}$/i.test(expectedHex || "") || !/^[a-f0-9]{64}$/i.test(actualHex || "")) return false;
-    const expected = Buffer.from(expectedHex, "hex");
-    const actual = Buffer.from(actualHex, "hex");
-    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
 // ROUTES
@@ -789,174 +760,6 @@ module.exports = function(pool, authenticateToken, io) {
             }
         }
     );
-
-    // Password recovery sends a short-lived code only to the phone already
-    // stored on the active account. Responses do not reveal whether a username exists.
-    router.post("/password-reset/request", passwordResetRequestLimiter, async function(req, res) {
-        const genericResponse = {
-            success: true,
-            message: "If an active account matches, a reset code was sent to its registered phone. The code expires in 10 minutes."
-        };
-        const username = normalizeUsername(req.body && req.body.username);
-        if (!username || username.length > 30) return res.status(202).json(genericResponse);
-        if (!passwordResetSms.isConfigured() || !(process.env.PASSWORD_RESET_SECRET || process.env.JWT_SECRET)) {
-            return res.status(503).json({
-                success: false,
-                message: "Phone password reset is not configured yet. Please contact support."
-            });
-        }
-
-        let client;
-        let code;
-        let userId;
-        let phone;
-        let digest;
-        try {
-            const lookup = await pool.query(
-                "SELECT id FROM users WHERE username = $1 AND account_status = 'active'",
-                [username]
-            );
-            if (!lookup.rows.length) return res.status(202).json(genericResponse);
-            userId = lookup.rows[0].id;
-            client = await pool.connect();
-            await client.query("BEGIN");
-
-            const account = await client.query(
-                "SELECT id, phone FROM users WHERE id = $1 AND account_status = 'active' FOR UPDATE",
-                [userId]
-            );
-            if (!account.rows.length) {
-                await client.query("COMMIT");
-                return res.status(202).json(genericResponse);
-            }
-            phone = normalizePhoneForSms(account.rows[0].phone);
-            if (!phone) {
-                await client.query("COMMIT");
-                return res.status(202).json(genericResponse);
-            }
-
-            const now = Date.now();
-            const current = await client.query(
-                "SELECT requested_at, window_started_at, request_count FROM password_reset_codes WHERE user_id = $1 FOR UPDATE",
-                [userId]
-            );
-            let windowStartedAt = new Date(now);
-            let requestCount = 1;
-            if (current.rows.length) {
-                const previous = current.rows[0];
-                const requestedAt = new Date(previous.requested_at).getTime();
-                const previousWindow = new Date(previous.window_started_at).getTime();
-                const sameWindow = now - previousWindow < 60 * 60 * 1000;
-                if (now - requestedAt < 60 * 1000 || (sameWindow && Number(previous.request_count) >= 3)) {
-                    await client.query("COMMIT");
-                    return res.status(202).json(genericResponse);
-                }
-                if (sameWindow) {
-                    windowStartedAt = new Date(previousWindow);
-                    requestCount = Number(previous.request_count) + 1;
-                }
-            }
-
-            code = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-            digest = passwordResetDigest(userId, code);
-            await client.query(
-                "INSERT INTO password_reset_codes " +
-                "(user_id, code_hash, expires_at, attempts, requested_at, window_started_at, request_count, consumed_at) " +
-                "VALUES ($1, $2, NOW() + INTERVAL '10 minutes', 0, NOW(), $3, $4, NULL) " +
-                "ON CONFLICT (user_id) DO UPDATE SET " +
-                "code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0, requested_at = NOW(), " +
-                "window_started_at = EXCLUDED.window_started_at, request_count = EXCLUDED.request_count, consumed_at = NULL",
-                [userId, digest, windowStartedAt, requestCount]
-            );
-            await client.query("COMMIT");
-
-            try {
-                await passwordResetSms.sendSms(
-                    phone,
-                    "Your GOAL$GAMBIT password reset code is " + code + ". It expires in 10 minutes. Do not share it."
-                );
-            } catch (smsError) {
-                await pool.query(
-                    "UPDATE password_reset_codes SET consumed_at = NOW() WHERE user_id = $1 AND code_hash = $2 AND consumed_at IS NULL",
-                    [userId, digest]
-                ).catch(function() {});
-                console.error("Password reset SMS delivery failed.");
-            }
-            return res.status(202).json(genericResponse);
-        } catch (error) {
-            if (client) await client.query("ROLLBACK").catch(function() {});
-            console.error("Password reset request failed:", error && error.message);
-            return res.status(500).json({ success: false, message: "Could not start password reset. Please try again later." });
-        } finally {
-            if (client) client.release();
-        }
-    });
-
-    router.post("/password-reset/confirm", passwordResetConfirmLimiter, async function(req, res) {
-        const username = normalizeUsername(req.body && req.body.username);
-        const code = String(req.body && req.body.code || "").trim();
-        const newPassword = String(req.body && req.body.newPassword || "");
-        if (!username || username.length > 30 || !/^\d{6}$/.test(code) || newPassword.length < 8 || newPassword.length > 128) {
-            return res.status(400).json({ success: false, message: "Enter the 6-digit code and a password between 8 and 128 characters." });
-        }
-        if (!(process.env.PASSWORD_RESET_SECRET || process.env.JWT_SECRET)) {
-            return res.status(503).json({ success: false, message: "Password reset is not configured. Please contact support." });
-        }
-
-        const client = await pool.connect();
-        let transactionOpen = false;
-        try {
-            await client.query("BEGIN");
-            transactionOpen = true;
-            const account = await client.query(
-                "SELECT id, account_status FROM users WHERE username = $1 FOR UPDATE",
-                [username]
-            );
-            if (!account.rows.length || account.rows[0].account_status !== "active") {
-                await client.query("ROLLBACK");
-                transactionOpen = false;
-                return res.status(400).json({ success: false, message: "That code is invalid or expired. Request a new one and try again." });
-            }
-
-            const userId = account.rows[0].id;
-            const reset = await client.query(
-                "SELECT code_hash, expires_at, attempts, consumed_at FROM password_reset_codes WHERE user_id = $1 FOR UPDATE",
-                [userId]
-            );
-            if (!reset.rows.length || reset.rows[0].consumed_at || new Date(reset.rows[0].expires_at) <= new Date() || Number(reset.rows[0].attempts) >= 5) {
-                await client.query("ROLLBACK");
-                transactionOpen = false;
-                return res.status(400).json({ success: false, message: "That code is invalid or expired. Request a new one and try again." });
-            }
-
-            const submittedDigest = passwordResetDigest(userId, code);
-            if (!safeDigestMatch(reset.rows[0].code_hash, submittedDigest)) {
-                await client.query("UPDATE password_reset_codes SET attempts = attempts + 1 WHERE user_id = $1", [userId]);
-                await client.query("COMMIT");
-                transactionOpen = false;
-                return res.status(400).json({ success: false, message: "That code is invalid or expired. Check it and try again." });
-            }
-
-            const passwordHash = await bcrypt.hash(newPassword, 12);
-            await client.query(
-                "UPDATE users SET password_hash = $1, auth_version = auth_version + 1 WHERE id = $2 AND account_status = 'active'",
-                [passwordHash, userId]
-            );
-            await client.query(
-                "UPDATE password_reset_codes SET consumed_at = NOW(), code_hash = $1 WHERE user_id = $2",
-                [crypto.randomBytes(32).toString("hex"), userId]
-            );
-            await client.query("COMMIT");
-            transactionOpen = false;
-            return res.json({ success: true, message: "Password reset. Sign in with your new password." });
-        } catch (error) {
-            if (transactionOpen) await client.query("ROLLBACK").catch(function() {});
-            console.error("Password reset confirmation failed:", error && error.message);
-            return res.status(500).json({ success: false, message: "Could not reset the password. Please request a new code and try again." });
-        } finally {
-            client.release();
-        }
-    });
 
     return router;
 
