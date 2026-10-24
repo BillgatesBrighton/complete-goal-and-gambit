@@ -687,7 +687,7 @@ button{
     }
 }
 </style>
-<script src="../js/api.js?v=20261024-server-status"></script>
+<script src="../js/api.js?v=20261024-companion-latest-122"></script>
 </head>
 
 <body>
@@ -1334,25 +1334,17 @@ button{
         </div>
 
         <p class="description">
-            Enable match alerts for this device. In the Android GOAL$GAMBIT Companion, tap REPLY on the notification, enter the room code, then tap Send on your keyboard while eFootball stays open. Browser notifications cannot accept text inline; tapping one opens the match-specific room-code form, ready for pasting.
+            Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts and inline room-code replies while eFootball stays open.
         </p>
 
-        <a href="notification-settings.html" class="secondary-btn" style="display:inline-block;text-decoration:none;margin-bottom:12px">Notification Settings</a>
-
-        <button
-            class="secondary-btn"
-            onclick="enableNotifications()"
-            id="notificationButton"
-        >
-            ENABLE MATCH NOTIFICATIONS
-        </button>
+        <a href="notification-settings.html" class="secondary-btn" style="display:inline-block;text-decoration:none;margin-bottom:12px">COMPANION APP & NOTIFICATION SETTINGS</a>
 
         <div
             class="notification-box"
             id="notificationStatus"
         >
             <p>
-                Notifications are currently not enabled.
+                Keep Companion notifications allowed in Android settings to receive match alerts.
             </p>
         </div>
 
@@ -1495,7 +1487,6 @@ document.addEventListener(
 
         loadMatch();
 
-        updateNotificationStatus();
 
         pollingTimer =
             setInterval(
@@ -2827,66 +2818,6 @@ function updateVerificationPanel(){
 
 }
 
-
-/* ============================================================
-   NOTIFICATIONS
-============================================================ */
-
-async function ensureMatchNotificationWorker(){
-    if(!("serviceWorker" in navigator)) throw new Error("This browser does not support system notifications.");
-    return navigator.serviceWorker.ready;
-}
-
-
-async function enableNotifications(){
-    try{
-        await GG.enablePushNotifications();
-        updateNotificationBox("This device is registered for GOAL$GAMBIT match alerts.", "success");
-        document.getElementById("notificationButton").textContent = "✓ MATCH ALERTS ENABLED";
-    }catch(error){
-        updateNotificationBox(error.message || "Could not set up match alerts.", "error");
-    }
-}
-
-
-/* ============================================================
-   NOTIFICATION STATUS
-============================================================ */
-
-function updateNotificationStatus(){
-    GG.getPushStatus().then(function(status){
-        if(status.thisDeviceRegistered){
-            updateNotificationBox("This device is registered for match alerts. You can leave the site and use eFootball while waiting.", "success");
-            document.getElementById("notificationButton").textContent = "✓ MATCH ALERTS ENABLED";
-        }else if(status.permission === "denied"){
-            updateNotificationBox("Notifications are blocked in browser settings. Allow them for this site, then enable match alerts here.", "error");
-        }else{
-            updateNotificationBox("Enable match alerts to receive a push when your match is ready.", "");
-        }
-    }).catch(function(){
-        updateNotificationBox("Match alert status is unavailable. Open Notification Settings to check this device.", "error");
-    });
-}
-
-
-/* ============================================================
-   NOTIFICATION BOX
-============================================================ */
-
-function updateNotificationBox(
-    message,
-    type
-){
-
-    document.getElementById(
-        "notificationStatus"
-    ).innerHTML =
-
-        `<p class="${type || ""}">
-            ${escapeHTML(message)}
-        </p>`;
-
-}
 
 async function refreshSystemNotifications(){
     const status = document.getElementById("systemNotificationStatus");

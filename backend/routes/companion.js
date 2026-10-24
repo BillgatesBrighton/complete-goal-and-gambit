@@ -44,6 +44,21 @@ function cleanAppVersion(value) {
     return /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/.test(version) ? version : null;
 }
 
+function compareAppVersions(left, right) {
+    const versionParts = (value) => {
+        const parts = String(value || "").match(/\d+/g);
+        return parts && parts.length ? parts.map((part) => Number(part)) : null;
+    };
+    const a = versionParts(left);
+    const b = versionParts(right);
+    if (!a || !b || a.some((part) => !Number.isSafeInteger(part)) || b.some((part) => !Number.isSafeInteger(part))) return 0;
+    for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+        const difference = (a[index] || 0) - (b[index] || 0);
+        if (difference) return difference < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
 function cleanPermissionStatus(value) {
     const status = String(value || "unknown").trim().toLowerCase();
     return ["granted", "denied", "unknown"].includes(status) ? status : null;
@@ -78,8 +93,54 @@ function getApkMetadata() {
     }
 }
 
-module.exports = function createCompanionRoutes(pool, authenticateToken) {
+module.exports = function createCompanionRoutes(pool, authenticateToken, pushService) {
     const router = express.Router();
+
+    async function queueUpdateNotice(client, userId, appVersion) {
+        const apk = getApkMetadata();
+        if (!apk || compareAppVersions(appVersion, apk.version) >= 0 ||
+            !pushService || typeof pushService.enqueueNotification !== "function" ||
+            (typeof pushService.status === "function" && !pushService.status().androidConfigured)) return false;
+        try {
+            await client.query("SAVEPOINT companion_update_notice");
+            const event = await pushService.enqueueNotification(client, Number(userId), {
+                eventKey: "companion-update:" + apk.version,
+                title: "Update GOAL$GAMBIT Companion",
+                body: "GOAL$GAMBIT Companion v" + apk.version + " is available. Update the app to receive the latest fixes.",
+                page: "notification-settings"
+            });
+            await client.query("RELEASE SAVEPOINT companion_update_notice");
+            return Boolean(event && event.created);
+        } catch (error) {
+            await client.query("ROLLBACK TO SAVEPOINT companion_update_notice").catch(() => {});
+            await client.query("RELEASE SAVEPOINT companion_update_notice").catch(() => {});
+            console.error("Companion update notice could not be queued.");
+            return false;
+        }
+    }
+
+    async function dispatchUpdateNotice(userId, appVersion) {
+        const apk = getApkMetadata();
+        if (!apk || compareAppVersions(appVersion, apk.version) >= 0 ||
+            !pushService || typeof pushService.enqueueNotification !== "function" ||
+            (typeof pushService.status === "function" && !pushService.status().androidConfigured)) return;
+        let client;
+        let created = false;
+        try {
+            client = await pool.connect();
+            await client.query("BEGIN");
+            created = await queueUpdateNotice(client, userId, appVersion);
+            await client.query("COMMIT");
+        } catch (_) {
+            if (client) await client.query("ROLLBACK").catch(() => {});
+            return;
+        } finally {
+            if (client) client.release();
+        }
+        if (created && typeof pushService.sendPendingJobs === "function") {
+            pushService.sendPendingJobs().catch(() => {});
+        }
+    }
 
     router.get("/profile", authenticateToken, (req, res) => {
         res.set("Cache-Control", "private, no-store");
@@ -318,8 +379,12 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
                  RETURNING id,registered_at,last_seen_at`,
                 [req.user.userId, hash, platform, appVersion, permissionStatus]
             );
+            const updateNoticeCreated = await queueUpdateNotice(client, req.user.userId, appVersion);
             await client.query("COMMIT");
             res.set("Cache-Control", "private, no-store");
+            if (updateNoticeCreated && pushService && typeof pushService.sendPendingJobs === "function") {
+                pushService.sendPendingJobs().catch(() => {});
+            }
             return res.status(201).json({ success: true, registered: true, registeredAt: saved.rows[0].registered_at, lastSeenAt: saved.rows[0].last_seen_at });
         } catch (error) {
             if (client) await client.query("ROLLBACK").catch(() => {});
@@ -342,6 +407,7 @@ module.exports = function createCompanionRoutes(pool, authenticateToken) {
                 [req.user.userId, installationHash(installationId), appVersion]
             );
             if (!result.rows.length) return res.status(404).json({ success: false, message: "This companion installation is not registered to the signed-in account." });
+        await dispatchUpdateNotice(req.user.userId, appVersion);
             res.set("Cache-Control", "private, no-store");
             return res.json({ success: true, lastSeenAt: result.rows[0].last_seen_at });
         } catch (error) {

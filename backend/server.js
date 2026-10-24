@@ -103,11 +103,14 @@ const androidPushService = createAndroidPushService(pool);
 const pushService = {
     status: function () {
         return Object.assign({}, webPushService.status(), {
+            configured: false,
+            webPushDisabled: true,
             androidConfigured: androidPushService.status().configured
         });
     },
     enqueueNotification: async function (client, userId, notification) {
-        const event = await webPushService.enqueueNotification(client, userId, notification);
+        const androidOnlyNotification = Object.assign({}, notification || {}, { androidOnly: true });
+        const event = await webPushService.enqueueNotification(client, userId, androidOnlyNotification);
         if (event.created) {
             await client.query("SAVEPOINT android_push_enqueue");
             try {
@@ -122,13 +125,9 @@ const pushService = {
         return event;
     },
     sendPendingJobs: function () {
-        return Promise.allSettled([
-            webPushService.sendPendingJobs(),
-            androidPushService.sendPendingJobs()
-        ]);
+        return androidPushService.sendPendingJobs();
     },
     start: function () {
-        webPushService.start();
         androidPushService.start();
         chessScheduleReminders.start();
         adminAnnouncementReminders.start();
@@ -883,7 +882,7 @@ app.use(
 
 app.use(
     "/api/companion",
-    companionRoutes(pool, authenticateToken)
+    companionRoutes(pool, authenticateToken, pushService)
 );
 
 app.use(
@@ -1079,6 +1078,13 @@ app.get(
 // ======================================================
 // HEALTH CHECK
 // ======================================================
+
+// Liveness is intentionally independent of PostgreSQL so a busy database
+// cannot make a healthy API process look offline to website clients.
+app.get("/api/health/live", function(req, res) {
+    res.set("Cache-Control", "no-store");
+    return res.status(200).json({ success: true, server: "online" });
+});
 
 app.get(
     "/api/health",

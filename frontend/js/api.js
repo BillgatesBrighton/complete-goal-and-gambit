@@ -19,7 +19,7 @@
     var API_BASE = window.GG_API_BASE ||
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
     var TOKEN_KEY = "goalGambitToken";
-    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk?v=1.2.1";
+    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk";
     // The APK is a static GitHub Pages asset, so download links must continue
     // working when the player's phone cannot reach the companion API.
     var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL;
@@ -171,28 +171,29 @@
         });
     }
 
+    function openPublicCompanionDownload() {
+        var url = new URL(ANDROID_COMPANION_DOWNLOAD_URL);
+        // GitHub Pages caches static files briefly; a unique query makes sure
+        // the fallback resolves to the APK currently published at this path.
+        url.searchParams.set("download", String(Date.now()));
+        window.location.assign(url.toString());
+    }
+
     async function downloadCompanionApp(statusTarget) {
         var token = getToken();
-        if (!token) {
-            if (statusTarget) statusTarget.textContent = "Opening the official Android app download…";
-            try {
-                window.location.assign(ANDROID_COMPANION_DOWNLOAD_URL);
-                return true;
-            } catch (_) {
-                if (statusTarget) statusTarget.textContent = "Open the official download link to get the Android app.";
-                return false;
-            }
-        }
-        if (statusTarget) statusTarget.textContent = "Preparing the official Android app…";
+        if (statusTarget) statusTarget.textContent = "Checking for the latest Android app…";
         var controller = typeof AbortController === "function" ? new AbortController() : null;
         var requestTimer = controller ? window.setTimeout(function() { controller.abort(); }, 10000) : null;
         try {
+            var headers = { "Accept": "application/vnd.android.package-archive" };
+            if (token) headers.Authorization = "Bearer " + token;
             var requestOptions = {
-                headers: { "Authorization": "Bearer " + token, "Accept": "application/vnd.android.package-archive" },
+                headers: headers,
                 cache: "no-store"
             };
             if (controller) requestOptions.signal = controller.signal;
-            var response = await fetch(API_BASE + "/api/companion/download", requestOptions);
+            var endpoint = token ? "/api/companion/download" : "/api/companion/public-download";
+            var response = await fetch(API_BASE + endpoint, requestOptions);
             if (!response.ok) {
                 var problem = {};
                 try { problem = await response.json(); } catch (_) {}
@@ -222,7 +223,7 @@
         } catch (error) {
             if (statusTarget) statusTarget.textContent = "The server could not be reached. Opening the official GitHub APK download…";
             try {
-                window.location.assign(ANDROID_COMPANION_DOWNLOAD_URL);
+                openPublicCompanionDownload();
                 return true;
             } catch (_) {
                 if (statusTarget) statusTarget.textContent = "The server is offline. Use the official GitHub APK download link instead.";
@@ -549,20 +550,7 @@
     }
 
     async function requestPushPermission() {
-        if (!pushBrowserSupported()) {
-            throw new Error("This browser or device does not support background Web Push. Use a supported browser/device or the GOAL$GAMBIT Android companion for match alerts.");
-        }
-        var permission = Notification.permission;
-        // Call the browser permission prompt before awaiting network work so
-        // mobile browsers still see this as a direct response to the user's tap.
-        if (permission === "default") permission = await Notification.requestPermission();
-        if (permission !== "granted") {
-            if (permission === "denied") localStorage.setItem("goalGambitPushPermissionDenied", "1");
-            throw new Error(permission === "denied"
-                ? "Notifications are blocked for this site. Open the site’s notification permission in browser or phone settings, allow notifications, then return and try again."
-                : "Notification permission was not granted.");
-        }
-        return { permission: permission };
+        throw new Error("Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts.");
     }
 
     function pushServiceWorkerUrl() {
@@ -624,13 +612,7 @@
     }
 
     async function enablePushNotifications() {
-        if (!pushBrowserSupported()) throw new Error("Web Push needs a supported browser and a secure HTTPS page. On iPhone or iPad, add the site to the Home Screen first.");
-        if (!getToken()) throw new Error("Sign in before enabling match notifications.");
-        await requestPushPermission();
-        var result = await syncPushSubscription();
-        localStorage.removeItem("goalGambitPushPromptDismissed");
-        localStorage.removeItem("goalGambitPushPermissionDenied");
-        return result;
+        throw new Error("Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts.");
     }
 
     async function disablePushNotifications(options) {
@@ -641,7 +623,6 @@
             if ("serviceWorker" in navigator) {
                 var workerUrl = pushServiceWorkerUrl();
                 registration = await navigator.serviceWorker.getRegistration(workerUrl.href);
-                if (!registration) registration = await registerPushServiceWorker();
             }
             var subscription = registration ? await registration.pushManager.getSubscription() : null;
             if (!subscription && !options.allDevices) return { disabled: false, message: "There is no push subscription on this device." };
@@ -662,28 +643,18 @@
     async function getPushStatus() {
         var browserSupported = pushBrowserSupported();
         var permission = !browserSupported ? "unsupported" : Notification.permission;
-        var localSubscription = false;
-        if (browserSupported && permission === "granted") {
-            try {
-                var registration = await registerPushServiceWorker();
-                var subscription = await registration.pushManager.getSubscription();
-                if (subscription) {
-                    var synchronized = await syncPushSubscription();
-                    localSubscription = !!synchronized.registered;
-                }
-            } catch (_) {}
-        }
         var server = getToken() ? await api("/api/push/status", { noRedirect: true }) : { ok: false, data: {} };
         return {
             browserSupported: browserSupported,
+            browserPushDisabled: true,
             permission: permission,
-            configured: !!(server.ok && server.data.configured),
+            configured: false,
             activeSubscriptions: server.ok ? Number(server.data.activeSubscriptions || 0) : 0,
             androidConfigured: !!(server.ok && server.data.androidConfigured),
             activeAndroidDevices: server.ok ? Number(server.data.activeAndroidDevices || 0) : 0,
             canViewAndroidDeviceDetails: !!(server.ok && server.data.canViewAndroidDeviceDetails),
             androidDevices: server.ok && server.data.canViewAndroidDeviceDetails && Array.isArray(server.data.androidDevices) ? server.data.androidDevices : [],
-            thisDeviceRegistered: localSubscription,
+            thisDeviceRegistered: false,
             serverReachable: !!server.ok
         };
     }
@@ -1012,15 +983,19 @@
                 if (controller) controller.abort();
             }, 7000);
             try {
-                var response = await fetch(healthBase + "/api/health", {
+                var response = await fetch(healthBase + "/api/health/live", {
                     method: "GET",
                     headers: { "Accept": "application/json" },
                     cache: "no-store",
                     credentials: "omit",
                     signal: controller ? controller.signal : undefined
                 });
-                var health = await response.json();
-                if (response.ok && health && health.success === true && health.database === "connected") {
+                // A 404 means a pre-liveness backend answered the request; that
+                // is still evidence that the server is online during rollout.
+                var health = null;
+                try { health = await response.json(); } catch (_) {}
+                if (response.status === 404 ||
+                    (response.ok && health && health.success === true && health.server === "online")) {
                     consecutiveFailures = 0;
                     if (retryTimer) {
                         window.clearTimeout(retryTimer);

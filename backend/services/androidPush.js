@@ -36,6 +36,7 @@ function configuredFirebaseMessaging(options) {
 
 function notificationBody(eventKey) {
     const key = String(eventKey || "").toLowerCase();
+    if (key.startsWith("companion-update:")) return "A newer GOAL$GAMBIT Companion app is available. Please update to the latest version.";
     if (key.includes("room-code-needed") || key.includes("code-correction-requested")) return "Your match room code is needed. Reply now.";
     if (key.includes("room-code-sent") || key.includes("room-code-received") || key.includes("room-code-replaced")) return "Your match has a room-code update.";
     if (key.startsWith("support-reply:") || key.startsWith("support-message:")) return "New message from admin.";
@@ -60,6 +61,7 @@ function preferenceEnabledSql(eventAlias, preferenceAlias) {
         WHEN ${eventAlias}.event_key LIKE 'admin-announcement:%:reminder:%'
           THEN COALESCE(${preferenceAlias}.competition_reminders,TRUE)
         WHEN ${eventAlias}.event_key LIKE 'admin-announcement:%'
+          OR ${eventAlias}.event_key LIKE 'companion-update:%'
           THEN COALESCE(${preferenceAlias}.admin_announcements,TRUE)
         WHEN ${eventAlias}.event_key LIKE 'chess-schedule-reminder-%'
           OR ${eventAlias}.event_key LIKE 'chess-schedule-%'
@@ -115,11 +117,18 @@ function createAndroidPushService(pool, options) {
                 body: notificationBody(key),
                 targetPath: String(job.target_path || "pages/match-hub.html")
             };
-            await messaging.send({
+            const message = {
                 token: job.token,
                 data: data,
                 android: { priority: (key.includes("room-code-needed") || key.includes("code-correction-requested") || key.startsWith("support-reply:")) ? "high" : "normal", ttl: 3600000 }
-            });
+            };
+            if (key.startsWith("companion-update:")) {
+                message.notification = {
+                    title: String(job.title || "Update GOAL$GAMBIT Companion"),
+                    body: String(job.body || notificationBody(key))
+                };
+            }
+            await messaging.send(message);
             outcome = "accepted";
         } catch (error) {
             errorCode = String(error && error.code || "messaging/unknown-error").slice(0, 100);

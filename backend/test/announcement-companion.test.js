@@ -362,7 +362,7 @@ test("companion onboarding requires authenticated app registration, current term
     assert.equal(status.onboardingComplete, false);
     assert.equal(status.termsAccepted, false);
     assert.equal(status.termsVersion, companionRoutes.TERMS_VERSION);
-    assert.equal(status.apk.version, "1.2.1", "the companion download reports the newly built app version");
+    assert.equal(status.apk.version, "1.2.2", "the companion download reports the newly built app version");
     assert.equal((await readStatus({})).status, 401, "status is private to an authenticated account");
     assert.equal((await fetch(base + "/terms/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 401,
         "an unauthenticated request cannot record terms acceptance");

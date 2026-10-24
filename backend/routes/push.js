@@ -42,7 +42,7 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
     // This public key is safe to publish. The private VAPID key never leaves the backend.
     router.get("/vapid-public-key", (req, res) => {
         const status = pushService.status();
-        return res.json({ success: true, configured: status.configured, publicKey: status.publicKey });
+        return res.json({ success: true, configured: status.configured, webPushDisabled: Boolean(status.webPushDisabled), publicKey: status.publicKey });
     });
 
     router.get("/status", authenticateToken, async (req, res) => {
@@ -77,6 +77,7 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
 
     router.post("/subscriptions", authenticateToken, registerLimiter, async (req, res) => {
         const status = pushService.status();
+        if (status.webPushDisabled) return res.status(410).json({ success: false, code: "WEB_PUSH_DISABLED", message: "Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts." });
         if (!status.configured) return res.status(503).json({ success: false, message: "Web Push is not configured on the backend yet." });
         const sub = cleanSubscription(req.body && (req.body.subscription || req.body));
         if (!sub) return res.status(400).json({ success: false, message: "The browser supplied an invalid push subscription." });
@@ -228,6 +229,7 @@ module.exports = function createPushRoutes(pool, authenticateToken, pushService)
     });
 
     router.post("/test", authenticateToken, testLimiter, async (req, res) => {
+        if (pushService.status().webPushDisabled) return res.status(410).json({ success: false, code: "WEB_PUSH_DISABLED", message: "Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts." });
         if (!pushService.status().configured) return res.status(503).json({ success: false, message: "Web Push is not configured on the backend yet." });
         try {
             const result = await pool.query("SELECT 1 FROM push_subscriptions WHERE user_id=$1 AND active=TRUE LIMIT 1", [req.user.userId]);

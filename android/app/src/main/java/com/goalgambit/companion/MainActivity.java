@@ -40,6 +40,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class MainActivity extends Activity {
     static final String ACTION_PUSH_RECEIVED = "com.goalgambit.companion.PUSH_RECEIVED";
@@ -70,6 +72,7 @@ public final class MainActivity extends Activity {
     private boolean companionRefreshInFlight;
     private boolean pushReceiverRegistered;
     private boolean companionTermsAccepted;
+    private String latestCompanionVersion;
     private ChessEngineSocket chessEngineSocket;
     private String chessEngineToken;
     private String termsStatusInFlightToken;
@@ -237,6 +240,8 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 companionTermsAccepted = status.json.optBoolean("termsAccepted", false);
+                JSONObject apk = status.json.optJSONObject("apk");
+                latestCompanionVersion = apk == null ? null : apk.optString("version", null);
                 if (companionTermsAccepted) {
                     showSignedIn();
                     syncCompanionInstallation();
@@ -358,14 +363,16 @@ public final class MainActivity extends Activity {
 
     private void showSignedIn() {
         statusView.setText("GOAL$GAMBIT | Compete. Win. Earn.");
+        addCompanionUpdateNotice();
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
         notificationsShortcut = button("NOTIFICATIONS");
         Button settings = button("SETTINGS");
         quickActions.addView(notificationsShortcut, new LinearLayout.LayoutParams(0, dp(50), 1));
-        quickActions.addView(settings, marginParams(0, 50, 8, 0, 0, 0));
-        ((LinearLayout.LayoutParams) settings.getLayoutParams()).weight = 1;
+        LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        settingsParams.setMargins(dp(8), 0, 0, 0);
+        quickActions.addView(settings, settingsParams);
         content.addView(quickActions, marginParams(-1, -2, 0, 0, 0, 8));
         notificationsShortcut.setOnClickListener(view -> startActivity(new Intent(this, NotificationInboxActivity.class)));
         settings.setOnClickListener(view -> startActivity(new Intent(this, SettingsActivity.class)));
@@ -375,8 +382,9 @@ public final class MainActivity extends Activity {
         supportShortcut = button("SUPPORT INBOX");
         Button help = button("HELP & FAQ");
         secondActions.addView(supportShortcut, new LinearLayout.LayoutParams(0, dp(50), 1));
-        secondActions.addView(help, marginParams(0, 50, 8, 0, 0, 0));
-        ((LinearLayout.LayoutParams) help.getLayoutParams()).weight = 1;
+        LinearLayout.LayoutParams helpParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        helpParams.setMargins(dp(8), 0, 0, 0);
+        secondActions.addView(help, helpParams);
         content.addView(secondActions, marginParams(-1, -2, 0, 0, 0, 12));
         supportShortcut.setOnClickListener(view -> {
             if (supportMessages != null) screenScroll.smoothScrollTo(0, supportMessages.getTop());
@@ -437,6 +445,46 @@ public final class MainActivity extends Activity {
         if (selectedMatchId > 0) addMatchLoading(selectedMatchId);
         if (selectedChessMatchId > 0) addChessMatchNotice(selectedChessMatchId, selectedChessMatchEventKey);
         refreshCompanionData();
+    }
+
+    private void addCompanionUpdateNotice() {
+        if (compareVersionNumbers(latestCompanionVersion, BuildConfig.VERSION_NAME) <= 0) return;
+
+        LinearLayout notice = new LinearLayout(this);
+        notice.setOrientation(LinearLayout.VERTICAL);
+        notice.setPadding(dp(14), dp(12), dp(14), dp(12));
+        notice.setBackgroundColor(Color.rgb(37, 31, 12));
+        TextView heading = text("APP UPDATE AVAILABLE", 15, Color.rgb(237, 195, 53), true);
+        TextView detail = text("Version " + latestCompanionVersion + " is ready. Update GOAL$GAMBIT Companion to get the latest fixes.", 13, Color.WHITE, false);
+        Button download = button("DOWNLOAD LATEST ANDROID APP");
+        notice.addView(heading, marginParams(-1, -2, 0, 0, 0, 5));
+        notice.addView(detail, marginParams(-1, -2, 0, 0, 0, 9));
+        notice.addView(download, marginParams(-1, -2, 0, 0, 0, 0));
+        content.addView(notice, marginParams(-1, -2, 0, 0, 0, 12));
+        download.setOnClickListener(view -> {
+            String url = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk?download=" + System.currentTimeMillis();
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        });
+    }
+
+    private static int compareVersionNumbers(String left, String right) {
+        Matcher a = Pattern.compile("\\d+").matcher(left == null ? "" : left);
+        Matcher b = Pattern.compile("\\d+").matcher(right == null ? "" : right);
+        java.util.ArrayList<Long> first = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> second = new java.util.ArrayList<>();
+        while (a.find()) {
+            try { first.add(Long.parseLong(a.group())); } catch (NumberFormatException ignored) { return 0; }
+        }
+        while (b.find()) {
+            try { second.add(Long.parseLong(b.group())); } catch (NumberFormatException ignored) { return 0; }
+        }
+        if (first.isEmpty() || second.isEmpty()) return 0;
+        for (int index = 0; index < Math.max(first.size(), second.size()); index++) {
+            long leftPart = index < first.size() ? first.get(index) : 0L;
+            long rightPart = index < second.size() ? second.get(index) : 0L;
+            if (leftPart != rightPart) return leftPart < rightPart ? -1 : 1;
+        }
+        return 0;
     }
 
     private void refreshCompanionData() {

@@ -58,7 +58,11 @@ object Notifications {
         val matchId = parseLong(data["matchId"])
         val eventId = parseLong(data["eventId"])
         val notificationId = notificationId(data["eventId"], matchId)
-        val body = notificationBody(eventKey)
+        val body = if (eventKey.startsWith("companion-update:")) {
+            data["body"].orEmpty().ifBlank { notificationBody(eventKey) }
+        } else {
+            notificationBody(eventKey)
+        }
         if (matchId > 0 && eventKey.contains("cancel", ignoreCase = true)) clearMatchNotifications(context, matchId)
         post(context, notificationId, build(context, notificationId, matchId, eventKey,
             "GOAL\$GAMBIT", body, true, isRoomCodeRequest(eventKey), 0, eventId))
@@ -250,6 +254,8 @@ object Notifications {
     private fun notificationBody(eventKey: String): String {
         val key = eventKey.lowercase()
         return when {
+            key.startsWith("companion-update:") ->
+                "A newer GOAL\$GAMBIT Companion app is available. Please update to the latest version."
             key.contains("room-code-needed") || key.contains("code-correction-requested") ->
                 "Your match room code is needed. Reply now."
             key.contains("support-reply:") || key.contains("support-message:") ->
