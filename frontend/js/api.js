@@ -422,11 +422,56 @@
         if (banner) banner.remove();
     }
 
+    function isCompanionVersionOlder(installed, latest) {
+        var installedParts = String(installed || "").match(/\d+/g);
+        var latestParts = String(latest || "").match(/\d+/g);
+        if (!installedParts || !latestParts) return false;
+        for (var index = 0; index < Math.max(installedParts.length, latestParts.length); index += 1) {
+            var installedPart = Number(installedParts[index] || 0);
+            var latestPart = Number(latestParts[index] || 0);
+            if (!Number.isSafeInteger(installedPart) || !Number.isSafeInteger(latestPart)) return false;
+            if (installedPart !== latestPart) return installedPart < latestPart;
+        }
+        return false;
+    }
+
+    function renderCompanionUpdateReminder(statusData) {
+        if (!document.body || !getToken() || /\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
+        var installed = statusData && statusData.companion && statusData.companion.appVersion;
+        var latest = statusData && statusData.apk && statusData.apk.version;
+        var reminder = document.getElementById("gg-companion-update-reminder");
+        if (!isCompanionVersionOlder(installed, latest)) {
+            if (reminder) reminder.remove();
+            return;
+        }
+        if (!reminder) {
+            reminder = document.createElement("aside");
+            reminder.id = "gg-companion-update-reminder";
+            reminder.setAttribute("role", "status");
+            reminder.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 14px;padding:11px 16px;border-bottom:1px solid #80671e;background:#211a08;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
+            var message = document.createElement("strong");
+            message.id = "gg-companion-update-message";
+            var download = document.createElement("button");
+            download.type = "button";
+            download.textContent = "UPDATE APP";
+            download.style.cssText = "border:1px solid #e4bd43;border-radius:7px;padding:7px 12px;background:#e4bd43;color:#111;font-weight:800;cursor:pointer";
+            var result = document.createElement("span");
+            result.setAttribute("aria-live", "polite");
+            download.addEventListener("click", function() { downloadCompanionApp(result); });
+            reminder.append(message, download, result);
+            document.body.insertBefore(reminder, document.body.firstChild);
+        }
+        reminder.querySelector("#gg-companion-update-message").textContent =
+            "COMPANION UPDATE AVAILABLE · Installed v" + installed + " · Latest v" + latest;
+    }
+
     async function refreshAndroidCompanionDownloadLink(force) {
         if (!document.body) return;
         var token = getToken();
         if (!token) {
             removeAndroidCompanionDownloadLink();
+            var updateReminder = document.getElementById("gg-companion-update-reminder");
+            if (updateReminder) updateReminder.remove();
             return;
         }
         if (/\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
@@ -442,8 +487,11 @@
         companionNoticeCheckInFlight = false;
         if (getToken() !== token) {
             removeAndroidCompanionDownloadLink();
+            var changedAccountReminder = document.getElementById("gg-companion-update-reminder");
+            if (changedAccountReminder) changedAccountReminder.remove();
             return;
         }
+        if (status.ok) renderCompanionUpdateReminder(status.data);
         if (status.ok && status.data.onboardingComplete === true) {
             removeAndroidCompanionDownloadLink();
         } else {
