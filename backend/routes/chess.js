@@ -2050,12 +2050,17 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
         const client = await pool.connect();
         let inTransaction = false;
-        async function reject(status, message) {
+        async function reject(status, message, authoritativeMatch) {
             if (inTransaction) {
                 await client.query("ROLLBACK");
                 inTransaction = false;
             }
-            return res.status(status).json({ success: false, message: message });
+            const payload = { success: false, message: message };
+            // This is only supplied after player authorization, so a rejected
+            // move can still restore the caller to the locked authoritative
+            // position without a second, potentially stale GET request.
+            if (authoritativeMatch) payload.match = publicMatchState(authoritativeMatch, userId);
+            return res.status(status).json(payload);
         }
 
         try {
@@ -2070,11 +2075,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const match = locked.rows[0];
             const color = getPlayerColor(match, userId);
             if (!color) return reject(403, "You are not a player in this match.");
-            if (match.status !== "active") return reject(409, "This match is not active.");
+            if (match.status !== "active") return reject(409, "This match is not active.", match);
             if (hasExpectedFen && (expectedFen !== match.fen || expectedPly !== chessPlyFromFen(match.fen))) {
-                return reject(409, "The match position changed. Refresh before moving.");
+                return reject(409, "The match position changed. Refresh before moving.", match);
             }
-            if (match.active_color !== color) return reject(409, "It is not your turn.");
+            if (match.active_color !== color) return reject(409, "It is not your turn.", match);
 
             const times = calculateRemainingTime(match);
             const remaining = color === "w" ? times.whiteTimeMs : times.blackTimeMs;
@@ -2103,9 +2108,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             try {
                 move = chess.move({ from: from, to: to, promotion: requestedPromotion });
             } catch (_) {
-                return reject(400, "Illegal chess move.");
+                return reject(400, "Illegal chess move.", match);
             }
-            if (!move) return reject(400, "Illegal chess move.");
+            if (!move) return reject(400, "Illegal chess move.", match);
 
             const increment = getIncrementMs(match.time_control);
             let whiteMs = times.whiteTimeMs;

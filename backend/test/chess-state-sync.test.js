@@ -181,6 +181,22 @@ test("reused move-response calculation matches the normal public match state", (
     );
 });
 
+test("public match state binds identities and assigned colors to the server seats for non-ranked matches too", () => {
+    const match = matchRow({ match_type: "casual" });
+    const white = chessRoutes.publicMatchState(match, 41);
+    const black = chessRoutes.publicMatchState(match, 42);
+    assert.equal(white.playerColor, "w");
+    assert.equal(black.playerColor, "b");
+    for (const state of [white, black]) {
+        assert.equal(state.playerWhiteId, 41);
+        assert.equal(state.playerBlackId, 42);
+        assert.equal(state.whiteName, "white-player");
+        assert.equal(state.blackName, "black-player");
+        assert.equal(state.whiteRating, 1200);
+        assert.equal(state.blackRating, 1200);
+    }
+});
+
 test("successive authoritative moves retain the existing PGN history", async t => {
     let current = matchRow();
     const pool = {
@@ -222,6 +238,9 @@ test("successive authoritative moves retain the existing PGN history", async t =
     assert.equal(white.status, 200);
     const replay = await play(whiteApi, whiteMove);
     assert.equal(replay.status, 409, "the exact request replay must not be applied to the updated position");
+    const replayBody = await replay.json();
+    assert.equal(replayBody.match.fen, current.fen, "a rejected duplicate returns the authoritative position for reconciliation");
+    assert.equal(replayBody.match.playerColor, "w");
     assert.equal(current.active_color, "b");
     const black = await play(blackApi, { from: "e7", to: "e5", expectedFen: current.fen, expectedPly: 1 });
     const body = await black.json();
@@ -293,6 +312,10 @@ test("simultaneous same-position move requests serialize and only one can advanc
 
     const responses = await Promise.all([submit("e2", "e4"), submit("d2", "d4")]);
     assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+    const rejectedResponse = responses.find(response => response.status === 409);
+    const rejectedBody = await rejectedResponse.json();
+    assert.equal(rejectedBody.match.fen, current.fen, "the losing concurrent request receives the locked official state");
+    assert.equal(rejectedBody.match.playerColor, "w");
     assert.equal(updates, 1, "only the transaction holding the current row position may write a move");
     assert.equal(current.active_color, "b");
 });
@@ -492,6 +515,8 @@ test("backend rejects an illegal chess move while holding the match lock", async
     const body = await response.json();
     assert.equal(response.status, 400);
     assert.equal(body.message, "Illegal chess move.");
+    assert.equal(body.match.fen, current.fen, "an illegal request includes the authoritative board for safe rollback");
+    assert.equal(body.match.playerColor, "w");
     assert.equal(transactionQueries.at(-1), "ROLLBACK");
 });
 
@@ -611,7 +636,7 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         .replace(/^import\s+\{\s*Chess\s*\}\s+from\s+["'][^"']+["'];\s*/m, "");
     context.Chess = BrowserChess;
     vm.createContext(context);
-    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,currentRulesPosition,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
+    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,currentRulesPosition,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getPlayerColor:()=>playerColor,getBoardFlipped:()=>boardFlipped,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
     return { board: context.__boardTest, document, elements, documentListeners, windowListeners, sockets: windows, delays, storage, clock, setOnline(value) { context.navigator.onLine = value; } };
 }
 
@@ -648,6 +673,44 @@ function latencyPercentile(samples, percentile) {
     const sorted = samples.slice().sort((left, right) => left - right);
     return sorted[Math.max(0, Math.ceil(sorted.length * percentile) - 1)];
 }
+
+test("white and black boards map authoritative names and keep each assigned side at the bottom", () => {
+    for (const color of ["w", "b"]) {
+        const harness = createBoardHarness(async () => { throw new Error("No network request expected"); }, { search: "" });
+        const match = {
+            ...browserMatch(1), playerColor: color, matchType: "casual",
+            whiteName: "Bill Gates", blackName: "Briton", whiteRating: 1310, blackRating: 1240
+        };
+        harness.board.setMatchId(1);
+        harness.board.applyState(match);
+
+        assert.equal(harness.document.getElementById("whiteName").textContent, "Bill Gates");
+        assert.equal(harness.document.getElementById("blackName").textContent, "Briton");
+        assert.equal(harness.document.getElementById("whiteRating").textContent, "1310");
+        assert.equal(harness.document.getElementById("blackRating").textContent, "1240");
+        assert.equal(harness.board.getPlayerColor(), color, "the server-assigned color is not inferred from the username");
+
+        const squares = harness.board.getBoardSquares();
+        if (color === "w") {
+            assert.equal(squares.get("e1").element.style.gridRow, "8");
+            assert.equal(squares.get("e1").glyph.textContent, "♔");
+        } else {
+            assert.equal(squares.get("e8").element.style.gridRow, "8");
+            assert.equal(squares.get("e8").glyph.textContent, "♚");
+        }
+
+        const positionBeforeFlip = { fen: match.fen, pgn: match.pgn, activeColor: match.activeColor, playerColor: match.playerColor };
+        const orientationBeforeFlip = harness.board.getBoardFlipped();
+        assert.equal(orientationBeforeFlip, color === "b");
+        harness.elements.get("flipButton").listeners.click();
+        assert.notEqual(harness.board.getBoardFlipped(), orientationBeforeFlip);
+        assert.equal(harness.board.getPlayerColor(), color, "Flip changes only the view, never the player's assigned side");
+        assert.deepEqual(
+            { fen: harness.board.getState().fen, pgn: harness.board.getState().pgn, activeColor: harness.board.getState().activeColor, playerColor: harness.board.getState().playerColor },
+            positionBeforeFlip
+        );
+    }
+});
 
 test("board coalesces refreshes, rejects stale responses, filters self events and cleans up switched matches", async () => {
     const firstRequest = deferred();
@@ -808,10 +871,13 @@ test("board updates reuse the same accessible squares and click handlers", () =>
 });
 
 test("measures synchronous local move response separately from storage and network", async t => {
-    const harness = createBoardHarness(async () => { throw new Error("Offline local benchmark must not call the backend"); }, { search: "", online: false });
-    harness.board.setMatchId(1);
     const expected = new BrowserChess(INITIAL_FEN);
     expected.move({ from: "e2", to: "e4" });
+    const authoritative = browserMatch(1, expected.pgn());
+    authoritative.fen = expected.fen();
+    authoritative.activeColor = "b";
+    const harness = createBoardHarness(async () => responseFor({ success: true, match: authoritative }), { search: "", online: true });
+    harness.board.setMatchId(1);
     const samples = [];
     for (let index = 0; index < 30; index++) {
         harness.board.applyState(browserMatch(1));
@@ -825,7 +891,12 @@ test("measures synchronous local move response separately from storage and netwo
 });
 
 test("pointer dragging selects locally and makes the dropped legal move immediately", async () => {
-    const harness = createBoardHarness(async () => { throw new Error("Offline drag must not submit a request"); }, { search: "", online: false });
+    const moved = new BrowserChess(INITIAL_FEN);
+    moved.move({ from: "e2", to: "e4" });
+    const authoritative = browserMatch(1, moved.pgn());
+    authoritative.fen = moved.fen();
+    authoritative.activeColor = "b";
+    const harness = createBoardHarness(async () => responseFor({ success: true, match: authoritative }), { search: "", online: true });
     harness.board.setMatchId(1);
     harness.board.applyState(browserMatch(1));
     const squares = harness.board.getBoardSquares();
@@ -1017,31 +1088,33 @@ test("illegal moves are rejected locally and checked positions expose only king-
     assert.equal(posts, 0);
 });
 
-test("offline moves persist locally and restore after a simulated reload without claiming sync", async () => {
+test("offline ranked and trial-style matches pause moves and restore only from authoritative server state", async () => {
     const storage = new Map();
-    let requests = 0;
-    const first = createBoardHarness(async () => { requests++; throw new Error("backend offline"); }, { search: "", storage, online: false });
+    let posts = 0;
+    const first = createBoardHarness(async (_url, options = {}) => {
+        if (options.method === "POST") posts++;
+        throw new Error("No request should be sent while offline");
+    }, { search: "", storage, online: false });
     first.board.setMatchId(1);
     first.board.applyState(browserMatch(1));
     await new Promise(resolve => setImmediate(resolve));
+    first.windowListeners.offline();
 
-    assert.equal(await first.board.sendMove("e2", "e4"), true);
-    assert.equal(await first.board.sendMove("e7", "e5"), true);
-    assert.equal(await first.board.sendMove("g1", "f3"), true);
-    assert.equal(requests, 0, "offline turns should not retry failing API requests");
-    const saved = JSON.parse(storage.get("goalGambitChessOffline:1"));
-    assert.equal(saved.moves.length, 3);
-    assert.equal(saved.moves[0].fenBefore, INITIAL_FEN);
-    assert.equal(saved.moves[0].fenAfter, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
-    assert.equal(saved.moves[1].actorUserId, null, "opponent-side local continuation is evidence only");
-    assert.equal(saved.sync.status, "pending");
+    assert.equal(await first.board.sendMove("e2", "e4"), false);
+    assert.equal(first.board.getState().fen, INITIAL_FEN, "an offline click must not change the displayed official position");
+    assert.equal(posts, 0);
+    const saved = await first.board.readOfflineRecord(1);
+    assert.equal(saved.moves.length, 0, "no fake local move is created as an offline competition turn");
 
-    const reloaded = createBoardHarness(async () => { throw new Error("backend still offline"); }, { search: "", storage, online: false });
+    const reloaded = createBoardHarness(async () => responseFor({ success: true, match: browserMatch(1) }), { search: "", storage, online: true });
     reloaded.board.setMatchId(1);
     assert.equal(await reloaded.board.restoreOfflineMatch(1), true);
-    assert.equal(reloaded.board.getState().fen, first.board.getState().fen);
+    assert.equal(await reloaded.board.sendMove("e2", "e4"), false, "a restored local snapshot remains read-only until synchronization");
+    assert.equal(reloaded.board.getState().fen, INITIAL_FEN);
     assert.equal(reloaded.board.getOfflineMode(), true);
-    assert.match(reloaded.document.getElementById("connectionStatus").textContent, /opponent cannot see/i);
+    assert.equal(await reloaded.board.reconcileServerMatch(browserMatch(1)), true);
+    assert.equal(reloaded.board.getOfflineMode(), false);
+    assert.equal(reloaded.board.getState().fen, INITIAL_FEN);
 });
 
 test("a single authenticated offline move syncs only after server acknowledgement", async () => {
@@ -1055,22 +1128,76 @@ test("a single authenticated offline move syncs only after server acknowledgemen
         assert.ok(url.endsWith("/move"));
         assert.equal(options.method, "POST");
         movePosts++;
+        const submitted = JSON.parse(options.body);
+        assert.equal(submitted.expectedFen, INITIAL_FEN);
+        assert.equal(submitted.expectedPly, 0);
+        if (movePosts === 1) throw new Error("network disconnected while move response was in flight");
         return responseFor({ success: true, match: after });
-    }, { search: "", storage, online: false });
+    }, { search: "", storage, online: true });
     harness.board.setMatchId(1);
     harness.board.applyState(browserMatch(1));
     await new Promise(resolve => setImmediate(resolve));
-    await harness.board.sendMove("e2", "e4");
+    assert.equal(await harness.board.sendMove("e2", "e4"), false, "a transport failure is not an accepted official move");
+    assert.equal(harness.board.getOfflineMode(), true);
+    assert.equal(await harness.board.sendMove("e7", "e5"), false, "further moves are blocked while the first move is unconfirmed");
     harness.setOnline(true);
 
     assert.equal(await harness.board.reconcileServerMatch(browserMatch(1)), true);
-    assert.equal(movePosts, 1);
+    assert.equal(movePosts, 2, "one transport failure is followed by one ordered retry after reconnection");
     assert.equal(harness.board.getState().fen, after.fen);
     await new Promise(resolve => setImmediate(resolve));
     const saved = await harness.board.readOfflineRecord(1);
     assert.equal(saved.sync.status, "synced");
     assert.equal(saved.moves[0].serverAcknowledged, true);
     assert.equal(harness.board.getOfflineMode(), false);
+});
+
+test("a rejected move restores the authoritative server position and preserves the attempt as rejected evidence", async () => {
+    const storage = new Map();
+    const official = browserMatch(1);
+    const harness = createBoardHarness(async url => {
+        assert.ok(url.endsWith("/move"));
+        return {
+            ok: false, status: 409,
+            json: async () => ({ success: false, message: "The match position changed. Refresh before moving.", match: official })
+        };
+    }, { search: "", storage, online: true });
+    harness.board.setMatchId(1);
+    harness.board.applyState(official);
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(await harness.board.sendMove("e2", "e4"), false);
+    assert.equal(harness.board.getState().fen, official.fen, "the board rolls back to the server's current position");
+    assert.equal(harness.board.getOfflineMode(), false, "play can resume from the recovered official state");
+    assert.equal(harness.board.getOfflineConflict(), false);
+    const saved = await harness.board.readOfflineRecord(1);
+    assert.equal(saved.moves.length, 1);
+    assert.equal(saved.moves[0].rejected, true);
+    assert.equal(saved.moves[0].serverAcknowledged, false);
+});
+
+test("a duplicate request rejected after its original acceptance reconciles as already confirmed", async () => {
+    const storage = new Map();
+    const accepted = browserMatch(1, "1. e4");
+    accepted.pgn = pgnAfterMoves(INITIAL_FEN, [{ from: "e2", to: "e4" }]);
+    accepted.fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    accepted.activeColor = "b";
+    const harness = createBoardHarness(async url => {
+        assert.ok(url.endsWith("/move"));
+        return {
+            ok: false, status: 409,
+            json: async () => ({ success: false, message: "The match position changed.", match: accepted })
+        };
+    }, { search: "", storage, online: true });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(await harness.board.sendMove("e2", "e4"), true, "the server's history proves that the original request already landed");
+    assert.equal(harness.board.getState().fen, accepted.fen);
+    assert.equal(harness.board.getOfflineMode(), false);
+    const saved = await harness.board.readOfflineRecord(1);
+    assert.equal(saved.moves[0].serverAcknowledged, true);
 });
 
 test("offline clock expiry is saved locally and remains unverified", async () => {
@@ -1104,7 +1231,7 @@ test("offline clock expiry is saved locally and remains unverified", async () =>
     assert.equal(confirmed.latest.status, "completed");
 });
 
-test("server timeout acknowledgement does not mark an unaccepted local move as synced", async () => {
+test("server timeout settles authoritatively while retaining the unaccepted local move as rejected evidence", async () => {
     const storage = new Map();
     const official = browserMatch(1);
     official.status = "completed";
@@ -1128,24 +1255,46 @@ test("server timeout acknowledgement does not mark an unaccepted local move as s
     assert.equal(movePosts, 1);
     assert.equal(harness.board.getState().status, "completed", "the authoritative server timeout is shown");
     assert.equal(saved.moves[0].serverAcknowledged, false);
-    assert.equal(saved.sync.status, "conflict");
+    assert.equal(saved.moves[0].rejected, true, "the local move is recorded as rejected rather than accepted");
+    assert.equal(saved.sync.status, "synced", "there are no unresolved local moves after the official timeout snapshot is saved");
     assert.equal(saved.serverSnapshot.status, "completed");
-    assert.equal(harness.board.getOfflineConflict(), true);
+    assert.equal(harness.board.getOfflineConflict(), false);
 });
 
 test("conflicting multi-move offline histories remain local and are never auto-submitted", async () => {
     const storage = new Map();
     let apiCalls = 0;
     const harness = createBoardHarness(async () => { apiCalls++; throw new Error("unexpected request"); }, { search: "", storage, online: false });
+    const baseline = browserMatch(1);
+    const localRules = new BrowserChess(INITIAL_FEN);
+    const localMoves = [];
+    for (const [actorColor, actorUserId, move] of [
+        ["w", 41, { from: "e2", to: "e4" }],
+        ["b", null, { from: "e7", to: "e5" }]
+    ]) {
+        const fenBefore = localRules.fen();
+        const pgnBefore = localRules.pgn();
+        const accepted = localRules.move(move);
+        localMoves.push({
+            actorColor, actorUserId, ...move, promotion: null, san: accepted.san,
+            fenBefore, pgnBefore, fenAfter: localRules.fen(), pgnAfter: localRules.pgn(),
+            movedAt: new Date().toISOString(), serverAcknowledged: false
+        });
+    }
+    const localSnapshot = {
+        ...baseline, fen: localRules.fen(), pgn: localRules.pgn(), activeColor: localRules.turn(), savedAt: Date.now()
+    };
+    storage.set("goalGambitChessOffline:1", JSON.stringify({
+        matchId: 1, userId: 41, playerWhiteId: 41, playerBlackId: 42, playerColor: "w",
+        baseline, serverSnapshot: baseline, latest: localSnapshot, moves: localMoves,
+        claimedResult: null, terminationReason: null, sync: { status: "pending", attempts: 0 }, updatedAt: Date.now()
+    }));
     harness.board.setMatchId(1);
-    harness.board.applyState(browserMatch(1));
-    await new Promise(resolve => setImmediate(resolve));
-    await harness.board.sendMove("e2", "e4");
-    await harness.board.sendMove("e7", "e5");
+    assert.equal(await harness.board.restoreOfflineMatch(1), true);
     const localFen = harness.board.getState().fen;
     harness.setOnline(true);
 
-    assert.equal(await harness.board.reconcileServerMatch(browserMatch(1)), false);
+    assert.equal(await harness.board.reconcileServerMatch(baseline), false);
     assert.equal(apiCalls, 0, "the unverifiable opponent move must not be submitted as the authenticated player");
     assert.equal(harness.board.getState().fen, localFen, "conflicting local evidence is preserved");
     assert.equal(harness.board.getOfflineMode(), true);
