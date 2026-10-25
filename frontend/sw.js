@@ -4,7 +4,7 @@
 // backend/site outage. This cache is limited to static chess resources; API
 // responses and Socket.IO traffic are never cached. The push handlers below
 // remain unchanged.
-const CHESS_SHELL_CACHE = "goal-gambit-chess-shell-v1";
+const CHESS_SHELL_CACHE = "goal-gambit-chess-shell-v2";
 const CHESS_SHELL_ASSETS = [
     "pages/chess-match.html",
     "pages/board.html",
@@ -71,6 +71,30 @@ self.addEventListener("fetch", function(event) {
     }
 
     if (!CHESS_SHELL_ASSETS.includes(path)) return;
+
+    // api.js contains the live backend address and server-status check. Keep
+    // its cache for offline chess pages, but refresh it whenever the network
+    // is available so older clients cannot remain pinned to stale API config.
+    if (path === "js/api.js") {
+        event.respondWith((async function() {
+            try {
+                const response = await fetch(request, { cache: "no-cache" });
+                if (response.ok) {
+                    const cache = await caches.open(CHESS_SHELL_CACHE);
+                    await cache.put(new URL(path, self.registration.scope).href, response.clone());
+                    return response;
+                }
+                const cached = await caches.match(request, { ignoreSearch: true });
+                return cached || response;
+            } catch (error) {
+                const cached = await caches.match(request, { ignoreSearch: true });
+                if (cached) return cached;
+                throw error;
+            }
+        })());
+        return;
+    }
+
     event.respondWith((async function() {
         const cached = await caches.match(request, { ignoreSearch: true });
         if (cached) return cached;
