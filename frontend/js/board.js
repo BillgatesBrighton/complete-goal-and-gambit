@@ -445,6 +445,18 @@ function setPlayers(){
   [whiteRatingElement,sideWhiteRatingElement].forEach(x=>{if(x)x.textContent=wr});
   [blackRatingElement,sideBlackRatingElement].forEach(x=>{if(x)x.textContent=br});
 }
+function positionPlayerBars(){
+  const boardWrapper=chessBoard?.parentElement;
+  const section=boardWrapper?.parentElement;
+  const blackBar=blackNameElement?.closest(".player-bar");
+  const whiteBar=whiteNameElement?.closest(".player-bar");
+  if(!section||!boardWrapper||!blackBar||!whiteBar)return;
+  const topBar=playerColor==="b"?whiteBar:blackBar;
+  const bottomBar=playerColor==="b"?blackBar:whiteBar;
+  section.insertBefore(topBar,section.firstElementChild);
+  section.insertBefore(boardWrapper,topBar.nextElementSibling);
+  section.insertBefore(bottomBar,boardWrapper.nextElementSibling);
+}
 function createBoardSquare(name){
   const square=document.createElement("button");
   square.type="button";square.className="square";square.dataset.square=name;
@@ -986,7 +998,7 @@ function applyState(m){
     queuedPremove=null;
     if(cancelPremoveButton){cancelPremoveButton.hidden=true;cancelPremoveButton.classList.add("hidden")}
   }
-  if(m.playerColor&&(!orientationSet||previousPlayerColor!==m.playerColor)){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=monotonicNow();
+  if(m.playerColor&&(!orientationSet||previousPlayerColor!==m.playerColor)){boardFlipped=m.playerColor==="b";orientationSet=true;positionPlayerBars()} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=monotonicNow();
   const check=m.checkSquare?" · CHECK":"";
   const pausedMessage=m.connectionPaused
     ?(m.connectionPauseReason==="integrity"?"Game paused by the server while it verifies the official position.":"Connection interrupted. The server has paused this game for both players while it restores the connection.")
