@@ -3,6 +3,7 @@
 const test = require("node:test");
 const { before } = test;
 const assert = require("node:assert/strict");
+const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -44,7 +45,7 @@ function matchRow(overrides = {}) {
     };
 }
 
-async function startChessApi(pool, io, userId = 41, pushService) {
+async function startChessApi(pool, io, userId = 41, pushService, connectionMonitor) {
     const app = express();
     app.use(express.json());
     const routePool = Object.create(pool);
@@ -54,10 +55,12 @@ async function startChessApi(pool, io, userId = 41, pushService) {
             throw new Error("Unexpected top-level SQL in test: " + String(sql).slice(0, 120));
         };
     }
-    app.use("/api/chess", chessRoutes(routePool, (req, _res, next) => {
+    const router = chessRoutes(routePool, (req, _res, next) => {
         req.user = { userId };
         next();
-    }, io, pushService));
+    }, io, pushService);
+    if (connectionMonitor) router.setConnectionMonitor(connectionMonitor);
+    app.use("/api/chess", router);
     const server = http.createServer(app);
     await new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -97,6 +100,66 @@ test("ordinary active match GET returns without opening a settlement transaction
     assert.equal(body.match.matchId, 501);
     assert.equal(matchReads, 1);
     assert.equal(transactionStarts, 0);
+});
+
+test("an active match GET freezes its displayed clock while the authenticated match room is not ready", async t => {
+    const current = matchRow({ last_move_at: new Date(Date.now() - 5000), white_time_ms: 600000 });
+    const pool = {
+        async query(sql) {
+            const text = String(sql);
+            if (text.includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            if (text.includes("FROM chess_matches m")) return { rows: [current] };
+            throw new Error("Unexpected SQL in connection-readiness test: " + text.slice(0, 120));
+        },
+        async connect() { throw new Error("A disconnected read must not settle or lock the match."); }
+    };
+    const api = await startChessApi(pool, null, 41, null, { isMatchReady: () => false });
+    t.after(api.close);
+    const response = await fetch(api.base + "/501");
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.connectionReady, false);
+    assert.equal(body.match.connectionPaused, true);
+    assert.equal(body.match.whiteTimeMs, 600000, "a locally disconnected match displays its persisted clock, not elapsed outage time");
+});
+
+test("unready match-room connections cannot move, resign, or change a draw result", async t => {
+    const current = matchRow({ draw_offer_user_id: 42 });
+    let writes = 0;
+    const pool = {
+        async query(sql) {
+            const text = String(sql);
+            if (text.includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
+            if (text.includes("FROM chess_matches m")) return { rows: [current] };
+            throw new Error("Unexpected SQL in unready action test: " + text.slice(0, 120));
+        },
+        async connect() {
+            return {
+                async query(sql) {
+                    const text = String(sql).trim();
+                    if (text === "BEGIN" || text === "ROLLBACK") return { rows: [] };
+                    if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
+                    writes++;
+                    throw new Error("An unready match action must not write state.");
+                },
+                release() {}
+            };
+        }
+    };
+    const api = await startChessApi(pool, null, 41, null, { isMatchReady: () => false });
+    t.after(api.close);
+    const move = await fetch(api.base + "/501/move", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: "e2", to: "e4", expectedFen: INITIAL_FEN, expectedPly: 0 })
+    });
+    assert.equal(move.status, 409);
+    for (const endpoint of ["/501/resign", "/501/draw", "/501/draw/respond"]) {
+        const response = await fetch(api.base + endpoint, {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accept: true })
+        });
+        assert.equal(response.status, 409, endpoint + " must remain blocked until both players reconnect");
+    }
+    assert.equal(writes, 0);
 });
 
 test("move attempts are rate-limited per authenticated account before taking match locks", async t => {
@@ -172,7 +235,7 @@ test("reused move-response calculation matches the normal public match state", (
     const position = new BrowserChess(INITIAL_FEN);
     position.move({ from: "e2", to: "e4" });
     position.move({ from: "e7", to: "e5" });
-    const match = matchRow({ fen: position.fen(), pgn: position.pgn(), active_color: position.turn() });
+    const match = matchRow({ fen: position.fen(), pgn: position.pgn(), active_color: position.turn(), last_move_at: null });
     const acceptedMove = position.history({ verbose: true }).at(-1);
     assert.deepEqual(
         chessRoutes.publicMatchState(match, 41, position, acceptedMove),
@@ -636,8 +699,11 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         .replace(/^import\s+\{\s*Chess\s*\}\s+from\s+["'][^"']+["'];\s*/m, "");
     context.Chess = BrowserChess;
     vm.createContext(context);
-    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,currentRulesPosition,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getPlayerColor:()=>playerColor,getBoardFlipped:()=>boardFlipped,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
-    return { board: context.__boardTest, document, elements, documentListeners, windowListeners, sockets: windows, delays, storage, clock, setOnline(value) { context.navigator.onLine = value; } };
+    vm.runInContext(source + "\n;globalThis.__boardTest={loadMatch,applyState,setMatchId,setRealtimeMatchReady:(value)=>{realtimeMatchReady=Boolean(value);updateMatchActions();updateClocks()},getRealtimeMatchReady:()=>realtimeMatchReady,setupSocket,scheduleMatchPolling,initializeBoard,selectPiece,clickSquare,choosePromotion,sendMove,updateClocks,renderBoard,currentRulesPosition,restoreOfflineMatch,reconcileServerMatch,readOfflineRecord,handleNativeEnginePrediction,getNativeLegalMoveCache:()=>nativeLegalMoveCache,handleBoardPointerDown:typeof handleBoardPointerDown===\"function\"?handleBoardPointerDown:()=>{},handleBoardPointerMove:typeof handleBoardPointerMove===\"function\"?handleBoardPointerMove:()=>{},handleBoardPointerUp:typeof handleBoardPointerUp===\"function\"?handleBoardPointerUp:()=>{},handleBoardPointerCancel:typeof handleBoardPointerCancel===\"function\"?handleBoardPointerCancel:()=>{},getState:()=>state,getPlayerColor:()=>playerColor,getBoardFlipped:()=>boardFlipped,getSocket:()=>socket,getSelectedSquare:()=>selectedSquare,getLegalTargets:()=>legalTargets,getPendingPromotion:()=>pendingPromotion,getOfflineMode:()=>offlineMode,getOfflineConflict:()=>offlineConflict,getRemaining:remaining,getBoardSquares:typeof boardSquares===\"undefined\"?()=>new Map():()=>boardSquares,getSyncQueueCount:()=>typeof moveSyncQueues===\"undefined\"?0:moveSyncQueues.size,getPendingMovePersistence:()=>typeof pendingMovePersistence===\"undefined\"?0:pendingMovePersistence};", context);
+    const board = context.__boardTest;
+    const originalSetMatchId = board.setMatchId;
+    board.setMatchId = value => { const changed = originalSetMatchId(value); board.setRealtimeMatchReady(true); return changed; };
+    return { board, document, elements, documentListeners, windowListeners, sockets: windows, delays, storage, clock, setOnline(value) { context.navigator.onLine = value; } };
 }
 
 function deferred() {
@@ -762,9 +828,11 @@ test("board coalesces refreshes, rejects stale responses, filters self events an
     harness.board.setupSocket();
     assert.equal(harness.sockets.length, 1, "repeated setup for the same match must reuse its socket");
     originalSocket.connected = true;
+    harness.board.setRealtimeMatchReady(true);
     harness.board.scheduleMatchPolling();
     assert.equal(harness.delays.at(-1), 10000);
     originalSocket.connected = false;
+    harness.board.setRealtimeMatchReady(false);
     harness.board.scheduleMatchPolling();
     assert.equal(harness.delays.at(-1), 2000);
 
@@ -826,6 +894,149 @@ test("piece selection calculates legal hints locally without a legal-moves API r
     assert.deepEqual(harness.board.getLegalTargets().map(move => move.to), ["e3", "e4"]);
     assert.equal(requests, 0);
     t.diagnostic("Local legal selection/highlighting (30 samples, chess.js + mocked DOM; no network or browser paint): p50 " + latencyPercentile(selectionSamples, 0.5).toFixed(3) + " ms, p95 " + latencyPercentile(selectionSamples, 0.95).toFixed(3) + " ms.");
+});
+
+test("a verified companion prediction waits for its exact authoritative FEN and supplies legal hints", t => {
+    const harness = createBoardHarness(async () => { throw new Error("Prediction use must not fetch"); }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState({ ...browserMatch(1), playerColor: "b" });
+    const afterE4 = new BrowserChess(INITIAL_FEN);
+    afterE4.move({ from: "e2", to: "e4" });
+    const fen = afterE4.fen();
+    const prediction = {
+        matchId: 1, fen, positionVersion: 1,
+        positionKey: crypto.createHash("sha256").update(fen).digest("hex"),
+        legalMovesVerified: true, predictionCacheHit: true,
+        legalMoves: afterE4.moves({ verbose: true }).map(move => move.from + move.to + (move.promotion || ""))
+    };
+    harness.board.handleNativeEnginePrediction(prediction);
+    assert.equal(harness.board.getNativeLegalMoveCache().fen, fen,
+        "a move can arrive while the page still holds the immediately preceding server position");
+
+    const blackTurn = { ...browserMatch(1, afterE4.pgn()), playerColor: "b", fen, activeColor: "b" };
+    harness.board.applyState(blackTurn);
+    assert.equal(harness.board.getNativeLegalMoveCache().fen, fen,
+        "the cached legal moves remain only when the authoritative snapshot reaches the exact FEN and ply");
+    const predictedSamples=[];
+    for(let index=0;index<30;index++){
+        const started=performance.now();
+        harness.board.selectPiece("e7");
+        predictedSamples.push(performance.now()-started);
+    }
+    const predictedTargets=Array.from(harness.board.getLegalTargets(),move=>move.to).sort();
+    assert.deepEqual(predictedTargets, ["e5", "e6"]);
+
+    const baselineHarness=createBoardHarness(async()=>{throw new Error("Local validation must not fetch")},{search:""});
+    baselineHarness.board.setMatchId(1);
+    baselineHarness.board.applyState(blackTurn);
+    const baselineSamples=[];
+    for(let index=0;index<30;index++){
+        const started=performance.now();
+        baselineHarness.board.selectPiece("e7");
+        baselineSamples.push(performance.now()-started);
+    }
+    assert.deepEqual(Array.from(baselineHarness.board.getLegalTargets(),move=>move.to).sort(), predictedTargets);
+    const percentile=(values,fraction)=>values.slice().sort((a,b)=>a-b)[Math.min(values.length-1,Math.floor(values.length*fraction))];
+    t.diagnostic("Companion legal-hint selection (30 samples each, chess.js + mocked DOM; no network or browser paint): local p50 "+percentile(baselineSamples,.5).toFixed(3)+" ms / p95 "+percentile(baselineSamples,.95).toFixed(3)+" ms; verified cache p50 "+percentile(predictedSamples,.5).toFixed(3)+" ms / p95 "+percentile(predictedSamples,.95).toFixed(3)+" ms.");
+
+    const mismatched = { ...prediction, fen: fen.replace(" KQkq ", " KQ ") };
+    mismatched.positionKey = crypto.createHash("sha256").update(mismatched.fen).digest("hex");
+    harness.board.handleNativeEnginePrediction(mismatched);
+    assert.equal(harness.board.getNativeLegalMoveCache().fen, fen,
+        "a different castling-rights position at the same ply cannot replace the exact cached state");
+});
+
+test("premove is queued provisionally and submitted only after the opponent move is confirmed", async () => {
+    const afterE4 = new BrowserChess(INITIAL_FEN);
+    afterE4.move({ from: "e2", to: "e4" });
+    const onBlackTurn = browserMatch(1, afterE4.pgn());
+    onBlackTurn.fen = afterE4.fen();
+    onBlackTurn.activeColor = "b";
+    let posts = 0;
+    let submitted = null;
+    const official = new BrowserChess(INITIAL_FEN);
+    official.move({ from: "e2", to: "e4" });
+    official.move({ from: "e7", to: "e5" });
+    const afterBlack = { ...onBlackTurn, fen: official.fen(), pgn: official.pgn(), activeColor: "w" };
+    official.move({ from: "g1", to: "f3" });
+    const confirmed = { ...afterBlack, fen: official.fen(), pgn: official.pgn(), activeColor: "b" };
+    const harness = createBoardHarness(async (url, options = {}) => {
+        if (url.endsWith("/move") && options.method === "POST") {
+            posts++;
+            submitted = JSON.parse(options.body);
+            return responseFor({ success: true, match: confirmed });
+        }
+        throw new Error("The provisional premove should not fetch or submit early: " + url);
+    }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState(onBlackTurn);
+
+    harness.board.clickSquare("g1");
+    assert.deepEqual(harness.board.getLegalTargets().map(move => move.to), ["e2", "f3", "h3"]);
+    harness.board.clickSquare("f3");
+    assert.equal(posts, 0, "queueing a premove never changes or submits official state");
+    assert.equal(harness.board.getState().fen, onBlackTurn.fen);
+    assert.equal(harness.elements.get("cancelPremoveButton").hidden, false);
+    assert.match(harness.elements.get("gameStatus").textContent, /premove queued/i);
+
+    harness.board.applyState(afterBlack);
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(posts, 1, "the queued action is submitted once after a changed authoritative position gives the player the turn");
+    assert.equal(submitted.from, "g1");
+    assert.equal(submitted.to, "f3");
+    assert.equal(submitted.expectedFen, afterBlack.fen);
+    assert.equal(harness.board.getState().fen, confirmed.fen);
+    assert.equal(harness.elements.get("cancelPremoveButton").hidden, true);
+});
+
+test("premove can be cancelled and an opponent capture that makes it illegal is discarded", async () => {
+    let posts = 0;
+    const start = "4k1r1/8/8/8/8/8/4P3/4K1N1 b - - 0 1";
+    const match = { ...browserMatch(1), fen: start, activeColor: "b" };
+    const harness = createBoardHarness(async (url, options = {}) => {
+        if (url.endsWith("/move") && options.method === "POST") posts++;
+        throw new Error("A stale premove must not be sent: " + url);
+    }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState(match);
+    harness.board.clickSquare("g1");
+    harness.board.clickSquare("f3");
+    assert.equal(harness.elements.get("cancelPremoveButton").hidden, false);
+    harness.elements.get("cancelPremoveButton").listeners.click();
+    assert.equal(harness.elements.get("cancelPremoveButton").hidden, true);
+    assert.equal(harness.board.getState().fen, start);
+
+    harness.board.clickSquare("g1");
+    harness.board.clickSquare("f3");
+    const opponentCapture = new BrowserChess(start);
+    opponentCapture.move({ from: "g8", to: "g1" });
+    const afterCapture = { ...match, fen: opponentCapture.fen(), pgn: opponentCapture.pgn(), activeColor: "w" };
+    harness.board.applyState(afterCapture);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(posts, 0, "a premove whose source piece was captured is rejected locally");
+    assert.equal(harness.elements.get("cancelPremoveButton").hidden, true);
+    assert.match(harness.elements.get("gameStatus").textContent, /no longer legal/i);
+});
+
+test("server-confirmed connection pause freezes browser clocks and blocks both move and result controls", () => {
+    let now = 1000;
+    let posts = 0;
+    const paused = { ...browserMatch(1), connectionPaused: true, connectionPauseReason: "connection", whiteTimeMs: 50000 };
+    const harness = createBoardHarness(async () => { posts++; throw new Error("A paused game must not submit a move"); }, {
+        search: "", clock: { now: () => now }
+    });
+    harness.board.setMatchId(1);
+    harness.board.applyState(paused);
+    const before = harness.board.getRemaining("w");
+    now += 5000;
+    harness.board.updateClocks();
+    assert.equal(harness.board.getRemaining("w"), before);
+    assert.equal(harness.board.getState().connectionPaused, true);
+    assert.match(harness.elements.get("gameStatus").textContent, /server has paused this game for both players/i);
+    assert.equal(harness.elements.get("drawButton").hidden, true);
+    assert.equal(harness.elements.get("resignButton").hidden, true);
+    assert.equal(posts, 0);
 });
 
 test("rules position is reused for repeated selection and invalidated by a changed match position", () => {
@@ -1117,41 +1328,50 @@ test("offline ranked and trial-style matches pause moves and restore only from a
     assert.equal(reloaded.board.getState().fen, INITIAL_FEN);
 });
 
-test("a single authenticated offline move syncs only after server acknowledgement", async () => {
+test("reconnect never resubmits an unconfirmed offline move", async () => {
     const storage = new Map();
     let movePosts = 0;
-    const after = browserMatch(1, "1. e4");
-    after.pgn = '[Event "?"]\n[Site "?"]\n[Date "????.??.??"]\n[Round "?"]\n[White "?"]\n[Black "?"]\n[Result "*"]\n\n1. e4 *';
-    after.fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
-    after.activeColor = "b";
-    const harness = createBoardHarness(async (url, options = {}) => {
-        assert.ok(url.endsWith("/move"));
-        assert.equal(options.method, "POST");
-        movePosts++;
-        const submitted = JSON.parse(options.body);
-        assert.equal(submitted.expectedFen, INITIAL_FEN);
-        assert.equal(submitted.expectedPly, 0);
-        if (movePosts === 1) throw new Error("network disconnected while move response was in flight");
-        return responseFor({ success: true, match: after });
+    const harness = createBoardHarness(async url => {
+        if (url.endsWith("/move")) { movePosts++; throw new Error("network disconnected while move response was in flight"); }
+        throw new Error("Unexpected recovery request: " + url);
     }, { search: "", storage, online: true });
     harness.board.setMatchId(1);
     harness.board.applyState(browserMatch(1));
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(await harness.board.sendMove("e2", "e4"), false, "a transport failure is not an accepted official move");
-    assert.equal(harness.board.getOfflineMode(), true);
-    assert.equal(await harness.board.sendMove("e7", "e5"), false, "further moves are blocked while the first move is unconfirmed");
-    harness.setOnline(true);
+    assert.equal(await harness.board.sendMove("e2", "e4"), false);
+    assert.equal(movePosts, 1);
 
-    assert.equal(await harness.board.reconcileServerMatch(browserMatch(1)), true);
-    assert.equal(movePosts, 2, "one transport failure is followed by one ordered retry after reconnection");
-    assert.equal(harness.board.getState().fen, after.fen);
-    await new Promise(resolve => setImmediate(resolve));
+    const recovered = await harness.board.reconcileServerMatch(browserMatch(1));
+    assert.equal(recovered, false, "a server position that lacks the move leaves it unconfirmed");
+    assert.equal(movePosts, 1, "reconnect must never POST the saved offline move again");
+    assert.equal(harness.board.getState().fen, INITIAL_FEN, "the displayed board returns to the authoritative position");
+    assert.equal(harness.board.getOfflineConflict(), true);
     const saved = await harness.board.readOfflineRecord(1);
-    assert.equal(saved.sync.status, "synced");
-    assert.equal(saved.moves[0].serverAcknowledged, true);
-    assert.equal(harness.board.getOfflineMode(), false);
+    assert.equal(saved.moves[0].serverAcknowledged, false);
+    assert.equal(saved.sync.status, "conflict");
 });
 
+test("reconnect acknowledges an offline move only when the authoritative history already contains it", async () => {
+    const storage = new Map();
+    let movePosts = 0;
+    const accepted = browserMatch(1, "1. e4");
+    accepted.pgn = pgnAfterMoves(INITIAL_FEN, [{ from: "e2", to: "e4" }]);
+    accepted.fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    accepted.activeColor = "b";
+    const harness = createBoardHarness(async url => {
+        if (url.endsWith("/move")) { movePosts++; throw new Error("response was lost after the server accepted the move"); }
+        throw new Error("Unexpected recovery request: " + url);
+    }, { search: "", storage, online: true });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(await harness.board.sendMove("e2", "e4"), false);
+    assert.equal(await harness.board.reconcileServerMatch(accepted), true);
+    assert.equal(movePosts, 1, "history reconciliation does not need a second submission");
+    const saved = await harness.board.readOfflineRecord(1);
+    assert.equal(saved.moves[0].serverAcknowledged, true);
+    assert.equal(harness.board.getOfflineConflict(), false);
+});
 test("a rejected move restores the authoritative server position and preserves the attempt as rejected evidence", async () => {
     const storage = new Map();
     const official = browserMatch(1);
@@ -1200,37 +1420,28 @@ test("a duplicate request rejected after its original acceptance reconciles as a
     assert.equal(saved.moves[0].serverAcknowledged, true);
 });
 
-test("offline clock expiry is saved locally and remains unverified", async () => {
-    const storage = new Map();
+test("socket loss freezes the displayed clock and never records an offline timeout", async () => {
+    let now = 1000;
     let requests = 0;
-    const expired = browserMatch(1);
-    expired.whiteTimeMs = 0;
-    const harness = createBoardHarness(async () => { requests++; throw new Error("offline requests should be deferred"); }, { search: "", storage, online: false });
+    const clock = { now: () => now };
+    const shortClock = browserMatch(1);
+    shortClock.whiteTimeMs = 1000;
+    const harness = createBoardHarness(async () => { requests++; throw new Error("offline requests should not be sent"); }, { search: "", online: true, clock });
     harness.board.setMatchId(1);
+    harness.board.applyState(shortClock);
+    harness.board.setRealtimeMatchReady(true);
+    now += 400;
+    assert.equal(harness.board.getRemaining("w"), 600);
+
     harness.windowListeners.offline();
-    assert.equal(harness.board.getOfflineMode(), true);
-    harness.board.applyState(expired);
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(harness.board.getRealtimeMatchReady(), false);
+    now += 5000;
     harness.board.updateClocks();
-    await new Promise(resolve => setImmediate(resolve));
-
-    const saved = await harness.board.readOfflineRecord(1);
+    assert.equal(harness.board.getRemaining("w"), 600, "the visible clock stops immediately on local connection loss");
+    assert.equal(harness.board.getState().status, "active");
+    assert.equal(harness.board.getState().claimedResult, undefined);
     assert.equal(requests, 0);
-    assert.equal(harness.board.getState().status, "offline_pending");
-    assert.equal(harness.board.getState().result, null, "a local timeout is not an official result");
-    assert.equal(saved.claimedResult, "black_win");
-    assert.equal(saved.sync.status, "awaiting-verification");
-
-    const official = browserMatch(1);
-    official.status = "completed";
-    official.result = "black_win";
-    official.winnerId = 42;
-    assert.equal(await harness.board.reconcileServerMatch(official), true);
-    const confirmed = await harness.board.readOfflineRecord(1);
-    assert.equal(confirmed.sync.status, "synced");
-    assert.equal(confirmed.latest.status, "completed");
 });
-
 test("server timeout settles authoritatively while retaining the unaccepted local move as rejected evidence", async () => {
     const storage = new Map();
     const official = browserMatch(1);
@@ -1296,11 +1507,12 @@ test("conflicting multi-move offline histories remain local and are never auto-s
 
     assert.equal(await harness.board.reconcileServerMatch(baseline), false);
     assert.equal(apiCalls, 0, "the unverifiable opponent move must not be submitted as the authenticated player");
-    assert.equal(harness.board.getState().fen, localFen, "conflicting local evidence is preserved");
+    assert.equal(harness.board.getState().fen, baseline.fen, "the official board is restored instead of displaying offline moves as match state");
     assert.equal(harness.board.getOfflineMode(), true);
     assert.equal(harness.board.getOfflineConflict(), true);
     const saved = await harness.board.readOfflineRecord(1);
     assert.equal(saved.sync.status, "conflict");
+    assert.equal(saved.latest.fen, localFen, "the unconfirmed sequence remains available as local recovery evidence");
 });
 
 test("move confirmation avoids a duplicate GET when an overlapping refresh already applied the same authoritative state", async t => {

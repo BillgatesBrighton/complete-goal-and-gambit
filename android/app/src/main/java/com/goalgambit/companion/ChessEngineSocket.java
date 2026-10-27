@@ -8,11 +8,16 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Locale;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import io.socket.client.IO;
 import io.socket.client.Socket;
@@ -28,8 +33,15 @@ final class ChessEngineSocket {
     private final StatusListener statusListener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService engineExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService predictionExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "ChessLegalMovePrediction");
+        thread.setPriority(Thread.MIN_PRIORITY);
+        thread.setDaemon(true);
+        return thread;
+    });
     private final NativeChessEngine engine = new NativeChessEngine();
     private final Set<Long> subscribedMatches = Collections.synchronizedSet(new HashSet<>());
+    private final Set<Long> awaitingAuthoritativeResync = Collections.synchronizedSet(new HashSet<>());
     private volatile Socket socket;
     private volatile boolean closed;
 
@@ -91,18 +103,36 @@ final class ChessEngineSocket {
                 long matchId = payload.optLong("matchId", 0);
                 String fen = payload.optString("fen", "");
                 if (matchId <= 0 || fen.isEmpty()) return;
-                engineExecutor.execute(() -> engine.seedSnapshot(
-                    matchId,
-                    fen,
-                    payload.optString("pgn", ""),
-                    payload.optInt("ply", 0),
-                    payload.optLong("whiteTimeMs", 0),
-                    payload.optLong("blackTimeMs", 0),
-                    payload.optString("activeColor", "w"),
-                    payload.optString("timeControl", ""),
-                    SystemClock.elapsedRealtime()
-                ));
-                setStatus("Connected · native chess engine ready for " + matchId);
+                boolean acceptResync = awaitingAuthoritativeResync.remove(matchId);
+                engineExecutor.execute(() -> {
+                    NativeChessEngine.Result result = engine.seedSnapshot(
+                        matchId,
+                        fen,
+                        payload.optString("pgn", ""),
+                        payload.optInt("ply", 0),
+                        payload.optLong("whiteTimeMs", 0),
+                        payload.optLong("blackTimeMs", 0),
+                        payload.optString("activeColor", "w"),
+                        payload.optString("timeControl", ""),
+                        SystemClock.elapsedRealtime(),
+                        acceptResync
+                    );
+                    if (!result.historyComplete || !result.agreesWithExpectedPosition || result.stale) {
+                        awaitingAuthoritativeResync.add(matchId);
+                        emitIntegrityReport(created, matchId, payload.optInt("ply", 0),
+                            "snapshot_mismatch", "snapshot:" + matchId + ":" + payload.optInt("ply", 0),
+                            result.resultingFen, fen);
+                        setStatus("Connected · chess snapshot needs server reconciliation");
+                        return;
+                    }
+                    setStatus(payload.optBoolean("connectionPaused", false)
+                        ? "Game paused by server · both chess clocks stopped"
+                        : "Connected · native chess engine ready for " + matchId);
+                    if (!payload.optBoolean("connectionPaused", false) &&
+                        "active".equalsIgnoreCase(payload.optString("status", ""))) {
+                        schedulePrediction(() -> engine.precomputeCurrentPosition(matchId, fen));
+                    }
+                });
             });
             created.on("chess:engine:move", args -> {
                 JSONObject payload = firstObject(args);
@@ -111,6 +141,27 @@ final class ChessEngineSocket {
             created.on("chess:engine:subscribe_error", args -> {
                 JSONObject payload = firstObject(args);
                 setStatus(payload == null ? "Connected · a match could not be loaded" : payload.optString("message", "A match could not be loaded"));
+            });
+            created.on("chess:engine:integrity_ack", args -> {
+                JSONObject payload = firstObject(args);
+                if (payload == null || !payload.optBoolean("success", false)) return;
+                long matchId = payload.optLong("matchId", 0);
+                if (matchId > 0 && payload.optBoolean("serverConsistent", false)) {
+                    awaitingAuthoritativeResync.add(matchId);
+                    setStatus(payload.optBoolean("connectionPaused", false)
+                        ? "Game paused by server · waiting for safe reconnection"
+                        : "Server position verified · synchronizing companion");
+                }
+            });
+            created.on("chess:engine:match_state", args -> {
+                JSONObject payload = firstObject(args);
+                if (payload == null) return;
+                long matchId = payload.optLong("matchId", 0);
+                if (payload.optBoolean("connectionPaused", false)) {
+                    setStatus("Game paused by server · both chess clocks stopped");
+                } else if (matchId > 0) {
+                    setStatus("Connection restored · synchronizing chess match " + matchId);
+                }
             });
             created.connect();
         } catch (URISyntaxException | RuntimeException error) {
@@ -167,6 +218,9 @@ final class ChessEngineSocket {
             response.put("stalemate", result.stalemate);
             response.put("draw", result.draw);
             response.put("agreesWithExpectedPosition", result.agreesWithExpectedPosition);
+            response.put("predictionCacheHit", result.predictionCacheHit);
+            response.put("positionKey", sha256(result.resultingFen));
+            response.put("positionVersion", ply);
             response.put("legalMoves", new JSONArray(result.legalMoves));
             if (result.error != null) response.put("error", result.error);
             if (result.clockEstimate != null) {
@@ -180,11 +234,72 @@ final class ChessEngineSocket {
 
         if (!closed && active == socket && active.connected()) {
             active.emit("chess:engine:result", response);
-            if (result.stale) {
+            int predictionBudget = predictionBranchBudget(payload.optString("timeControl", ""));
+            if (result.legal && result.historyComplete && result.agreesWithExpectedPosition &&
+                payload.optBoolean("clockIsCurrent", false) && !result.checkmate &&
+                !result.stalemate && !result.draw && predictionBudget > 0) {
+                String confirmedFen = result.resultingFen;
+                schedulePrediction(() -> {
+                    if (!closed) engine.precomputeNextPositions(matchId, confirmedFen, predictionBudget);
+                });
+            }
+            if (result.stale || !result.historyComplete || !result.legal || !result.agreesWithExpectedPosition) {
+                String issue = result.stale ? "stale_state" : !result.historyComplete
+                    ? "history_incomplete" : !result.legal ? "illegal_confirmed_move" : "position_mismatch";
+                emitIntegrityReport(active, matchId, (int) ply, issue,
+                    payload.optString("requestId", ""), result.resultingFen,
+                    payload.optString("expectedFen", ""));
+                awaitingAuthoritativeResync.add(matchId);
                 JSONObject resync = new JSONObject();
                 try { resync.put("matchId", matchId); active.emit("chess:engine:resync", resync); }
                 catch (Exception ignored) {}
             }
+        }
+    }
+
+    private static int predictionBranchBudget(String timeControl) {
+        try {
+            String[] fields = String.valueOf(timeControl).trim().split("[+:/-]", 2);
+            double baseMinutes = Double.parseDouble(fields[0]);
+            if (baseMinutes <= 2) return 0; // Keep bullet CPU focused on verification and notifications.
+            if (baseMinutes <= 5) return 12;
+            return 32;
+        } catch (RuntimeException invalidControl) {
+            return 0;
+        }
+    }
+
+    private void schedulePrediction(Runnable task) {
+        if (closed || task == null) return;
+        try { predictionExecutor.execute(task); }
+        catch (RejectedExecutionException ignored) {}
+    }
+
+    private void emitIntegrityReport(Socket active, long matchId, int ply, String issue,
+                                     String requestId, String reconstructedFen, String expectedFen) {
+        if (active == null || !active.connected() || matchId <= 0) return;
+        JSONObject report = new JSONObject();
+        try {
+            report.put("matchId", matchId);
+            report.put("ply", Math.max(0, ply));
+            report.put("requestId", requestId == null || requestId.isEmpty()
+                ? "snapshot:" + matchId + ":" + Math.max(0, ply) : requestId);
+            report.put("issue", issue == null ? "position_mismatch" : issue);
+            report.put("localPositionDigest", sha256(reconstructedFen));
+            report.put("serverPositionDigest", sha256(expectedFen));
+            active.emit("chess:engine:integrity_report", report);
+        } catch (Exception ignored) {}
+    }
+
+    private static String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(String.valueOf(value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte item : digest) hex.append(String.format(Locale.ROOT, "%02x", item & 0xff));
+            return hex.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            return "";
         }
     }
 
@@ -206,5 +321,6 @@ final class ChessEngineSocket {
             active.close();
         }
         engineExecutor.shutdownNow();
+        predictionExecutor.shutdownNow();
     }
 }

@@ -209,6 +209,11 @@ ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS rating_updated_at TIMESTAMPTZ
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20);
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+-- Persist server-owned connection pauses so a reconnect cannot restart a clock
+-- or accept a move from a stale client snapshot.
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS connection_paused_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS connection_pause_reason VARCHAR(20);
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS connection_lost_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
 UPDATE chess_matches
    SET payout_status='pending_competition'
  WHERE match_type='tournament' AND status='completed' AND stake_amount>0

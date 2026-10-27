@@ -418,6 +418,7 @@ let blackTime =
 
 if (
     match.status !== "active" ||
+    match.connection_paused_at ||
     !match.last_move_at ||
     !match.active_color
 ) {
@@ -881,7 +882,19 @@ return {
         match.started_at,
 
     finishedAt:
-        match.finished_at
+        match.finished_at,
+
+    connectionPaused:
+        Boolean(match.connection_paused_at),
+
+    connectionPausedAt:
+        match.connection_paused_at || null,
+
+    connectionPauseReason:
+        match.connection_pause_reason || null,
+
+    connectionLostUserId:
+        match.connection_lost_user_id == null ? null : Number(match.connection_lost_user_id)
 };
 
 }
@@ -943,6 +956,10 @@ try {
                     ? Number(match.winner_id)
                     : null
         };
+    }
+
+    if (match.connection_paused_at) {
+        throw Object.assign(new Error("This chess match is paused while the server restores a reliable connection."), { status: 409 });
     }
 
     const whiteId =
@@ -1397,6 +1414,7 @@ try {
 module.exports = function (pool, authenticateToken, io, pushService) {
 
     const router = express.Router();
+    let connectionMonitor = null;
     const chessMoveRateLimit = rateLimit({
         windowMs: 10_000,
         max: 30,
@@ -1499,10 +1517,15 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 return null;
             }
             match = locked.rows[0];
+            if (match.status === "active" && connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return null;
+            }
             if (match.status === "settling" && match.result) {
                 result = match.result;
                 winnerId = match.winner_id ? Number(match.winner_id) : null;
-            } else if (match.status === "active") {
+            } else if (match.status === "active" && !match.connection_paused_at) {
                 const times = calculateRemainingTime(match);
                 const sideTime = match.active_color === "w" ? times.whiteTimeMs : times.blackTimeMs;
                 if (sideTime <= 0) {
@@ -1539,6 +1562,163 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         return updated;
     }
 
+    function publishChessConnectionState(match, eventName) {
+        if (!io || !match) return;
+        const matchId = Number(match.id);
+        const payload = {
+            success: true,
+            matchId,
+            connectionPaused: Boolean(match.connection_paused_at),
+            connectionPausedAt: match.connection_paused_at || null,
+            connectionPauseReason: match.connection_pause_reason || null,
+            disconnectedUserId: match.connection_lost_user_id == null ? null : Number(match.connection_lost_user_id)
+        };
+        io.to("chess_match_" + matchId).emit(eventName, payload);
+        const participants = [Number(match.player_white_id), Number(match.player_black_id)]
+            .filter(userId => Number.isSafeInteger(userId) && userId > 0);
+        for (const userId of participants) {
+            io.to("chess_engine_user_" + userId).emit("chess:engine:match_state", payload);
+        }
+    }
+
+    async function pauseChessMatch(matchId, disconnectedUserId, reason, options) {
+        const id = Number(matchId);
+        const userId = disconnectedUserId == null ? null : Number(disconnectedUserId);
+        const pauseReason = reason === "integrity" ? "integrity" : "connection";
+        if (!Number.isSafeInteger(id) || id <= 0) return { paused: false, reason: "invalid_match" };
+        const client = await pool.connect();
+        let inTransaction = false;
+        let changed = false;
+        let match = null;
+        try {
+            await client.query("BEGIN");
+            inTransaction = true;
+            const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [id]);
+            if (!locked.rows.length) {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { paused: false, reason: "missing_match" };
+            }
+            match = locked.rows[0];
+            if (pauseReason === "connection" && ![Number(match.player_white_id), Number(match.player_black_id)].includes(userId)) {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { paused: false, reason: "not_a_player" };
+            }
+            if (match.status !== "active") {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { paused: false, reason: "match_not_active" };
+            }
+            if (match.connection_paused_at) {
+                if (pauseReason === "integrity" && match.connection_pause_reason !== "integrity") {
+                    await client.query("UPDATE chess_matches SET connection_pause_reason='integrity' WHERE id=$1", [id]);
+                    match.connection_pause_reason = "integrity";
+                    changed = true;
+                }
+            } else {
+                const times = options && options.preserveStoredClock
+                    ? { whiteTimeMs: Number(match.white_time_ms), blackTimeMs: Number(match.black_time_ms) }
+                    : calculateRemainingTime(match);
+                await client.query(
+                    `UPDATE chess_matches
+                        SET white_time_ms=$1,black_time_ms=$2,last_move_at=NULL,
+                            connection_paused_at=NOW(),connection_pause_reason=$3,
+                            connection_lost_user_id=$4
+                      WHERE id=$5 AND status='active' AND connection_paused_at IS NULL`,
+                    [times.whiteTimeMs, times.blackTimeMs, pauseReason, userId, id]
+                );
+                match.white_time_ms = times.whiteTimeMs;
+                match.black_time_ms = times.blackTimeMs;
+                match.last_move_at = null;
+                match.connection_pause_reason = pauseReason;
+                match.connection_lost_user_id = userId;
+                match.connection_paused_at = new Date();
+                changed = true;
+            }
+            await client.query("COMMIT");
+            inTransaction = false;
+        } catch (error) {
+            if (inTransaction) await client.query("ROLLBACK").catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+        if (changed) {
+            const current = await getMatch(pool, id);
+            publishChessConnectionState(current, pauseReason === "integrity" ? "chess:integrity_paused" : "chess:paused");
+            return { paused: true, match: current };
+        }
+        return { paused: Boolean(match.connection_paused_at), match: match };
+    }
+
+    async function resumeChessMatch(matchId, connectedUserIds) {
+        const id = Number(matchId);
+        const connected = connectedUserIds instanceof Set
+            ? new Set(Array.from(connectedUserIds).map(Number))
+            : new Set((connectedUserIds || []).map(Number));
+        if (!Number.isSafeInteger(id) || id <= 0) return { resumed: false, reason: "invalid_match" };
+        const client = await pool.connect();
+        let inTransaction = false;
+        let match = null;
+        let resumed = false;
+        let integrityFailure = false;
+        try {
+            await client.query("BEGIN");
+            inTransaction = true;
+            const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [id]);
+            if (!locked.rows.length) {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { resumed: false, reason: "missing_match" };
+            }
+            match = locked.rows[0];
+            if (!match.connection_paused_at || match.status !== "active") {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { resumed: false, reason: "not_paused" };
+            }
+            const players = [Number(match.player_white_id), Number(match.player_black_id)];
+            if (players.some(userId => !Number.isSafeInteger(userId) || userId <= 0 || !connected.has(userId))) {
+                await client.query("COMMIT");
+                inTransaction = false;
+                return { resumed: false, reason: "players_not_reconnected" };
+            }
+            if (!createMatchPosition(match)) {
+                await client.query("UPDATE chess_matches SET connection_pause_reason='integrity' WHERE id=$1", [id]);
+                match.connection_pause_reason = "integrity";
+                integrityFailure = true;
+            } else {
+                await client.query(
+                    `UPDATE chess_matches
+                        SET last_move_at=NOW(),connection_paused_at=NULL,
+                            connection_pause_reason=NULL,connection_lost_user_id=NULL
+                      WHERE id=$1 AND status='active' AND connection_paused_at IS NOT NULL`,
+                    [id]
+                );
+                match.last_move_at = new Date();
+                match.connection_paused_at = null;
+                match.connection_pause_reason = null;
+                match.connection_lost_user_id = null;
+                resumed = true;
+            }
+            await client.query("COMMIT");
+            inTransaction = false;
+        } catch (error) {
+            if (inTransaction) await client.query("ROLLBACK").catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+        const current = await getMatch(pool, id);
+        if (resumed) {
+            publishChessConnectionState(current, "chess:resumed");
+            return { resumed: true, match: current };
+        }
+        if (integrityFailure) publishChessConnectionState(current, "chess:integrity_warning");
+        return { resumed: false, reason: integrityFailure ? "integrity_mismatch" : "not_resumed", match: current };
+    }
+
     // The server owns the clocks even if both players close their browsers.
     // Settling is retried after a transient wallet/DB failure.
     let clockSweepBusy = false;
@@ -1547,7 +1727,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         clockSweepBusy = true;
         try {
             const active = await pool.query(
-                "SELECT id FROM chess_matches WHERE player_black_id IS NOT NULL AND (status='settling' OR (status='active' AND last_move_at IS NOT NULL AND ((active_color='w' AND last_move_at + white_time_ms * INTERVAL '1 millisecond' <= NOW()) OR (active_color='b' AND last_move_at + black_time_ms * INTERVAL '1 millisecond' <= NOW())))) ORDER BY id LIMIT 200"
+                "SELECT id FROM chess_matches WHERE player_black_id IS NOT NULL AND (status='settling' OR (status='active' AND connection_paused_at IS NULL AND last_move_at IS NOT NULL AND ((active_color='w' AND last_move_at + white_time_ms * INTERVAL '1 millisecond' <= NOW()) OR (active_color='b' AND last_move_at + black_time_ms * INTERVAL '1 millisecond' <= NOW())))) ORDER BY id LIMIT 200"
             );
             for (const row of active.rows) {
                 try { await settleExpiredClock(Number(row.id)); }
@@ -1592,7 +1772,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
 
             let shouldCheckClock = match.status === "settling";
-            if (match.status === "active") {
+            if (match.status === "active" && !match.connection_paused_at &&
+                (!connectionMonitor || connectionMonitor.isMatchReady(matchId))) {
                 const times = calculateRemainingTime(match);
                 const sideTime = match.active_color === "w"
                     ? times.whiteTimeMs
@@ -1606,9 +1787,16 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 else match = await getMatch(pool, matchId);
             }
 
+            const connectionReady = !connectionMonitor || match.status !== "active" || Boolean(
+                !match.connection_paused_at && connectionMonitor.isMatchReady(matchId)
+            );
+            const stateMatch = connectionMonitor && !connectionReady && match.status === "active" && !match.connection_paused_at
+                ? { ...match, last_move_at: null, connection_paused_at: new Date(), connection_pause_reason: "connection" }
+                : match;
             res.json({
                 success: true,
-                match: publicMatchState(match, req.user.userId)
+                connectionReady,
+                match: publicMatchState(stateMatch, req.user.userId)
             });
 
         } catch (error) {
@@ -1656,6 +1844,12 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 });
             }
 
+            if (match.connection_paused_at) {
+                return res.status(409).json({ success: false, message: "The server has paused this game while it restores the connection." });
+            }
+            if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+                return res.status(409).json({ success: false, message: "Both players must reconnect to the live match before play can resume." });
+            }
             if (match.status !== "active") {
                 return res.status(400).json({
                     success: false,
@@ -1697,9 +1891,9 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 
             console.error("Resign error:", error.message);
 
-            res.status(500).json({
+            res.status(Number(error.status) || 500).json({
                 success: false,
-                message: "Failed to resign."
+                message: Number(error.status) === 409 ? error.message : "Failed to resign."
             });
 
         }
@@ -2006,7 +2200,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             if (!match) return res.status(404).json({ success: false, message: "Chess match not found." });
             const color = getPlayerColor(match, userId);
             if (!color) return res.status(403).json({ success: false, message: "You are not a player in this match." });
-            if (match.status !== "active" || match.active_color !== color) {
+            if (match.status !== "active" || match.connection_paused_at || match.active_color !== color) {
                 return res.json({ success: true, moves: [], inCheck: false });
             }
             const chess = new Chess(match.fen);
@@ -2075,7 +2269,11 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             const match = locked.rows[0];
             const color = getPlayerColor(match, userId);
             if (!color) return reject(403, "You are not a player in this match.");
+            if (match.connection_paused_at) return reject(409, "The server has paused this game while it restores a reliable connection.", match);
             if (match.status !== "active") return reject(409, "This match is not active.", match);
+            if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+                return reject(409, "Both players must reconnect to the live match before play can resume.", match);
+            }
             if (hasExpectedFen && (expectedFen !== match.fen || expectedPly !== chessPlyFromFen(match.fen))) {
                 return reject(409, "The match position changed. Refresh before moving.", match);
             }
@@ -2103,7 +2301,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             }
 
             const chess = createMatchPosition(match);
-            if (!chess) return reject(409, "Chess match history is inconsistent. Refresh the match before moving.");
+            if (!chess) return reject(409, "Chess match history is inconsistent. Refresh the match before moving.", match);
             let move;
             try {
                 move = chess.move({ from: from, to: to, promotion: requestedPromotion });
@@ -2167,8 +2365,60 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             client.release();
         }
     });
-    router.post("/:id/draw", authenticateToken, async function(req,res){const matchId=Number(req.params.id),uid=Number(req.user.userId);const m=await getMatch(pool,matchId);if(!m)return res.status(404).json({success:false,message:"Chess match not found."});if(!getPlayerColor(m,uid))return res.status(403).json({success:false,message:"You are not a player in this match."});if(m.status!=="active")return res.status(400).json({success:false,message:"Match is not active."});await pool.query(`UPDATE chess_matches SET draw_offer_user_id=$1 WHERE id=$2`,[uid,matchId]);if(io)io.to("chess_match_"+matchId).emit("chess:draw_offer",{success:true,matchId,userId:uid});res.json({success:true,message:"Draw offer sent."});});
-    router.post("/:id/draw/respond", authenticateToken, async function(req,res){const matchId=Number(req.params.id),uid=Number(req.user.userId),accept=Boolean(req.body&&req.body.accept);const m=await getMatch(pool,matchId);if(!m)return res.status(404).json({success:false,message:"Chess match not found."});if(!getPlayerColor(m,uid))return res.status(403).json({success:false,message:"You are not a player in this match."});if(Number(m.draw_offer_user_id)===uid)return res.status(400).json({success:false,message:"You cannot accept your own draw offer."});if(!m.draw_offer_user_id)return res.status(400).json({success:false,message:"No draw offer is pending."});if(!accept){await pool.query(`UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1`,[matchId]);if(io)io.to("chess_match_"+matchId).emit("chess:draw_declined",{success:true,matchId});return res.json({success:true,message:"Draw declined."});}const settled=await settleMatch(pool,matchId,"draw",null);queueChessFinishedNotifications(matchId,m,settled.result);const updated=await getMatch(pool,matchId);if(io)io.to("chess_match_"+matchId).emit("chess:game_over",{success:true,matchId,result:settled.result,winnerId:null,reason:"agreed_draw"});res.json({success:true,match:publicMatchState(updated,uid)});});
+    router.post("/:id/draw", authenticateToken, async function(req, res) {
+        const matchId = Number(req.params.id), userId = Number(req.user.userId);
+        const match = await getMatch(pool, matchId);
+        if (!match) return res.status(404).json({ success: false, message: "Chess match not found." });
+        if (!getPlayerColor(match, userId)) return res.status(403).json({ success: false, message: "You are not a player in this match." });
+        if (match.status !== "active" || match.connection_paused_at) {
+            return res.status(409).json({ success: false, message: "This match is paused or inactive." });
+        }
+        if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+            return res.status(409).json({ success: false, message: "Both players must reconnect to the live match before play can resume." });
+        }
+        const changed = await pool.query(
+            "UPDATE chess_matches SET draw_offer_user_id=$1 WHERE id=$2 AND connection_paused_at IS NULL AND status='active' RETURNING id",
+            [userId, matchId]
+        );
+        if (!changed.rows.length) return res.status(409).json({ success: false, message: "The match paused before the draw offer could be sent." });
+        if (io) io.to("chess_match_" + matchId).emit("chess:draw_offer", { success: true, matchId, userId });
+        return res.json({ success: true, message: "Draw offer sent." });
+    });
+
+    router.post("/:id/draw/respond", authenticateToken, async function(req, res) {
+        const matchId = Number(req.params.id), userId = Number(req.user.userId);
+        const accept = Boolean(req.body && req.body.accept);
+        const match = await getMatch(pool, matchId);
+        if (!match) return res.status(404).json({ success: false, message: "Chess match not found." });
+        if (!getPlayerColor(match, userId)) return res.status(403).json({ success: false, message: "You are not a player in this match." });
+        if (match.connection_paused_at) return res.status(409).json({ success: false, message: "The server has paused this game while it restores a reliable connection." });
+        if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+            return res.status(409).json({ success: false, message: "Both players must reconnect to the live match before play can resume." });
+        }
+        if (Number(match.draw_offer_user_id) === userId) return res.status(400).json({ success: false, message: "You cannot accept your own draw offer." });
+        if (!match.draw_offer_user_id) return res.status(400).json({ success: false, message: "No draw offer is pending." });
+        if (!accept) {
+            await pool.query("UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1 AND connection_paused_at IS NULL", [matchId]);
+            if (io) io.to("chess_match_" + matchId).emit("chess:draw_declined", { success: true, matchId });
+            return res.json({ success: true, message: "Draw declined." });
+        }
+        const settled = await settleMatch(pool, matchId, "draw", null);
+        queueChessFinishedNotifications(matchId, match, settled.result);
+        const updated = await getMatch(pool, matchId);
+        if (io) io.to("chess_match_" + matchId).emit("chess:game_over", { success: true, matchId, result: settled.result, winnerId: null, reason: "agreed_draw" });
+        return res.json({ success: true, match: publicMatchState(updated, userId) });
+    });
+
+    router.pauseForConnectionLoss = function(matchId, userId, options) {
+        return pauseChessMatch(matchId, userId, "connection", options);
+    };
+    router.pauseForIntegrity = function(matchId) {
+        return pauseChessMatch(matchId, null, "integrity");
+    };
+    router.resumeAfterConnection = resumeChessMatch;
+    router.setConnectionMonitor = function(monitor) {
+        connectionMonitor = monitor && typeof monitor.isMatchReady === "function" ? monitor : null;
+    };
 
     return router;
 

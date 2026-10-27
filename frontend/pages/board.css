@@ -866,6 +866,8 @@ body {
 .white-piece { color: #fff; text-shadow: 1px 1px 2px #111, -1px -1px 1px #111; }
 .black-piece { color: #181818; text-shadow: 1px 1px 1px #f4e2c5, -1px -1px 1px #f4e2c5; }
 .square.possible-capture { box-shadow: inset 0 0 0 5px #b32626aa; }
+.square.premove-destination { box-shadow: inset 0 0 0 999px #d32f2f55; }
+.square.premove-selected { box-shadow: inset 0 0 0 4px #e14d4d, inset 0 0 0 999px #d32f2f33; }
 .square.illegal-move { background: #d9534f !important; animation: illegalMoveFlash .18s ease-in-out 2 alternate; }
 .square.in-check { background: #db625c !important; box-shadow: inset 0 0 0 4px #8e1e1a; }
 .square.last-move { box-shadow: inset 0 0 0 999px #f4bd2033; }

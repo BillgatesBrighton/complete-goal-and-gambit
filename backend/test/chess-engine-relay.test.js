@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("crypto");
 const createChessEngineRelay = require("../services/chessEngineRelay");
 const { Chess } = require("chess.js");
 
@@ -117,6 +118,11 @@ test("authenticated native engine receives a server-confirmed move and returns a
         matchId: 501,
         ply: 1,
         legal: true,
+        stale: false,
+        historyComplete: true,
+        agreesWithExpectedPosition: true,
+        legalMoves: new Chess(AFTER_E4).moves({ verbose: true }).map(move => move.from + move.to + (move.promotion || "")),
+        predictionCacheHit: true,
         resultingFen: AFTER_E4,
         check: false,
         checkmate: false,
@@ -126,6 +132,105 @@ test("authenticated native engine receives a server-confirmed move and returns a
     const response = browser.latest("chess:engine:result").payload;
     assert.equal(response.agreesWithServer, true);
     assert.equal(response.source, "android-native-chess-engine");
+    assert.equal(response.legalMovesVerified, true);
+    assert.equal(response.predictionCacheHit, true);
+    assert.equal(response.positionVersion, 1);
+    assert.equal(response.positionKey, crypto.createHash("sha256").update(AFTER_E4).digest("hex"));
+    assert.deepEqual(response.legalMoves,
+        new Chess(AFTER_E4).moves({ verbose: true }).map(move => move.from + move.to + (move.promotion || "")));
+});
+
+test("verified prediction hits are delivered only to the authenticated match room with exact position identity", async () => {
+    const match = e4Match();
+    const played = new Chess();
+    played.move({ from: "e2", to: "e4" });
+    played.move({ from: "e7", to: "e5" });
+    match.fen = played.fen();
+    match.pgn = played.pgn();
+    match.active_color = played.turn();
+    const io = fakeIo();
+    const relay = createChessEngineRelay(mockPool(match), io);
+    const moverBrowser = io.socket("browser-black", 20);
+    const receiverBrowser = io.socket("browser-white", 10);
+    const unrelatedBrowser = io.socket("browser-other-match", 77);
+    moverBrowser.join("chess_match_501");
+    receiverBrowser.join("chess_match_501");
+    unrelatedBrowser.join("chess_match_999");
+    const companion = io.socket("native-black", 20);
+    relay.attachSocket(moverBrowser);
+    relay.attachSocket(companion);
+    await companion.trigger("chess:engine:ready");
+    await companion.trigger("chess:engine:subscribe", { matchId: 501 });
+
+    await moverBrowser.trigger("chess:engine:move", {
+        requestId: "gg-501-2-1000-black",
+        matchId: 501,
+        ply: 2,
+        fenBefore: AFTER_E4,
+        expectedFen: played.fen(),
+        move: { from: "e7", to: "e5", promotion: null }
+    });
+    await moverBrowser.chessEngineRelayQueue;
+    const relayed = companion.latest("chess:engine:move").payload;
+    await companion.trigger("chess:engine:result", {
+        requestId: relayed.requestId,
+        matchId: 501,
+        ply: 2,
+        legal: true,
+        stale: false,
+        historyComplete: true,
+        agreesWithExpectedPosition: true,
+        resultingFen: played.fen(),
+        legalMoves: played.moves({ verbose: true }).map(move => move.from + move.to + (move.promotion || "")),
+        predictionCacheHit: true
+    });
+
+    const prediction = receiverBrowser.latest("chess:engine:prediction").payload;
+    assert.equal(prediction.fen, played.fen());
+    assert.equal(prediction.positionVersion, 2);
+    assert.equal(prediction.positionKey, crypto.createHash("sha256").update(played.fen()).digest("hex"));
+    assert.equal(prediction.legalMovesVerified, true);
+    assert.equal(prediction.predictionCacheHit, true);
+    assert.equal(unrelatedBrowser.latest("chess:engine:prediction"), undefined);
+});
+
+test("authenticated companion integrity reports are checked against server history and trigger safe reconciliation", async () => {
+    const match = e4Match();
+    const io = fakeIo();
+    const pauses = [];
+    const relay = createChessEngineRelay(mockPool(match), io, {
+        pauseForIntegrity: async matchId => pauses.push(matchId)
+    });
+    const app = io.socket("native-1", 10);
+    relay.attachSocket(app);
+    await app.trigger("chess:engine:ready");
+    await app.trigger("chess:engine:subscribe", { matchId: 501 });
+    const digest = value => crypto.createHash("sha256").update(value).digest("hex");
+    await app.trigger("chess:engine:integrity_report", {
+        matchId: 501, ply: 1, requestId: "snapshot-501-1", issue: "snapshot_mismatch",
+        localPositionDigest: digest(START), serverPositionDigest: digest(AFTER_E4)
+    });
+    const ack = app.latest("chess:engine:integrity_ack").payload;
+    assert.equal(ack.success, true);
+    assert.equal(ack.serverConsistent, true);
+    assert.equal(pauses.length, 0, "a client mismatch must not pause a server-consistent game");
+    assert.equal(app.latest("chess:engine:snapshot").payload.fen, AFTER_E4,
+        "the server sends its PGN-verified snapshot back for reconciliation");
+
+    const corrupt = { ...match, fen: START, active_color: "w" };
+    const corruptRelay = createChessEngineRelay(mockPool(corrupt), io, {
+        pauseForIntegrity: async matchId => pauses.push(matchId)
+    });
+    const secondApp = io.socket("native-2", 20);
+    corruptRelay.attachSocket(secondApp);
+    await secondApp.trigger("chess:engine:ready");
+    await secondApp.trigger("chess:engine:subscribe", { matchId: 501 });
+    await secondApp.trigger("chess:engine:integrity_report", {
+        matchId: 501, ply: 1, requestId: "snapshot-corrupt-501", issue: "position_mismatch",
+        localPositionDigest: digest(START), serverPositionDigest: digest(AFTER_E4)
+    });
+    assert.deepEqual(pauses, [501], "only a server-side PGN/FEN inconsistency requests an official pause");
+    assert.equal(secondApp.latest("chess:engine:integrity_ack").payload.serverConsistent, false);
 });
 
 test("relay rejects an account that is not the mover and never broadcasts private engine data", async () => {

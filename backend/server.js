@@ -31,6 +31,7 @@ const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
 const createChessScheduleReminders = require("./services/chessScheduleReminders");
 const createChessEngineRelay = require("./services/chessEngineRelay");
+const createChessConnectionMonitor = require("./services/chessConnectionMonitor");
 const { beginChessJoinAttempt, isCurrentChessJoinAttempt, hasValidChessMatchSeats, joinChessMatchRoom } = require("./services/chessSocketRooms");
 const createAdminAnnouncementReminders = require("./services/adminAnnouncementReminders");
 const createEfootballScheduler = require("./services/efootballScheduler");
@@ -313,13 +314,29 @@ const io = new Server(
 
             credentials: true
 
-        }
+        },
+        // Socket.IO ping/pong is the server's transport-health signal. A
+        // heartbeat timeout detects an unresponsive peer. The match monitor
+        // pauses when that user's last authenticated match socket disconnects.
+        pingInterval: 15000,
+        pingTimeout: 20000
 
     }
 
 );
 
-const chessEngineRelay = createChessEngineRelay(pool, io);
+const chessApiRouter = chessRoutes(pool, authenticateToken, io, pushService);
+const chessEngineRelay = createChessEngineRelay(pool, io, {
+    pauseForIntegrity: chessApiRouter.pauseForIntegrity
+});
+const chessConnectionMonitor = createChessConnectionMonitor({
+    pauseMatch: chessApiRouter.pauseForConnectionLoss,
+    resumeMatch: chessApiRouter.resumeAfterConnection,
+    onError: function(error, matchId, operation) {
+        console.error("Chess connection " + operation + " transition failed for match " + matchId + ":", error.message);
+    }
+});
+chessApiRouter.setConnectionMonitor(chessConnectionMonitor);
 
 const onlineUserSockets = new Map();
 const efootballScheduler = createEfootballScheduler(pool, pushService, io);
@@ -444,6 +461,7 @@ io.on(
         socket.on(
             "chess:join",
             async function(data) {
+                chessConnectionMonitor.leaveSocket(socket);
                 const joinGeneration = beginChessJoinAttempt(socket);
 
                 try {
@@ -483,6 +501,7 @@ io.on(
                                 player_white_id,
                                 player_black_id,
                                 status,
+                                connection_paused_at,
                                 result,
                                 time_control,
                                 match_type,
@@ -565,6 +584,27 @@ io.on(
                     }
 
                     const room = joinChessMatchRoom(socket, matchId);
+                    await chessConnectionMonitor.joinMatch(socket, {
+                        matchId,
+                        playerWhiteId: whiteId,
+                        playerBlackId: blackId,
+                        status: match.status,
+                        connectionPausedAt: match.connection_paused_at
+                    });
+                    // Socket membership alone is insufficient: a failed DB
+                    // resume must keep both clients locked until the stored
+                    // match state confirms the clock has safely resumed.
+                    const liveState = await pool.query(
+                        "SELECT status, connection_paused_at, result FROM chess_matches WHERE id=$1",
+                        [matchId]
+                    );
+                    if (!isCurrentChessJoinAttempt(socket, joinGeneration)) return;
+                    const currentMatch = liveState.rows[0] || match;
+                    const connectionReady = chessConnectionMonitor.isMatchReady(matchId) &&
+                        (currentMatch.status !== "active" || !currentMatch.connection_paused_at);
+                    if (connectionReady) {
+                        io.to(room).emit("chess:connection_ready", { success: true, matchId });
+                    }
 
                     console.log(
                         "Player joined chess match:",
@@ -585,11 +625,13 @@ io.on(
 
                             room,
 
+                            connectionReady,
+
                             status:
-                                match.status,
+                                currentMatch.status,
 
                             result:
-                                match.result,
+                                currentMatch.result,
 
                             timeControl:
                                 match.time_control,
@@ -737,6 +779,7 @@ io.on(
                 );
 
                 const presenceUserId = Number(socket.user && socket.user.userId);
+                chessConnectionMonitor.leaveSocket(socket);
                 const connections = onlineUserSockets.get(presenceUserId);
                 if (connections) {
                     connections.delete(socket.id);
@@ -744,33 +787,6 @@ io.on(
                         onlineUserSockets.delete(presenceUserId);
                         broadcastOnlineUsers();
                     }
-                }
-
-                if (
-                    socket.currentChessMatchId &&
-                    socket.currentChessRoom
-                ) {
-
-                    socket.to(
-                        socket.currentChessRoom
-                    ).emit(
-                        "chess:player_disconnected",
-                        {
-
-                            success: true,
-
-                            userId:
-                                socket.user.userId,
-
-                            username:
-                                socket.user.username,
-
-                            matchId:
-                                socket.currentChessMatchId
-
-                        }
-                    );
-
                 }
 
             }
@@ -836,12 +852,7 @@ app.use(
     "/api/chess",
     authenticateToken,
     gameAccess(pool, "chess"),
-    chessRoutes(
-        pool,
-        authenticateToken,
-        io,
-        pushService
-    )
+    chessApiRouter
 );
 
 app.use(
@@ -1272,6 +1283,7 @@ async function shutdown(signal) {
 
     pushService.stop();
     efootballScheduler.stop();
+    chessConnectionMonitor.stop();
 
     console.log(
         `\n${signal} received. Shutting down GOAL$GAMBIT...`

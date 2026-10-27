@@ -1,6 +1,7 @@
 "use strict";
 
 const { Chess } = require("chess.js");
+const crypto = require("crypto");
 
 const MAX_PENDING = 1024;
 const PENDING_TTL_MS = 15000;
@@ -9,7 +10,7 @@ function makeEngineRoom(userId, matchId) {
     return "chess_engine_" + Number(userId) + "_" + Number(matchId);
 }
 
-function getPositionAtPly(pgn, ply) {
+function getPositionAtPly(pgn, ply, includeLegalMoves) {
     try {
         const played = new Chess();
         if (pgn) played.loadPgn(String(pgn));
@@ -21,14 +22,23 @@ function getPositionAtPly(pgn, ply) {
             const move = history[index];
             if (!position.move({ from: move.from, to: move.to, promotion: move.promotion })) return null;
         }
-        return { fen: position.fen(), pgn: ply ? position.pgn() : "", history: history };
+        return {
+            fen: position.fen(),
+            pgn: ply ? position.pgn() : "",
+            history: history,
+            legalMoves: includeLegalMoves ? position.moves({ verbose: true }).map(move =>
+                move.from + move.to + (move.promotion || "")) : undefined
+        };
     } catch (_) {
         return null;
     }
 }
 
-function createChessEngineRelay(pool, io) {
+function createChessEngineRelay(pool, io, options) {
     const pending = new Map();
+    const settings = options || {};
+    const pauseForIntegrity = settings.pauseForIntegrity;
+    const lastIntegrityReportAt = new Map();
 
     function prunePending() {
         const now = Date.now();
@@ -42,7 +52,7 @@ function createChessEngineRelay(pool, io) {
         const result = await pool.query(
             `SELECT id, player_white_id, player_black_id, status, result, fen, pgn,
                     active_color, white_time_ms, black_time_ms, time_control,
-                    last_move_at,
+                    last_move_at, connection_paused_at, connection_pause_reason,
                     GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - last_move_at)) * 1000)) AS elapsed_since_move_ms
                FROM chess_matches WHERE id = $1`,
             [matchId]
@@ -60,6 +70,8 @@ function createChessEngineRelay(pool, io) {
         return {
             matchId: Number(match.id),
             status: match.status,
+            connectionPaused: Boolean(match.connection_paused_at),
+            connectionPauseReason: match.connection_pause_reason || null,
             fen: match.fen,
             pgn: match.pgn || "",
             ply: Number.isInteger(ply) && ply >= 0 ? ply : 0,
@@ -75,7 +87,7 @@ function createChessEngineRelay(pool, io) {
         const result = await pool.query(
             `SELECT id, player_white_id, player_black_id, status, result, fen, pgn,
                     active_color, white_time_ms, black_time_ms, time_control,
-                    last_move_at,
+                    last_move_at, connection_paused_at, connection_pause_reason,
                     GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - last_move_at)) * 1000)) AS elapsed_since_move_ms
                FROM chess_matches
               WHERE (player_white_id = $1 OR player_black_id = $1)
@@ -175,6 +187,16 @@ function createChessEngineRelay(pool, io) {
             } catch (_) {}
         });
 
+        socket.on("chess:engine:integrity_report", async function (data) {
+            await receiveIntegrityReport(socket, userId, data).catch(function () {
+                socket.emit("chess:engine:integrity_ack", {
+                    success: false,
+                    matchId: Number(data && data.matchId) || 0,
+                    message: "The server could not verify the companion integrity report."
+                });
+            });
+        });
+
         socket.on("disconnect", function () {
             for (const [requestId, item] of pending) {
                 if (item.browserSocketId === socket.id) pending.delete(requestId);
@@ -207,7 +229,7 @@ function createChessEngineRelay(pool, io) {
         if (pending.has(requestId)) return;
 
         const match = await readMatch(matchId);
-        if (!match || !["active", "completed", "settling"].includes(match.status)) {
+        if (!match || match.connection_paused_at || !["active", "completed", "settling"].includes(match.status)) {
             socket.emit("chess:engine:result", { requestId: requestId, matchId: matchId, available: false, stale: true });
             return;
         }
@@ -239,7 +261,7 @@ function createChessEngineRelay(pool, io) {
             expiresAt: Date.now() + PENDING_TTL_MS
         });
 
-        const clockIsCurrent = match.fen === after.fen && match.status === "active";
+        const clockIsCurrent = match.fen === after.fen && match.status === "active" && !match.connection_paused_at;
         const engineRequest = {
             requestId: requestId,
             matchId: matchId,
@@ -284,14 +306,27 @@ function createChessEngineRelay(pool, io) {
             pending.delete(requestId);
             return;
         }
-        const authoritativeAtPly = getPositionAtPly(match.pgn || "", item.ply);
+        const authoritativeAtPly = getPositionAtPly(match.pgn || "", item.ply, true);
         if (!authoritativeAtPly || authoritativeAtPly.fen !== item.expectedFen) {
             pending.delete(requestId);
+            await reportStoredIntegrityFailure(match);
             return;
         }
 
         pending.delete(requestId);
         const resultingFen = typeof data.resultingFen === "string" ? data.resultingFen : "";
+        const reportedLegalMoves = Array.isArray(data.legalMoves) && data.legalMoves.length <= 256
+            ? data.legalMoves.map(move => String(move || "").toLowerCase())
+            : null;
+        const authoritativeLegalMoves = authoritativeAtPly.legalMoves || [];
+        const legalMovesVerified = Boolean(data.legal === true && data.stale !== true &&
+            data.historyComplete === true && data.agreesWithExpectedPosition === true &&
+            resultingFen === item.expectedFen && reportedLegalMoves &&
+            reportedLegalMoves.every(move => /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)) &&
+            new Set(reportedLegalMoves).size === reportedLegalMoves.length &&
+            JSON.stringify(reportedLegalMoves.slice().sort()) === JSON.stringify(authoritativeLegalMoves.slice().sort()));
+        const predictionIsCurrent = legalMovesVerified && match.fen === item.expectedFen &&
+            match.status === "active" && !match.connection_paused_at;
         const response = {
             requestId: requestId,
             matchId: item.matchId,
@@ -305,11 +340,109 @@ function createChessEngineRelay(pool, io) {
             stalemate: data.stalemate === true,
             draw: data.draw === true,
             historyComplete: data.historyComplete === true,
+            legalMovesVerified: legalMovesVerified,
+            legalMoves: legalMovesVerified ? authoritativeLegalMoves : [],
+            positionKey: crypto.createHash("sha256").update(item.expectedFen).digest("hex"),
+            positionVersion: item.ply,
+            predictionCacheHit: predictionIsCurrent && data.predictionCacheHit === true,
             clockEstimate: data.clockEstimate && typeof data.clockEstimate === "object" ? data.clockEstimate : null,
-            agreesWithServer: data.legal === true && resultingFen === item.expectedFen,
+            agreesWithServer: data.legal === true && data.stale !== true && data.historyComplete === true &&
+                data.agreesWithExpectedPosition === true && resultingFen === item.expectedFen,
             source: "android-native-chess-engine"
         };
+        if (!verifyStoredMatchState(match)) await reportStoredIntegrityFailure(match);
         io.to(item.browserSocketId).emit("chess:engine:result", response);
+        if (response.predictionCacheHit) {
+            io.to("chess_match_" + item.matchId).emit("chess:engine:prediction", {
+                matchId: item.matchId,
+                fen: item.expectedFen,
+                positionKey: response.positionKey,
+                positionVersion: item.ply,
+                legalMoves: authoritativeLegalMoves,
+                legalMovesVerified: true,
+                predictionCacheHit: true,
+                source: "android-native-chess-engine"
+            });
+        }
+    }
+
+    function plyFromFen(fen) {
+        const fields = String(fen || "").trim().split(/\s+/);
+        const fullMove = Number(fields[5]);
+        if (fields.length !== 6 || !Number.isSafeInteger(fullMove) || fullMove < 1 || !["w", "b"].includes(fields[1])) return null;
+        return (fullMove - 1) * 2 + (fields[1] === "b" ? 1 : 0);
+    }
+
+    function verifyStoredMatchState(match) {
+        const ply = plyFromFen(match && match.fen);
+        const position = Number.isInteger(ply) ? getPositionAtPly(match.pgn || "", ply) : null;
+        return Boolean(position && position.history.length === ply &&
+            position.fen === match.fen && match.active_color === match.fen.split(/\s+/)[1]);
+    }
+
+    async function reportStoredIntegrityFailure(match) {
+        if (!match || !verifyStoredMatchState(match)) {
+            if (match && match.status === "active" && typeof pauseForIntegrity === "function") {
+                await pauseForIntegrity(Number(match.id));
+            }
+            return false;
+        }
+        return true;
+    }
+
+    async function receiveIntegrityReport(socket, userId, data) {
+        const matchId = Number(data && data.matchId);
+        const ply = Number(data && data.ply);
+        const requestId = String(data && data.requestId || "");
+        const issue = String(data && data.issue || "");
+        const localDigest = String(data && data.localPositionDigest || "").toLowerCase();
+        const serverDigest = String(data && data.serverPositionDigest || "").toLowerCase();
+        if (!socket.chessEngineReady || !socket.chessEngineMatches.has(matchId) ||
+            !Number.isSafeInteger(matchId) || matchId <= 0 || !Number.isSafeInteger(ply) || ply < 0 ||
+            !/^[A-Za-z0-9:_-]{1,160}$/.test(requestId) || !/^[a-z_]{3,48}$/.test(issue) ||
+            !/^[a-f0-9]{64}$/.test(localDigest) || !/^[a-f0-9]{64}$/.test(serverDigest)) return;
+
+        const reportKey = Number(userId) + ":" + matchId;
+        const now = Date.now();
+        const lastAt = lastIntegrityReportAt.get(reportKey) || 0;
+        if (now - lastAt < 2000) return;
+        lastIntegrityReportAt.set(reportKey, now);
+        if (lastIntegrityReportAt.size > 512) {
+            for (const [key, timestamp] of lastIntegrityReportAt) if (now - timestamp > 60000) lastIntegrityReportAt.delete(key);
+        }
+
+        const match = await readMatch(matchId);
+        const players = match && [Number(match.player_white_id), Number(match.player_black_id)];
+        if (!match || !players.includes(Number(userId))) return;
+        const reportedPosition = getPositionAtPly(match.pgn || "", ply);
+        const actualDigest = reportedPosition
+            ? crypto.createHash("sha256").update(reportedPosition.fen).digest("hex")
+            : "";
+        const serverConsistent = verifyStoredMatchState(match);
+
+        console.warn("Chess companion integrity report:", JSON.stringify({
+            matchId,
+            userId: Number(userId),
+            ply,
+            issue,
+            serverConsistent,
+            reportDigestMatchesServer: Boolean(actualDigest && actualDigest === serverDigest),
+            localAndServerDigestsDiffer: localDigest !== serverDigest
+        }));
+
+        if (!serverConsistent) await reportStoredIntegrityFailure(match);
+        const current = await readMatch(matchId);
+        socket.emit("chess:engine:integrity_ack", {
+            success: true,
+            matchId,
+            ply: plyFromFen(current && current.fen),
+            serverConsistent,
+            connectionPaused: Boolean(current && current.connection_paused_at),
+            message: serverConsistent
+                ? "The server position is authoritative; a verified snapshot was sent to the companion."
+                : "The server paused this match because its stored move history could not be verified."
+        });
+        if (serverConsistent && current) socket.emit("chess:engine:snapshot", snapshot(current));
     }
 
     return { attachSocket: attachSocket };

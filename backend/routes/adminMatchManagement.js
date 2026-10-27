@@ -44,12 +44,13 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
 
     function isActive(row) {
         const statuses = row.game === "chess" ? CHESS_ACTIVE : KONAMI_ACTIVE;
-        return statuses.has(String(row.status)) && !row.settled_at;
+        return statuses.has(String(row.status)) && !row.settled_at &&
+            !(row.game === "chess" && row.connection_paused);
     }
 
     function canEditScore(row) {
         if (row.game === "chess") {
-            return row.status === "active" && row.opponent_id != null && !row.settled_at;
+            return row.status === "active" && row.opponent_id != null && !row.settled_at && !row.connection_paused;
         }
         return row.game === "konami" &&
             ["playing", "awaiting_verification", "disputed"].includes(String(row.status)) &&
@@ -83,7 +84,8 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
                             m.player_white_id AS creator_id,m.player_black_id AS opponent_id,
                             white.username AS creator_username,black.username AS opponent_username,
                             m.winner_id,m.stake_amount,m.time_control,m.created_at,m.started_at,m.finished_at,
-                            m.settled_at,m.admin_cleared_at,cleared.username AS cleared_by_username,
+                            m.settled_at,m.admin_cleared_at,(m.connection_paused_at IS NOT NULL) AS connection_paused,
+                            m.connection_pause_reason,cleared.username AS cleared_by_username,
                             NULL::integer AS creator_score,NULL::integer AS opponent_score,
                             NULL::text AS mode,NULL::text AS league,NULL::bigint AS tournament_id
                        FROM chess_matches m
@@ -205,6 +207,9 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
             const match = found.rows[0];
             if (match.settled_at || !(game === "chess" ? CHESS_ACTIVE : KONAMI_ACTIVE).has(String(match.status))) {
                 throw Object.assign(new Error("Only an unsettled, active match can be cancelled here."), { status: 409 });
+            }
+            if (game === "chess" && match.connection_paused_at) {
+                throw Object.assign(new Error("This Chess match is paused while the server restores the connection; cancellation and refunds are blocked."), { status: 409 });
             }
             if (game === "chess" && match.match_type === "tournament") {
                 throw Object.assign(new Error("Chess tournament stakes are managed by the competition settlement."), { status: 409 });
@@ -395,11 +400,14 @@ module.exports = function createAdminMatchManagementRoutes(pool, authenticateTok
         if (reason.length < 10) return res.status(400).json({ success: false, message: "Enter an admin reason of at least 10 characters." });
         try {
             const found = await pool.query(
-                "SELECT player_white_id,player_black_id,status,settled_at FROM chess_matches WHERE id=$1",
+                "SELECT player_white_id,player_black_id,status,settled_at,connection_paused_at FROM chess_matches WHERE id=$1",
                 [matchId]
             );
             if (!found.rows.length) return res.status(404).json({ success: false, message: "Chess match not found." });
             const match = found.rows[0];
+            if (match.connection_paused_at) {
+                return res.status(409).json({ success: false, message: "This Chess match is paused while the server restores the connection; its result cannot be changed." });
+            }
             if (match.status !== "active" || match.settled_at || match.player_black_id == null) {
                 return res.status(409).json({ success: false, message: "Only an unsettled Chess game with both players can receive an administrator result." });
             }

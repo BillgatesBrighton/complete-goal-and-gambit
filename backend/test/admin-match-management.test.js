@@ -40,7 +40,7 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
             if (/SELECT id,username,role FROM users WHERE id=\$1/i.test(String(sql))) {
                 return { rows: [{ id: Number(params[0]), username: Number(params[0]) === 1 ? "admin" : "player", role: Number(params[0]) === 1 ? "admin" : "user" }] };
             }
-            if (String(sql).includes("SELECT player_white_id,player_black_id,status,settled_at FROM chess_matches")) return { rows: [{ player_white_id: 21, player_black_id: 22, status: chessMatch.status, settled_at: chessMatch.settled_at }] };
+        if (String(sql).includes("SELECT player_white_id,player_black_id,status,settled_at,connection_paused_at FROM chess_matches")) return { rows: [{ player_white_id: 21, player_black_id: 22, status: chessMatch.status, settled_at: chessMatch.settled_at, connection_paused_at: chessMatch.connection_paused_at || null }] };
             if (String(sql).includes("FROM efootball_matches m")) return { rows: [konamiListRow] };
             if (String(sql).includes("FROM chess_matches m")) return { rows: [chessListRow] };
             throw new Error("Unexpected pool query: " + String(sql).slice(0, 120));
