@@ -972,6 +972,7 @@ function markOfflineConflict(id,message,serverMatch){
 function applyState(m){
   if(!m)return;
   if(m.matchId&&Number(m.matchId)!==Number(matchId))return;
+  const previousPlayerColor=playerColor;
   if(state&&state.fen!==m.fen){selectedSquare=null;legalTargets=[];clearIllegalFeedback();cancelPromotion();clearDragVisual();dragState=null}
   stateVersion++;
   state=m; playerColor=m.playerColor||playerColor;
@@ -985,7 +986,7 @@ function applyState(m){
     queuedPremove=null;
     if(cancelPremoveButton){cancelPremoveButton.hidden=true;cancelPremoveButton.classList.add("hidden")}
   }
-  if(!orientationSet&&m.playerColor){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=monotonicNow();
+  if(m.playerColor&&(!orientationSet||previousPlayerColor!==m.playerColor)){boardFlipped=m.playerColor==="b";orientationSet=true} localWhiteMs=Number(m.whiteTimeMs||0);localBlackMs=Number(m.blackTimeMs||0);localClockAt=monotonicNow();
   const check=m.checkSquare?" · CHECK":"";
   const pausedMessage=m.connectionPaused
     ?(m.connectionPauseReason==="integrity"?"Game paused by the server while it verifies the official position.":"Connection interrupted. The server has paused this game for both players while it restores the connection.")
