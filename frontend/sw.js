@@ -4,7 +4,7 @@
 // backend/site outage. This cache is limited to static chess resources; API
 // responses and Socket.IO traffic are never cached. The push handlers below
 // remain unchanged.
-const CHESS_SHELL_CACHE = "goal-gambit-chess-shell-v2";
+const CHESS_SHELL_CACHE = "goal-gambit-chess-shell-v3";
 const CHESS_SHELL_ASSETS = [
     "pages/chess-match.html",
     "pages/board.html",
@@ -30,9 +30,10 @@ function chessShellPath(url) {
 self.addEventListener("install", function(event) {
     event.waitUntil(caches.open(CHESS_SHELL_CACHE).then(function(cache) {
         return cache.addAll(CHESS_SHELL_ASSETS.map(function(path) {
+            if (path === "js/board.js") path += "?v=20261027-player-name-sync";
             return new URL(path, self.registration.scope).href;
         }));
-    }));
+    }).then(function() { return self.skipWaiting(); }));
 });
 
 self.addEventListener("activate", function(event) {

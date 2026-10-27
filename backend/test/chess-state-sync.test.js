@@ -250,6 +250,8 @@ test("public match state binds identities and assigned colors to the server seat
     const black = chessRoutes.publicMatchState(match, 42);
     assert.equal(white.playerColor, "w");
     assert.equal(black.playerColor, "b");
+    assert.equal(white.opponentId, 42);
+    assert.equal(black.opponentId, 41);
     for (const state of [white, black]) {
         assert.equal(state.playerWhiteId, 41);
         assert.equal(state.playerBlackId, 42);
@@ -613,6 +615,7 @@ class FakeElement {
     addEventListener(name, callback) { this.listeners[name] = callback; }
     appendChild(child) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child); this.children.push(child); child.parentElement = this; child.parentNode = this; this.appendCount++; return child; }
     append(...children) { children.forEach(child => this.appendChild(child)); }
+    closest() { return null; }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     getAttribute(name) { return this.attributes[name] ?? null; }
     focus() {}
@@ -740,11 +743,52 @@ function latencyPercentile(samples, percentile) {
     return sorted[Math.max(0, Math.ceil(sorted.length * percentile) - 1)];
 }
 
-test("white and black boards map authoritative names and keep each assigned side at the bottom", () => {
+test("white and black perspectives show the authenticated player below the board after load and reconnect", () => {
     for (const color of ["w", "b"]) {
-        const harness = createBoardHarness(async () => { throw new Error("No network request expected"); }, { search: "" });
+        const userId = color === "w" ? 41 : 42;
+        const storage = new Map([
+            ["goalGambitUserId", String(userId)],
+            ["goalGambitUsername", color === "w" ? "Bill Gates" : "Briton"]
+        ]);
+        const harness = createBoardHarness(async () => { throw new Error("No network request expected"); }, { search: "", storage });
+        const section = {
+            children: [],
+            get firstElementChild() { return this.children[0] || null; },
+            insertBefore(node, reference) {
+                if (node === reference) return node;
+                if (node.parentElement) {
+                    const oldChildren = node.parentElement.children;
+                    oldChildren.splice(oldChildren.indexOf(node), 1);
+                }
+                const index = reference ? this.children.indexOf(reference) : this.children.length;
+                this.children.splice(index < 0 ? this.children.length : index, 0, node);
+                node.parentElement = this;
+                return node;
+            }
+        };
+        const blackBar = new FakeElement();
+        const boardWrapper = new FakeElement();
+        const whiteBar = new FakeElement();
+        section.children.push(blackBar, boardWrapper, whiteBar);
+        for (const element of section.children) {
+            element.parentElement = section;
+            Object.defineProperty(element, "nextElementSibling", {
+                configurable: true,
+                get() {
+                    const siblings = this.parentElement?.children || [];
+                    return siblings[siblings.indexOf(this) + 1] || null;
+                }
+            });
+        }
+        harness.document.getElementById("chessBoard").parentElement = boardWrapper;
+        harness.document.getElementById("blackName").closest = selector => selector === ".player-bar" ? blackBar : null;
+        harness.document.getElementById("whiteName").closest = selector => selector === ".player-bar" ? whiteBar : null;
+        const panelNames = () => section.children.map(element => element === whiteBar
+            ? harness.document.getElementById("whiteName").textContent
+            : element === blackBar ? harness.document.getElementById("blackName").textContent : "board");
         const match = {
             ...browserMatch(1), playerColor: color, matchType: "casual",
+            playerWhiteId: 41, playerBlackId: 42, opponentId: color === "w" ? 42 : 41,
             whiteName: "Bill Gates", blackName: "Briton", whiteRating: 1310, blackRating: 1240
         };
         harness.board.setMatchId(1);
@@ -755,6 +799,19 @@ test("white and black boards map authoritative names and keep each assigned side
         assert.equal(harness.document.getElementById("whiteRating").textContent, "1310");
         assert.equal(harness.document.getElementById("blackRating").textContent, "1240");
         assert.equal(harness.board.getPlayerColor(), color, "the server-assigned color is not inferred from the username");
+        const ownName = userId === match.playerWhiteId ? match.whiteName : match.blackName;
+        const opponentName = match.opponentId === match.playerWhiteId ? match.whiteName : match.blackName;
+        assert.deepEqual(panelNames(), [opponentName, "board", ownName]);
+
+        // A new authoritative response on reconnect refreshes labels without
+        // changing the participant-to-color assignment or panel perspective.
+        const reconnectedMatch = { ...match, whiteName: "Bill Gates Updated", blackName: "Briton Updated" };
+        harness.board.applyState(reconnectedMatch);
+        const reconnectedOwnName = userId === reconnectedMatch.playerWhiteId
+            ? reconnectedMatch.whiteName : reconnectedMatch.blackName;
+        const reconnectedOpponentName = reconnectedMatch.opponentId === reconnectedMatch.playerWhiteId
+            ? reconnectedMatch.whiteName : reconnectedMatch.blackName;
+        assert.deepEqual(panelNames(), [reconnectedOpponentName, "board", reconnectedOwnName]);
 
         const squares = harness.board.getBoardSquares();
         if (color === "w") {
@@ -776,6 +833,15 @@ test("white and black boards map authoritative names and keep each assigned side
             positionBeforeFlip
         );
     }
+});
+
+test("chess shell invalidates cached board code that controls player perspective", () => {
+    const serviceWorker = fs.readFileSync(path.join(__dirname, "../../frontend/sw.js"), "utf8");
+    const boardHtml = fs.readFileSync(path.join(__dirname, "../../frontend/pages/board.html"), "utf8");
+    assert.match(serviceWorker, /goal-gambit-chess-shell-v3/);
+    assert.match(serviceWorker, /path \+= "\?v=20261027-player-name-sync"/);
+    assert.match(serviceWorker, /self\.skipWaiting\(\)/);
+    assert.match(boardHtml, /board\.js\?v=20261027-player-name-sync/);
 });
 
 test("board coalesces refreshes, rejects stale responses, filters self events and cleans up switched matches", async () => {
