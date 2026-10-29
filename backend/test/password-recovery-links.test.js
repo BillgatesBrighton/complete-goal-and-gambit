@@ -8,6 +8,7 @@ const path = require("node:path");
 const express = require("express");
 const bcrypt = require("bcrypt");
 const createPasswordRecoveryRoutes = require("../routes/passwordRecovery");
+const passwordRecoveryCors = require("../middleware/passwordRecoveryCors");
 
 function createMemoryPool() {
     const users = new Map([
@@ -123,6 +124,28 @@ async function postJson(server, path, body) {
         body: JSON.stringify(body)
     });
     return { status: response.status, body: await response.json() };
+}
+
+async function sendRawRequest(server, path, headers, body) {
+    return new Promise((resolve, reject) => {
+        const request = http.request({
+            host: "127.0.0.1",
+            port: server.address().port,
+            path,
+            method: "POST",
+            headers
+        }, (response) => {
+            const chunks = [];
+            response.on("data", (chunk) => chunks.push(chunk));
+            response.on("end", () => resolve({
+                status: response.statusCode,
+                headers: response.headers,
+                body: Buffer.concat(chunks).toString("utf8")
+            }));
+        });
+        request.on("error", reject);
+        request.end(body);
+    });
 }
 
 test("password recovery issues private unique links and consumes them once", async (t) => {
@@ -272,4 +295,54 @@ test("password reset reports a safe unavailable response when PostgreSQL connect
         message: "Could not reset the password. Please contact support and try again."
     });
     assert.doesNotMatch(JSON.stringify(result.body), /diagnostic|PostgreSQL|timeout|stack/i);
+});
+
+test("opaque-origin top-level recovery form navigations bypass CORS without allowing opaque API reads", async (t) => {
+    const pool = createMemoryPool();
+    const app = express();
+    const corsGuard = function(req, _res, next) {
+        if (req.get("origin") === "null") {
+            const error = new Error("Origin not allowed by GOAL$GAMBIT.");
+            error.code = "GG_CORS_ORIGIN_DENIED";
+            return next(error);
+        }
+        return next();
+    };
+
+    app.use(passwordRecoveryCors(corsGuard));
+    app.use(express.json());
+    app.use("/api/auth/password-recovery", createPasswordRecoveryRoutes(pool, {
+        frontendUrl: "https://play.example/pages/password-recovery.html"
+    }));
+    app.use(function(error, _req, res, _next) {
+        if (error && error.code === "GG_CORS_ORIGIN_DENIED") {
+            return res.status(403).json({ success: false, message: "This request origin is not allowed." });
+        }
+        return res.status(500).json({ success: false, message: "Internal server error." });
+    });
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+
+    const response = await sendRawRequest(server, "/api/auth/password-recovery/request", {
+            Origin: "null",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document"
+        }, new URLSearchParams({ username: "diagnostic", phone: "invalid" }).toString());
+
+    assert.equal(response.status, 303);
+    const location = new URL(response.headers.location);
+    assert.equal(location.origin + location.pathname,
+        "https://play.example/pages/password-recovery.html");
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+
+    const opaqueApiRequest = await sendRawRequest(server, "/api/auth/password-recovery/status", {
+            Origin: "null",
+            "Content-Type": "application/json",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty"
+        }, JSON.stringify({ ticketId: "invalid", secret: "invalid" }));
+    assert.equal(opaqueApiRequest.status, 403);
 });

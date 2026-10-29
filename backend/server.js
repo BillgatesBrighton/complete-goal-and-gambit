@@ -2,6 +2,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const passwordRecoveryCors = require("./middleware/passwordRecoveryCors");
 const http = require("http");
 const { Server } = require("socket.io");
 const pg = require("pg");
@@ -226,24 +227,21 @@ function corsOrigin(origin, callback) {
         origin
     );
 
-    return callback(
-        new Error(
-            "Origin not allowed by GOAL$GAMBIT."
-        )
-    );
+    const error = new Error("Origin not allowed by GOAL$GAMBIT.");
+    error.code = "GG_CORS_ORIGIN_DENIED";
+    return callback(error);
 
 }
 
-app.use(
-    cors({
+const corsMiddleware = cors({
 
-        origin: corsOrigin,
+    origin: corsOrigin,
 
-        credentials: true
+    credentials: true
 
-    })
+});
 
-);
+app.use(passwordRecoveryCors(corsMiddleware));
 
 // ======================================================
 // BODY PARSER
@@ -1309,6 +1307,13 @@ app.use(
 
 app.use(
     function(error, req, res, next) {
+
+        if (error && error.code === "GG_CORS_ORIGIN_DENIED") {
+            return res.status(403).json({
+                success: false,
+                message: "This request origin is not allowed."
+            });
+        }
 
         console.error(
             "Unhandled server error:"
