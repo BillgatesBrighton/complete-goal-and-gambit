@@ -164,6 +164,7 @@ test("password recovery issues private unique links and consumes them once", asy
     assert.equal(oldLinkAttempt.status, 400);
 
     const replacementRow = pool.requests.get(replacementLink.ticketId);
+    pool.users.get("one").password_hash = await bcrypt.hash("old-password-one", 12);
     replacementRow.status = "approved";
     replacementRow.approval_expires_at = new Date(Date.now() + 30 * 60 * 1000);
     replacementRow.auth_version_at_approval = pool.users.get("one").auth_version;
@@ -176,6 +177,7 @@ test("password recovery issues private unique links and consumes them once", asy
     assert.equal(validReset.status, 200);
     assert.equal(pool.users.get("one").auth_version, 3);
     assert.equal(await bcrypt.compare("new-password-one", pool.users.get("one").password_hash), true);
+    assert.equal(await bcrypt.compare("old-password-one", pool.users.get("one").password_hash), false);
 
     const reusedLink = await postJson(server, "/api/auth/password-recovery/complete", {
         ...replacementLink, newPassword: "another-password"
@@ -238,4 +240,36 @@ test("simultaneous submissions cannot consume one recovery link twice", async (t
         await bcrypt.compare("loser-password", pool.users.get("two").password_hash),
         true
     );
+});
+
+test("password reset reports a safe unavailable response when PostgreSQL connection acquisition fails", async (t) => {
+    const app = express();
+    app.use(express.json());
+    app.use("/api/auth/password-recovery", createPasswordRecoveryRoutes({
+        async connect() {
+            throw new Error("diagnostic PostgreSQL connection timeout");
+        }
+    }, {
+        frontendUrl: "https://play.example/pages/password-recovery.html"
+    }));
+    app.use(function(_error, _req, res, _next) {
+        res.status(500).json({ success: false, message: "Internal server error." });
+    });
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+
+    const result = await postJson(server, "/api/auth/password-recovery/complete", {
+        ticketId: "00000000-0000-4000-8000-000000000000",
+        secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        newPassword: "diagnostic-invalid"
+    });
+
+    assert.equal(result.status, 503);
+    assert.deepEqual(result.body, {
+        success: false,
+        message: "Could not reset the password. Please contact support and try again."
+    });
+    assert.doesNotMatch(JSON.stringify(result.body), /diagnostic|PostgreSQL|timeout|stack/i);
 });

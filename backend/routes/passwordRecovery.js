@@ -190,9 +190,10 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
             return res.status(400).json({ success: false, message: "Use a valid recovery link and a password between 8 and 128 characters." });
         }
 
-        const client = await pool.connect();
+        let client;
         let transactionOpen = false;
         try {
+            client = await pool.connect();
             await client.query("BEGIN");
             transactionOpen = true;
             const result = await client.query(
@@ -244,9 +245,9 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
         } catch (error) {
             if (transactionOpen) await client.query("ROLLBACK").catch(function() {});
             console.error("Support-assisted password reset failed:", error && error.message);
-            return res.status(500).json({ success: false, message: "Could not reset the password. Please contact support and try again." });
+            return res.status(503).json({ success: false, message: "Could not reset the password. Please contact support and try again." });
         } finally {
-            client.release();
+            if (client) client.release();
         }
     });
 
