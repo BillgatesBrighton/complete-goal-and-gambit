@@ -215,7 +215,7 @@
             }
         }
     </style>
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 </head>
 
 <body>
@@ -439,7 +439,7 @@
                 }
                 location.href = "tournament-lobby.html?timeControl=1%2B1&stake=" + encodeURIComponent(selectedStake);
             } catch (error) {
-                alert("Could not reach the server. Please try again.");
+                alert("Connection unavailable. Please try again shortly.");
             } finally {
                 button.disabled = false;
                 button.textContent = "Join Tournament";

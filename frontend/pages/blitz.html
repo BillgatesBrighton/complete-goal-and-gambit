@@ -215,7 +215,7 @@
             }
         }
     </style>
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 </head>
 
 <body>
@@ -361,8 +361,7 @@
 
 
         <p class="note">
-            Tournament entry and prize settlement will be
-            handled securely by the GOAL$GAMBIT server.
+            GOAL$GAMBIT securely processes tournament entries and prizes.
         </p>
 
     </div>
@@ -439,7 +438,7 @@
                 }
                 location.href = "tournament-lobby.html?timeControl=3%2B2&stake=" + encodeURIComponent(selectedStake);
             } catch (error) {
-                alert("Could not reach the server. Please try again.");
+                alert("Connection unavailable. Please try again shortly.");
             } finally {
                 button.disabled = false;
                 button.textContent = "Join Tournament";

@@ -459,7 +459,7 @@ body {
 
 </style>
 
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 
 </head>
 
@@ -1170,7 +1170,7 @@ async function findMatch() {
             "FIND OPPONENT";
 
         showMessage(
-            "Unable to contact the GOAL$GAMBIT server."
+            "Connection unavailable. Please try again shortly."
         );
 
         return;
@@ -1258,7 +1258,7 @@ async function findMatch() {
             "FIND OPPONENT";
 
         showMessage(
-            "The server returned an unexpected response."
+            "An unexpected response was received. Please try again."
         );
 
         return;

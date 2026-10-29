@@ -6,8 +6,8 @@
 
     <title>GOAL$GAMBIT Chess</title>
 
-    <link rel="stylesheet" href="board.css">
-    <link rel="stylesheet" href="board-lichess.css">
+    <link rel="stylesheet" href="board.css?v=20261029-fantasy-svg-pieces">
+    <link rel="stylesheet" href="board-lichess.css?v=20261029-fantasy-svg-pieces">
     <link rel="manifest" href="../manifest.webmanifest">
 </head>
 
@@ -103,7 +103,7 @@
 
 
         <div id="statusBar" class="status-bar" aria-live="polite">
-            <span id="turnMessage">Connecting to chess server…</span>
+            <span id="turnMessage">Connecting to your match…</span>
             <span id="connectionStatus" class="connection-status" role="status" hidden></span>
             <span id="companionEngineStatus" class="connection-status engine-status" role="status" hidden></span>
             <button id="cancelPremoveButton" class="control-button cancel-premove hidden" type="button" hidden>
@@ -340,7 +340,7 @@
 </div>
 
 
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 <script>
   var socketApiBase = (window.GG_API_BASE || (window.GG && window.GG.API_BASE) || location.origin).replace(/\/+$/, "");
   var chessSocketScript = document.createElement("script");
@@ -350,7 +350,7 @@
   chessSocketScript.onerror = function() { window.dispatchEvent(new Event("gg-chess-socket-unavailable")); };
   document.head.appendChild(chessSocketScript);
 </script>
-<script type="module" src="../js/board.js?v=20261027-player-name-sync"></script>
+<script type="module" src="../js/board.js?v=20261029-fantasy-svg-pieces"></script>
 
 </body>
 </html>

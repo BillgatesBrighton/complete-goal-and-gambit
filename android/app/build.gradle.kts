@@ -35,8 +35,8 @@ android {
         applicationId = "com.goalgambit.companion"
         minSdk = 24
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.2.2"
+        versionCode = 15
+        versionName = "1.2.3"
         buildConfigField("String", "API_BASE_URL", "\"$configuredApiBase\"")
     }
 

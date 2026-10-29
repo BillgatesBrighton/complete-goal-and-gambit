@@ -110,7 +110,7 @@ public final class NotificationInboxActivity extends Activity {
                         ? "Notifications could not be loaded. Check your connection and retry."
                         : response.message("Notifications could not be loaded. Check your connection and retry."));
                     olderButton.setVisibility(ViewGroup.GONE);
-                    if (list.getChildCount() == 0) list.addView(text("Your notification history is kept by GOAL$GAMBIT and will appear here when the server is reachable.", 14, Color.LTGRAY));
+                    if (list.getChildCount() == 0) list.addView(text("Your notification history will appear here.", 14, Color.LTGRAY));
                     return;
                 }
 

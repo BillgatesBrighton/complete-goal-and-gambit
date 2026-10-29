@@ -1466,7 +1466,7 @@ body {
 </div>
 
 
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 <script src="../js/active-tournaments.js"></script>
 <script>
 
@@ -2283,7 +2283,7 @@ async function clearKonamiHistory(historyType, buttonId, feedbackId) {
             updateDashboard();
         }
     } catch (_) {
-        feedback.textContent = "The list was cleared, but it could not refresh from the server. Reload this page to sync it.";
+        feedback.textContent = "The list was cleared, but it could not refresh. Reload this page to check the latest data.";
     } finally {
         button.disabled = false;
     }

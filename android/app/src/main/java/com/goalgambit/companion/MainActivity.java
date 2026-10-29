@@ -1,11 +1,9 @@
 package com.goalgambit.companion;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -56,8 +54,6 @@ public final class MainActivity extends Activity {
     private TextView statusView;
     private TextView welcomeGreetingView;
     private TextView welcomeNameView;
-    private TextView serviceStatusView;
-    private TextView chessEngineStatusView;
     private TextView upcomingStatusView;
     private TextView announcementsStatusView;
     private TextView supportStatusView;
@@ -268,7 +264,7 @@ public final class MainActivity extends Activity {
                 termsStatusCheckedToken = bearer;
                 content.removeViews(5, Math.max(0, content.getChildCount() - 5));
                 if (status == null || !status.ok()) {
-                    showTermsStatusUnavailable(status == null ? "Could not reach the GOAL$GAMBIT server." : status.message("Could not verify your account setup."));
+                    showTermsStatusUnavailable(status == null ? "Connection unavailable. Please try again shortly." : status.message("Could not verify your account setup."));
                     return;
                 }
                 companionTermsAccepted = status.json.optBoolean("termsAccepted", false);
@@ -314,7 +310,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (bearer == null || !bearer.equals(TokenStore.read(this))) return;
                     if (response == null || !response.ok() || !response.json.optBoolean("accepted", false)) {
-                        statusView.setText(response == null ? "Could not reach the server. Your acceptance was not confirmed; please retry." : response.message("Your acceptance was not saved. Please retry."));
+                        statusView.setText(response == null ? "Connection unavailable. Your acceptance was not confirmed; please retry." : response.message("Your acceptance was not saved. Please retry."));
                         accept.setEnabled(agree.isChecked());
                         readTerms.setEnabled(true);
                         return;
@@ -333,7 +329,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showTermsStatusUnavailable(String message) {
-        statusView.setText("Could not confirm your terms status. Companion setup remains paused until the server responds.");
+        statusView.setText("Could not confirm your terms status. Please try again when connected.");
         TextView detail = text(message, 13, Color.LTGRAY, false);
         content.addView(detail, marginParams(-1, -2, 0, 0, 0, 12));
         Button retry = button("RETRY");
@@ -383,7 +379,7 @@ public final class MainActivity extends Activity {
                     });
                 } catch (Exception error) {
                     runOnUiThread(() -> {
-                        statusView.setText(error.getMessage() == null ? "Could not reach the GOAL$GAMBIT server." : error.getMessage());
+                        statusView.setText(error.getMessage() == null ? "Connection unavailable. Please try again." : error.getMessage());
                         login.setEnabled(true);
                     });
                 }
@@ -426,13 +422,9 @@ public final class MainActivity extends Activity {
         Button signOut = button("SIGN OUT");
         content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 14));
         signOut.setOnClickListener(view -> disableNotifications(true));
-        serviceStatusView = text("Checking companion services…", 13, Color.LTGRAY, false);
-        chessEngineStatusView = text("Checking chess match updates…", 13, Color.LTGRAY, false);
-        content.addView(chessEngineStatusView, marginParams(-1, -2, 0, 0, 0, 9));
         upcomingStatusView = text("Checking upcoming games…", 15, Color.WHITE, false);
         upcomingStatusView.setPadding(dp(12), dp(12), dp(12), dp(12));
         upcomingStatusView.setBackgroundColor(Color.rgb(25, 25, 25));
-        content.addView(serviceStatusView, marginParams(-1, -2, 0, 0, 0, 10));
         ensureChessEngineSocket(TokenStore.read(this));
         content.addView(text("UPCOMING GAMES", 17, Color.rgb(237, 195, 53), true), marginParams(-1, -2, 0, 8, 0, 7));
         content.addView(upcomingStatusView, marginParams(-1, -2, 0, 0, 0, 8));
@@ -529,38 +521,22 @@ public final class MainActivity extends Activity {
             Api.Result supportResult = null;
             Api.Result supportUnreadResult = null;
             Api.Result profileResult = null;
-            Api.Result pushStatusResult = null;
             try { announcementResult = Api.getAnnouncements(bearer); } catch (Exception ignored) {}
             try { upcomingResult = Api.getUpcomingGameStatus(bearer); } catch (Exception ignored) {}
             try { supportUnreadResult = Api.getSupportUnreadCount(bearer); } catch (Exception ignored) {}
             try { supportResult = Api.getSupportMessages(bearer); } catch (Exception ignored) {}
             try { profileResult = Api.getCompanionProfile(bearer); } catch (Exception ignored) {}
-            try { pushStatusResult = Api.getPushStatus(bearer); } catch (Exception ignored) {}
             final Api.Result announcements = announcementResult;
             final Api.Result upcoming = upcomingResult;
             final Api.Result support = supportResult;
             final Api.Result supportUnread = supportUnreadResult;
             final Api.Result profile = profileResult;
-            final Api.Result pushStatus = pushStatusResult;
             runOnUiThread(() -> {
                 companionRefreshInFlight = false;
                 if (TokenStore.read(this) == null || !bearer.equals(TokenStore.read(this))) return;
                 if (profile != null && profile.ok() && welcomeNameView != null) {
                     String username = profile.json.optString("username", "").trim();
                     if (!username.isEmpty()) welcomeNameView.setText(username);
-                }
-                boolean connected = announcements != null && announcements.ok()
-                    && upcoming != null && upcoming.ok() && support != null && support.ok();
-                if (serviceStatusView != null) {
-                    if (!connected) {
-                        serviceStatusView.setText("Offline or reconnecting · unsent support messages stay queued on this device.");
-                    } else {
-                        int activeDevices = pushStatus != null && pushStatus.ok() ? pushStatus.json.optInt("activeAndroidDevices", 0) : -1;
-                        boolean alertsAllowed = areNotificationsAllowed();
-                        String registered = activeDevices < 0 ? "device status unavailable"
-                            : activeDevices == 0 ? "no registered device" : activeDevices + (activeDevices == 1 ? " companion device registered" : " companion devices registered");
-                        serviceStatusView.setText("Connected · " + registered + (alertsAllowed ? " · Android alerts allowed" : " · notifications need permission"));
-                    }
                 }
                 if (supportUnread != null && supportUnread.ok() && supportShortcut != null) {
                     int count = supportUnread.json.optInt("unreadCount", 0);
@@ -584,11 +560,9 @@ public final class MainActivity extends Activity {
                 }
                 if (support != null && support.ok()) {
                     renderSupportMessages(support.json, bearer);
-                    if (supportStatusView != null) supportStatusView.setText("Support chat connected · replies and announcements sync when you reconnect.");
+                    if (supportStatusView != null) supportStatusView.setText("Support inbox is ready. New replies will appear here.");
                 } else if (supportStatusView != null) {
-                    supportStatusView.setText(support == null
-                        ? "Offline or reconnecting. New messages remain queued locally until the server confirms them."
-                        : support.message("Could not load support chat. Queued messages have not been marked as delivered."));
+                    supportStatusView.setText("Support chat is temporarily unavailable. Unsent messages remain saved on this device.");
                 }
                 if (selectedAnnouncementId > 0 && announcements != null && announcements.ok()) {
                     long selected = selectedAnnouncementId;
@@ -623,12 +597,6 @@ public final class MainActivity extends Activity {
             try { Api.markNotificationRead(eventId, bearer); } catch (Exception ignored) {}
             refreshNotificationCount();
         });
-    }
-
-    private boolean areNotificationsAllowed() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
-        android.app.NotificationManager manager = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        return manager != null && manager.areNotificationsEnabled();
     }
 
     private void renderAnnouncements(JSONObject response) {
@@ -765,13 +733,13 @@ public final class MainActivity extends Activity {
                     runOnUiThread(() -> {
                         supportComposer.setText(message);
                         supportSubject.setText(subject);
-                        supportStatusView.setText(result.message("The server rejected this message."));
+                        supportStatusView.setText(result.message("This message could not be sent."));
                     });
                 } else {
                     enqueueSupportSync();
                     runOnUiThread(() -> supportStatusView.setText(result.status == 401 || result.status == 403
                         ? result.message("Sign in again before sending support messages.")
-                        : "Message is queued securely on this device. The server has not confirmed delivery yet."));
+                        : "Message saved on this device. Delivery is still pending."));
                 }
             } catch (Exception error) {
                 enqueueSupportSync();
@@ -813,9 +781,7 @@ public final class MainActivity extends Activity {
         }
         stopChessEngineSocket();
         chessEngineToken = bearer;
-        chessEngineSocket = new ChessEngineSocket(bearer, message -> {
-            if (chessEngineStatusView != null) chessEngineStatusView.setText(message);
-        }, (verifiedMatchId, ply, flags, captured, check, checkmate) -> {
+        chessEngineSocket = new ChessEngineSocket(bearer, message -> { }, (verifiedMatchId, ply, flags, captured, check, checkmate) -> {
             if (chessSoundPlayer != null)
                 chessSoundPlayer.playVerifiedMove(verifiedMatchId, ply, flags, captured, check, checkmate);
         });
@@ -907,7 +873,7 @@ public final class MainActivity extends Activity {
                         }
                         try { FirebaseMessaging.getInstance().deleteToken(); } catch (Exception ignored) {}
                         runOnUiThread(() -> {
-                            statusView.setText(signOut ? "Signed out. This device's push subscription was disabled where the server was reachable."
+                            statusView.setText(signOut ? "Signed out. This device's notifications were disabled where possible."
                                 : "Notifications disabled on this device.");
                             if (signOut) renderAccountState();
                         });
@@ -923,8 +889,8 @@ public final class MainActivity extends Activity {
                     FirebaseMessaging.getInstance().deleteToken();
                 } catch (Exception ignoredAgain) {}
                 runOnUiThread(() -> {
-                    statusView.setText(signOut ? "Signed out. The server could not be reached to unregister this device."
-                        : "The server could not be reached. Notifications may remain registered until the next connection.");
+                    statusView.setText(signOut ? "Signed out. This device may keep receiving alerts until it reconnects."
+                        : "Connection unavailable. Notifications may remain active until this device reconnects.");
                     if (signOut) renderAccountState();
                 });
             }
@@ -967,7 +933,7 @@ public final class MainActivity extends Activity {
                     });
                 });
             } catch (Exception error) {
-                runOnUiThread(() -> match.setText("Could not reach the server. Check your connection and retry."));
+                runOnUiThread(() -> match.setText("Connection unavailable. Check your internet and retry."));
             }
         });
     }

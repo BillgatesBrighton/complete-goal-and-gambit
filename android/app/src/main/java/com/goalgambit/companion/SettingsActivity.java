@@ -152,7 +152,7 @@ public final class SettingsActivity extends Activity {
             runOnUiThread(() -> {
                 saveButton.setEnabled(true);
                 if (response == null || !response.ok()) {
-                    status.setText(response == null ? "Preferences could not be loaded. Your current server settings remain in place." : response.message("Preferences could not be loaded."));
+                    status.setText(response == null ? "Preferences could not be loaded. Your saved choices are unchanged." : response.message("Preferences could not be loaded."));
                     return;
                 }
                 JSONObject saved = response.json.optJSONObject("preferences");
@@ -249,7 +249,7 @@ public final class SettingsActivity extends Activity {
                             ? "This Android device is registered for the notification types you selected."
                             : result.message("This device could not be registered.")));
                     } catch (Exception error) {
-                        runOnUiThread(() -> status.setText("The server could not register this device. Try again when connected."));
+                        runOnUiThread(() -> status.setText("This device could not be registered. Please try again shortly."));
                     }
                 });
             });

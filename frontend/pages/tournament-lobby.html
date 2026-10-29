@@ -49,9 +49,9 @@
     <nav aria-label="Chess navigation"><a href="chess.html">Dashboard</a><a href="rapid.html">Rapid</a><a href="blitz.html">Blitz</a><a href="bullet.html">Bullet</a></nav>
   </header>
   <main>
-    <p class="eyebrow">Live server tables</p>
+    <p class="eyebrow">Live standings</p>
     <h1>Chess tournament standings</h1>
-    <p class="intro">Choose a clock and entry stake to view this month’s tournament-mode standings and fixtures. Results count after the chess server completes the match.</p>
+    <p class="intro">Choose a clock and entry stake to view this month’s tournament-mode standings and fixtures. Results count after each match is confirmed.</p>
     <div class="toolbar">
       <div class="controls" role="group" aria-label="Tournament clock">
         <button type="button" class="active" data-clock="10+5">Rapid · 10+5</button>
@@ -82,9 +82,9 @@
         <p id="entryActionNotice" class="entry-action-notice" role="status" aria-live="polite"></p>
       </section>
     </div>
-    <p class="footnote">These standings group tournament-mode games by clock, stake, and calendar month. Fixtures and verified results come directly from the chess server.</p>
+    <p class="footnote">These standings group tournament-mode games by clock, stake, and calendar month. Fixtures and verified results update as matches are confirmed.</p>
   </main>
-  <script src="../js/api.js?v=20261024-companion-update-tag"></script>
+  <script src="../js/api.js?v=20261029-user-facing-status"></script>
   <script>
   "use strict";
   const initialParams = new URLSearchParams(location.search);
@@ -200,7 +200,7 @@
     document.getElementById("fixturesBody").innerHTML = fixtures.length
       ? fixtures.slice(0,20).map(row => '<tr><td>' + escape(row.white_player || "Player") + '</td><td>' + escape(row.black_player || "Finding opponent") + '</td><td>' + escape(resultLabel(row)) + '</td><td>' + escape(String(row.status || "").replace(/_/g," ")) + '</td></tr>').join("")
       : '<tr><td class="empty" colspan="4">No tournament fixtures for this clock and stake this month.</td></tr>';
-    document.getElementById("tableStatus").textContent = "Server updated " + new Date().toLocaleTimeString();
+    document.getElementById("tableStatus").textContent = "Updated " + new Date().toLocaleTimeString();
   }
   document.getElementById("cancelTournamentEntry").addEventListener("click", function() {
     submitEntryAction("cancel", this);

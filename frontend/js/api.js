@@ -235,13 +235,13 @@
             var responseType = String(response.headers && response.headers.get("content-type") || "").toLowerCase();
             if (responseType && responseType.indexOf("application/vnd.android.package-archive") === -1 &&
                 responseType.indexOf("application/octet-stream") === -1) {
-                throw new Error("The server did not return the Android app file.");
+                throw new Error("The download did not return the Android app file.");
             }
             var blob = await response.blob();
             if (!blob.size) throw new Error("The downloaded app file is empty. Please try again.");
             var signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
             if (signature.length < 4 || signature[0] !== 0x50 || signature[1] !== 0x4b || signature[2] !== 0x03 || signature[3] !== 0x04) {
-                throw new Error("The server response is not a valid Android app file.");
+                throw new Error("The downloaded app file is invalid. Please try again or contact support.");
             }
             var objectUrl = URL.createObjectURL(blob);
             var link = document.createElement("a");
@@ -254,12 +254,12 @@
             if (statusTarget) statusTarget.textContent = "Download started. Open the APK from your Downloads when it finishes.";
             return true;
         } catch (error) {
-            if (statusTarget) statusTarget.textContent = "The server could not be reached. Opening the official GitHub APK download…";
+            if (statusTarget) statusTarget.textContent = "Connection unavailable. Opening the official app download…";
             try {
                 openPublicCompanionDownload();
                 return true;
             } catch (_) {
-                if (statusTarget) statusTarget.textContent = "The server is offline. Use the official GitHub APK download link instead.";
+                if (statusTarget) statusTarget.textContent = "Connection unavailable. Use the official app download link instead.";
                 return false;
             }
         } finally {
@@ -385,7 +385,7 @@
 
         check.addEventListener("click", async function() {
             check.disabled = true;
-            status.textContent = "Checking Android device registration…";
+            status.textContent = "Checking Companion alerts…";
             var result = await api("/api/push/status", { noRedirect: true });
             check.disabled = false;
             if (result.ok && Number(result.data.activeAndroidDevices || 0) > 0) {
@@ -394,7 +394,7 @@
                 return;
             }
             status.textContent = result.ok && !result.data.androidConfigured
-                ? "Android notifications are not configured on the GOAL$GAMBIT server yet. The companion cannot register until server setup is complete."
+                ? "Android alerts are temporarily unavailable. Please try again later."
                 : result.data.message || "No Android companion is registered for this account yet. Open the app and enable match notifications, then try again.";
         });
         signout.addEventListener("click", logout);
@@ -571,12 +571,12 @@
 
             if (response.status === 404 && (!data || !data.message || data.message === "API endpoint not found.")) {
                 data = Object.assign({}, data || {}, {
-                    message: "This API route was not found on the selected server. Check the API address and update or restart the backend."
+                    message: "This feature is temporarily unavailable. Please try again shortly."
                 });
             }
             if ([502, 503, 504].indexOf(response.status) >= 0 && (!data || !data.message)) {
                 data = Object.assign({}, data || {}, {
-                    message: "The API server is temporarily unavailable (HTTP " + response.status + "). Check that the backend and its public tunnel are running."
+                    message: "This feature is temporarily unavailable. Please try again shortly."
                 });
             }
 
@@ -594,7 +594,7 @@
             return {
                 ok: false,
                 status: 0,
-                data: { message: "Cannot reach the server. Make sure the backend is running." }
+                data: { message: "Connection unavailable. Please try again shortly." }
             };
         }
     }
@@ -659,7 +659,7 @@
     async function getPushPublicConfig() {
         var result = await api("/api/push/vapid-public-key", { noRedirect: true });
         if (!result.ok || !result.data.configured || !result.data.publicKey) {
-            throw new Error(result.data && result.data.message || "Match notifications are not configured on the server yet.");
+            throw new Error(result.data && result.data.message || "Match alerts are temporarily unavailable.");
         }
         return result.data;
     }
@@ -687,7 +687,7 @@
         }
         var status = await api("/api/push/status", { noRedirect: true });
         if (!status.ok || !status.data.configured || Number(status.data.activeSubscriptions) < 1) {
-            throw new Error(status.data.message || "The backend could not verify an active subscription for your account.");
+            throw new Error(status.data.message || "Your notification settings could not be checked right now.");
         }
         return { enabled: true, registered: true, activeSubscriptions: Number(status.data.activeSubscriptions), message: "This device is registered for match notifications." };
     }
@@ -712,7 +712,7 @@
                 body: subscription ? { endpoint: subscription.endpoint } : {},
                 noRedirect: true
             });
-            if (!response.ok) throw new Error(response.data.message || "The backend could not disable this device subscription.");
+            if (!response.ok) throw new Error(response.data.message || "Could not turn off alerts right now.");
             if (subscription) await subscription.unsubscribe();
             return { disabled: true };
         } catch (error) {
@@ -766,7 +766,7 @@
         if (amount <= 0) return true;
         var balance = await refreshBalance();
         if (balance === null) {
-            alert("Could not check your wallet balance. Make sure the server is running.");
+            alert("Could not refresh your wallet balance. Please try again shortly.");
             return false;
         }
         if (balance < amount) {

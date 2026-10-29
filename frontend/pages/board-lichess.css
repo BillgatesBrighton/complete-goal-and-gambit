@@ -62,10 +62,9 @@
     height: 100%;
     line-height: 1;
     user-select: none;
-    filter: drop-shadow(0 2px 1px #0007);
     transition: transform .1s ease;
 }
-.piece-glyph svg { width: 82%; height: 82%; overflow: visible; pointer-events: none; filter: drop-shadow(0 2px 1.5px #0008); }
+.piece-glyph img { display: block; width: 87%; height: 87%; object-fit: contain; pointer-events: none; user-select: none; }
 .piece-glyph.dragging { transition: none; pointer-events: none; z-index: 6; }
 
 .square:hover .piece-glyph { transform: translateY(-1px); }
@@ -85,5 +84,5 @@
 
 @media (max-width: 600px) {
     .chess-board { width: min(100%, 600px); border-width: 3px; border-radius: 0; }
-    .piece-glyph svg { width: 84%; height: 84%; }
+    .piece-glyph img { width: 88%; height: 88%; }
 }

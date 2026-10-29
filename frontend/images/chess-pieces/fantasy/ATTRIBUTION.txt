@@ -1,0 +1,9 @@
+Fantasy chess piece artwork
+
+Artwork: Maurizio Monge (chess-art)
+Source: https://github.com/lichess-org/lila/tree/master/public/piece/fantasy
+Original artwork repository: https://github.com/maurimo/chess-art
+License: MIT. See LICENSE.txt in this directory.
+
+The SVG files are bundled locally with GOAL$GAMBIT. They are not loaded from
+Lichess or another external site during play.

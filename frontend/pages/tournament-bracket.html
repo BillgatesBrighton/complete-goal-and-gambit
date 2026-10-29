@@ -28,7 +28,7 @@ main{width:min(1120px,calc(100% - 36px));margin:40px auto 80px}.back{display:inl
   <section>
     <p class="eyebrow" id="tierLabel">eFootball tournament</p>
     <h1 id="title">Tournament groups</h1>
-    <p class="intro">Live group standings and fixtures update from the server as results are confirmed.</p>
+    <p class="intro">Live group standings and fixtures update as results are confirmed.</p>
   </section>
   <div id="summary" class="summary" style="display:none"></div>
   <section class="match-guidance" aria-label="Before opening Match Hub">
@@ -45,7 +45,7 @@ main{width:min(1120px,calc(100% - 36px));margin:40px auto 80px}.back{display:inl
   <section id="groups" class="groups" aria-label="Tournament group tables and fixtures"></section>
   <div id="updated" class="refresh"></div>
 </main>
-<script src="../js/api.js?v=20261024-companion-update-tag"></script>
+<script src="../js/api.js?v=20261029-user-facing-status"></script>
 <script>
 "use strict";
 const tournamentId = Number(new URLSearchParams(location.search).get("tournament"));
@@ -218,7 +218,7 @@ async function loadGroups() {
   groupsEl.querySelectorAll("[data-find-tournament-match]").forEach(function(button) {
     button.addEventListener("click", function() { findTournamentMatch(button); });
   });
-  updated.textContent = "Updated from the server at " + new Date().toLocaleTimeString();
+  updated.textContent = "Updated at " + new Date().toLocaleTimeString();
 }
 async function initialize() {
   if (!GG.requireLogin()) return;

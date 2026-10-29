@@ -69,7 +69,7 @@ final class Api {
                 json = new JSONObject(text);
             } catch (Exception ignored) {
                 json = new JSONObject();
-                json.put("message", status >= 500 ? "The GOAL$GAMBIT server could not complete the request." : "The server returned an unreadable response.");
+                json.put("message", status >= 500 ? "The request could not be completed. Please try again." : "The response could not be read. Please try again.");
             }
             return new Result(status, json);
         } finally {

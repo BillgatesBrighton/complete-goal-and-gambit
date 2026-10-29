@@ -159,7 +159,7 @@
             opponentInput.value = "";
             await refreshSchedules();
         } catch (_) {
-            showFeedback("Could not reach the server to schedule this Chess match.", "error");
+            showFeedback("Connection unavailable. Your Chess match was not scheduled.", "error");
         } finally {
             submitButton.disabled = false;
         }
@@ -188,7 +188,7 @@
             }
             await refreshSchedules();
         } catch (_) {
-            showFeedback("Could not reach the server to update this scheduled match.", "error");
+            showFeedback("Connection unavailable. Your scheduled match was not updated.", "error");
         } finally {
             control.disabled = false;
         }

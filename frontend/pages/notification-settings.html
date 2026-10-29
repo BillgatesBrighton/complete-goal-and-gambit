@@ -5,15 +5,15 @@
 <title>GOAL$GAMBIT · Notifications</title>
 <style>
 :root{color-scheme:dark;--gold:#e4bd43;--panel:#111;--line:#292929;--muted:#aaa;--green:#8fe0aa;--red:#ff9b9b}*{box-sizing:border-box}body{margin:0;background:#080808;color:#f7f7f7;font:16px/1.5 system-ui,Segoe UI,Arial,sans-serif}header{height:64px;padding:0 max(18px,calc((100% - 900px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#0d0d0d}.brand{color:var(--gold);font-weight:900;letter-spacing:.04em}a{color:var(--gold)}main{width:min(900px,94%);margin:30px auto 80px}h1{color:var(--gold);font-size:clamp(27px,5vw,38px);margin:0}.lead,.muted{color:var(--muted)}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:21px;margin:17px 0}.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.status-cell{padding:13px;background:#090909;border:1px solid var(--line);border-radius:10px}.status-cell small{display:block;color:var(--muted)}button,.button{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:9px;padding:12px 16px;margin:8px 8px 0 0;background:var(--gold);color:#111;font-weight:850;text-decoration:none;cursor:pointer;min-height:44px}.secondary{background:transparent;border:1px solid #8c7428;color:var(--gold)}button:disabled{opacity:.55;cursor:not-allowed}.error{color:var(--red)}.success{color:var(--green)}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.item strong{color:var(--gold)}.hidden{display:none!important}@media(max-width:580px){header{padding:0 14px}.status-grid{grid-template-columns:1fr}.card{padding:17px}button,.button{width:100%;margin-right:0}}
-</style><script src="../js/api.js?v=20261024-companion-update-tag"></script>
+</style><script src="../js/api.js?v=20261029-user-facing-status"></script>
 </head>
 <body>
 <header><div class="brand">GOAL$GAMBIT</div><a href="dashboard.html">Dashboard</a></header>
 <main>
 <h1>Notification Settings</h1><p class="lead">Manage GOAL$GAMBIT Companion alerts and review recent delivery activity.</p>
 <section class="card"><h2>GOAL$GAMBIT Companion App</h2><p class="muted">Download the latest Android companion or reinstall it if needed. This update link remains available after your setup is complete.</p><p id="companionUpdateNotice" class="success" role="status" aria-live="polite" hidden></p><a id="androidCompanionDownload" class="button" href="https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk">Download latest Android app</a></section>
-<section class="card"><h2>Device status</h2><p class="muted">Browser notifications are turned off. Match alerts are sent through the Android Companion app.</p><div class="status-grid"><div class="status-cell"><small>Android Companion</small><strong id="companionRegistration">Checking…</strong></div><div class="status-cell" id="androidDeviceStatus" hidden><small>Registered Android companion builds</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="companionHelp" class="muted" role="status" aria-live="polite"></p></section>
-<section class="card"><h2>Recent Alerts</h2><p class="muted">“Accepted” means a push service accepted the message for delivery; it does not confirm that your phone displayed it.</p><div id="history">Loading notification history…</div></section>
+<section class="card"><h2>Companion status</h2><p class="muted">Browser notifications are turned off. Match alerts are sent through the Android Companion app.</p><div class="status-grid"><div class="status-cell"><small>Android Companion</small><strong id="companionRegistration">Checking…</strong></div><div class="status-cell" id="androidDeviceStatus" hidden><small>Registered Android companion builds</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="companionHelp" class="muted" role="status" aria-live="polite"></p></section>
+<section class="card"><h2>Recent Alerts</h2><p class="muted">Alerts are sent through the Companion app. A “Sent” label does not confirm that your phone displayed the alert.</p><div id="history">Loading notification history…</div></section>
 <section class="card"><a class="button secondary" href="match-hub.html">Match Hub</a><a class="button secondary" href="konami.html">eFootball dashboard</a></section>
 </main>
 <script>
@@ -43,27 +43,27 @@
   function fmt(value){try{return value?new Date(value).toLocaleString():"";}catch(_){return "";}}
   async function refreshStatus(){
     var status=await GG.getPushStatus();
-    $("companionRegistration").textContent=status.serverReachable?(Number(status.activeAndroidDevices)>0?"Registered":"Not registered") : "Could not check";
+    $("companionRegistration").textContent=status.serverReachable?(Number(status.activeAndroidDevices)>0?"Registered":"Not set up") : "Status temporarily unavailable";
     $("androidDeviceStatus").hidden=!status.canViewAndroidDeviceDetails;
     var androidDevices=status.androidDevices||[];
     $("androidDeviceCount").textContent=status.serverReachable?String(androidDevices.length):"Unavailable";
     var deviceList=$("androidDeviceList");
     deviceList.replaceChildren();
-    if(!status.serverReachable){deviceList.textContent="Could not check the Android app registrations.";}
-    else if(!androidDevices.length){deviceList.textContent="No Android companion build is registered to this account.";}
+    if(!status.serverReachable){deviceList.textContent="Registration details are temporarily unavailable.";}
+    else if(!androidDevices.length){deviceList.textContent="No Android Companion is registered to this account.";}
     else androidDevices.forEach(function(device){var line=document.createElement("div");line.textContent=(device.deviceName||"Android build version not reported")+(device.updatedAt?" · registered "+fmt(device.updatedAt):"");deviceList.appendChild(line);});
     $("companionHelp").textContent=status.serverReachable
       ? (Number(status.activeAndroidDevices)>0?"Companion is registered. Keep Android notifications allowed for match alerts and room-code replies.":"Open the Android Companion and sign in to register this device for match alerts.")
-      : "The server could not check Companion registration. Try again when the connection is available.";
+      : "Companion status is temporarily unavailable. Please try again shortly.";
     return status;
   }
   async function refreshHistory(){
     var r=await GG.api("/api/push/history",{noRedirect:true});
-    if(!r.ok){$("history").textContent=r.data.message||"Notification history is unavailable.";return;}
+    if(!r.ok){$("history").textContent="Alerts could not be loaded just now. Please try again shortly.";return;}
     var list=r.data.notifications||[];
     if(!list.length){$("history").textContent="No match notifications yet.";return;}
     $("history").innerHTML=list.map(function(item){
-      var delivery=item.deliveryStatus==="accepted_by_push_service"?"Accepted by push service":item.deliveryStatus==="queued"?"Waiting to send":item.deliveryStatus==="failed"?"Delivery failed":"No active subscription when created";
+      var delivery=item.deliveryStatus==="accepted_by_push_service"?"Sent":item.deliveryStatus==="queued"?"Waiting to send":item.deliveryStatus==="failed"?"Not sent":"No Companion was registered when this alert was created";
       var clicked=item.clicked_at?" · Opened "+fmt(item.clicked_at):"";
       return "<div class='item'><strong>"+GG.escapeHTML(item.title)+"</strong><div>"+GG.escapeHTML(item.body)+"</div><small class='muted'>"+GG.escapeHTML(fmt(item.created_at))+" · "+GG.escapeHTML(delivery+clicked)+"</small></div>";
     }).join("");
