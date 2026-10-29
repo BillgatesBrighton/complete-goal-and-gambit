@@ -107,11 +107,6 @@ const declineDrawButton = document.getElementById("declineDrawButton");
 const returnDashboardButton = document.getElementById("returnDashboardButton");
 
 const files = ["a","b","c","d","e","f","g","h"];
-const symbols = {
-  w:{k:"♔",q:"♕",r:"♖",b:"♗",n:"♘",p:"♙"},
-  b:{k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"}
-};
-
 function token(){ return localStorage.getItem("goalGambitToken") || ""; }
 function username(){ return localStorage.getItem("goalGambitUsername") || "You"; }
 function monotonicNow(){
@@ -161,7 +156,7 @@ function handleNativeEngineResult(data){
   clearTimeout(pending.timer);
   pendingNativeEngineChecks.delete(String(data.requestId));
   if(data.available===false){
-    setCompanionEngineStatus("Companion engine unavailable · website validation remains active",true);
+    setCompanionEngineStatus("Chess match updates are unavailable.",true);
     return;
   }
   if(data.stale)return;
@@ -172,13 +167,12 @@ function handleNativeEngineResult(data){
     cacheNativeLegalMoves(data,false);
   }
   if(data.agreesWithServer&&data.legal){
-    const finding=data.checkmate?"checkmate":data.stalemate?"stalemate":data.draw?"draw":data.check?"check":"position";
-    setCompanionEngineStatus("Native Android engine confirmed "+finding+" · server remains authoritative",true);
+    setCompanionEngineStatus("Match position verified.",true);
   }else{
-    setCompanionEngineStatus("Native engine differs · server result remains authoritative",true);
+    setCompanionEngineStatus("The server is checking this match position.",true);
   }
   setTimeout(()=>{
-    if(companionEngineStatusElement&&companionEngineStatusElement.textContent.startsWith("Native Android engine"))
+    if(companionEngineStatusElement&&companionEngineStatusElement.textContent==="Match position verified.")
       setCompanionEngineStatus("",false);
   },4500);
 }
@@ -461,6 +455,10 @@ function createBoardSquare(name){
   const square=document.createElement("button");
   square.type="button";square.className="square";square.dataset.square=name;
   const glyph=document.createElement("span");glyph.className="piece-glyph";glyph.setAttribute("aria-hidden","true");
+  const pieceSvg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  pieceSvg.setAttribute("viewBox","0 0 100 100");pieceSvg.setAttribute("focusable","false");
+  const pieceUse=document.createElementNS("http://www.w3.org/2000/svg","use");
+  pieceSvg.appendChild(pieceUse);glyph.appendChild(pieceSvg);
   const fileLabel=document.createElement("span");fileLabel.className="coord-file";fileLabel.setAttribute("aria-hidden","true");
   const rankLabel=document.createElement("span");rankLabel.className="coord-rank";rankLabel.setAttribute("aria-hidden","true");
   square.append(glyph,fileLabel,rankLabel);
@@ -468,9 +466,18 @@ function createBoardSquare(name){
     if(Date.now()<suppressSquareClickUntil)return;
     clickSquare(square.dataset.square);
   });
-  boardSquares.set(name,{element:square,glyph,fileLabel,rankLabel});
+  boardSquares.set(name,{element:square,glyph,pieceUse,fileLabel,rankLabel});
   chessBoard.appendChild(square);
   return boardSquares.get(name);
+}
+function setPieceSvg(element,color,type){
+  if(!element)return;
+  element.textContent="";
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox","0 0 100 100");svg.setAttribute("focusable","false");svg.setAttribute("aria-hidden","true");
+  const use=document.createElementNS("http://www.w3.org/2000/svg","use");
+  use.setAttribute("href","../images/chess-pieces.svg#"+color+type);
+  svg.appendChild(use);element.appendChild(svg);
 }
 function ensureBoardSquares(){
   if(!chessBoard)return;
@@ -505,7 +512,9 @@ function renderBoard(){
       const p=b[r][c];
       const pieceKey=p?p.color+p.type:"";
       if(previous.pieceKey!==pieceKey){
-        cell.glyph.textContent=p?symbols[p.color][p.type]:"";
+        const pieceId=p?(p.color+p.type):"";
+        if(pieceId)cell.pieceUse.setAttribute("href","../images/chess-pieces.svg#"+pieceId);
+        else cell.pieceUse.removeAttribute("href");
         cell.glyph.className="piece-glyph"+(p?" "+(p.color==="w"?"white-piece":"black-piece"):"");
         cell.glyph.style.transform="";
       }
@@ -718,7 +727,7 @@ function openPromotionChooser(from,to){
   if(promotionTitleElement)promotionTitleElement.textContent="Choose a piece for your pawn on "+to.toUpperCase();
   Object.entries(promotionButtons).forEach(([piece,button])=>{
     if(!button)return;
-    button.textContent=symbols[playerColor][piece];
+    setPieceSvg(button,playerColor,piece);
     button.setAttribute("aria-label","Promote to "+({q:"queen",r:"rook",b:"bishop",n:"knight"}[piece]));
   });
   if(promotionModal)promotionModal.classList.remove("hidden");
@@ -1026,7 +1035,7 @@ function applyState(m){
     queuedPremove=null;
     if(cancelPremoveButton){cancelPremoveButton.hidden=true;cancelPremoveButton.classList.add("hidden")}
     renderBoard();
-    setStatus("Checking your queued premove against the confirmed position…","waiting");
+    setStatus("Your premove is being submitted from the confirmed position…","waiting");
     Promise.resolve().then(()=>sendMove(premove.from,premove.to,premove.promotion)).then(accepted=>{
       if(!accepted&&Number(matchId)===Number(m.matchId)&&state&&state.status==="active"&&state.activeColor===playerColor)
         setStatus("Premove cancelled because it is no longer legal after the opponent’s move.","waiting");
@@ -1314,7 +1323,7 @@ function setupSocket(){
   if(!window.io){pauseForRealtimeLoss("Live match connectivity is unavailable. Official play is paused.");scheduleMatchPolling();return}
   const epoch=boardEpoch;
   try{
-    const candidate=window.io(apiBase()||location.origin,{auth:{token:token()},transports:["websocket","polling"]});
+    const candidate=window.io(apiBase()||location.origin,{auth:{token:token(),clientType:"website-board"},transports:["websocket","polling"]});
     socket=candidate;socketMatchId=targetMatchId;
     realtimeMatchReady=false;
     const isCurrent=()=>isCurrentMatchSocket(candidate,targetMatchId,epoch);
@@ -1352,7 +1361,7 @@ function setupSocket(){
     });
     candidate.on("chess:engine:status",data=>{
       if(!isCurrent()||Number(data&&data.matchId)!==targetMatchId)return;
-      setCompanionEngineStatus(data&&data.available?"Native Android chess engine connected":"",Boolean(data&&data.available));
+      setCompanionEngineStatus(data&&data.available?"Chess match updates are available":"",Boolean(data&&data.available));
     });
     candidate.on("chess:engine:result",data=>{
       if(isCurrent())handleNativeEngineResult(data);
@@ -1364,6 +1373,19 @@ function setupSocket(){
     candidate.on("chess:move",data=>{
       if(!isCurrent()||Number(data&&data.matchId)!==targetMatchId)return;
       if(Number(data.actorUserId)===Number(getUserId()))return;
+      const shared=data&&data.match;
+      if(shared&&Number(shared.matchId)===targetMatchId&&typeof shared.fen==="string"){
+        if(!state||Number(state.matchId)!==targetMatchId){loadMatch();return}
+        const authoritative={
+          ...shared,
+          playerColor:state.playerColor,
+          opponentId:state.opponentId,
+          ratingBracket:state.ratingBracket
+        };
+        if(positionInHistory(state,authoritative))applyState(authoritative);
+        else if(!positionInHistory(authoritative,state))loadMatch();
+        return;
+      }
       loadMatch();
     });
     const handleAuthoritativePause=data=>{
@@ -1478,8 +1500,9 @@ window.addEventListener("online",()=>{
   retryDelayMs=2000;
   if(matchId&&socket&&socket.connected){
     realtimeMatchReady=false;updateMatchActions();updateClocks();
-    socket.emit("chess:join",{matchId:Number(matchId)});
-    socket.emit("chess:engine:watch",{matchId:Number(matchId)});
+    // Socket.IO's connect handler rejoins after a real transport reconnect.
+    // If only the browser's online event fired, keep the existing room and
+    // fetch authoritative state without issuing a duplicate join.
   }else if(matchId&&!socket)setupSocket();
   if(matchId)loadMatch();
 });

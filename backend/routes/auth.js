@@ -5,6 +5,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
 const rateLimit = require("../middleware/rateLimit");
+const { publicAccountRole } = require("../middleware/adminAuthorization");
 const router = express.Router();
 
 const loginLimiter = rateLimit({
@@ -379,6 +380,8 @@ module.exports = function(pool, authenticateToken, io) {
                 const token =
                     createToken(user);
 
+                user.role = publicAccountRole(user);
+
 
                 res.status(201).json({
 
@@ -622,7 +625,7 @@ module.exports = function(pool, authenticateToken, io) {
                             user.game,
 
                         role:
-                            user.role,
+                            publicAccountRole(user),
 
                         account_status:
                             user.account_status,
@@ -738,6 +741,7 @@ module.exports = function(pool, authenticateToken, io) {
 
                 const changedUser = updated.rows[0];
                 const token = createToken(changedUser);
+                changedUser.role = publicAccountRole(changedUser);
                 if (io) io.in("user_" + changedUser.id).disconnectSockets(true);
                 return res.json({
                     success: true,

@@ -471,7 +471,7 @@ module.exports = function (pool, authenticateToken, pushService) {
                 try { await client.query("ROLLBACK"); } catch (_) {}
             }
 
-            if (error.status) {
+            if (Number(error.status) >= 400 && Number(error.status) < 500) {
                 return res.status(error.status).json({ success: false, message: error.message });
             }
             if (error.code === "23505") {
@@ -634,7 +634,7 @@ module.exports = function (pool, authenticateToken, pushService) {
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("Tournament cancellation error:", error.message);
             return res.status(500).json({ success: false, message: "Could not cancel your tournament entry safely." });
         } finally {
@@ -811,12 +811,12 @@ module.exports = function (pool, authenticateToken, pushService) {
                 forfeited: true,
                 stakeTransferred: fee,
                 message: fee > 0
-                    ? "Tournament forfeited. Your KSh " + fee.toFixed(2) + " entry stake was split between both admin wallets." + (walkovers ? " Remaining fixtures were awarded as walkovers." : "")
+                    ? "Tournament forfeited. Your KSh " + fee.toFixed(2) + " entry stake will not be refunded." + (walkovers ? " Remaining fixtures were awarded as walkovers." : "")
                     : "Tournament forfeited." + (walkovers ? " Remaining fixtures were awarded as walkovers." : "")
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("Tournament forfeiture error:", error.message);
             return res.status(500).json({ success: false, message: "Could not forfeit the tournament entry safely." });
         } finally {

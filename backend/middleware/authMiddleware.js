@@ -1,6 +1,7 @@
 "use strict";
 
 const jwt = require("jsonwebtoken");
+const { publicAccountRole } = require("./adminAuthorization");
 
 let dbPool = null;
 
@@ -111,7 +112,7 @@ async function authenticateToken(req, res, next) {
             ...decoded,
             userId: user.id,
             username: user.username,
-            role: user.role
+            role: publicAccountRole(user)
         };
         return next();
     } catch (error) {

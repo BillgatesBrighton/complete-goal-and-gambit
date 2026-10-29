@@ -1139,7 +1139,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
                             : "matchmaking_request_rejected";
                 await recordMatchmakingRejection(userId, reason, mode);
             }
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("eFootball matchmaking error:", error.message);
             return res.status(500).json({ success: false, message: "Unable to start eFootball matchmaking." });
         } finally {
@@ -1257,7 +1257,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            return res.status(error.status || 400).json({ success: false, message: error.message || "Unable to cancel this search." });
+            const status = Number(error && error.status);
+            if (status >= 400 && status < 500) return res.status(status).json({ success: false, message: error.message || "Unable to cancel this search." });
+            console.error("eFootball cancellation failed:", error && error.message);
+            return res.status(500).json({ success: false, message: "Unable to cancel this search. Try again." });
         } finally {
             client.release();
         }
@@ -1303,7 +1306,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             return res.json({ success: true, expiresInSeconds: SEARCH_PRESENCE_TTL_SECONDS, match: updated });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             return res.status(500).json({ success: false, message: "Unable to renew this match check-in." });
         } finally {
             client.release();
@@ -1477,7 +1480,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             return res.status(201).json({ success: true, message: "Match joined.", match: updated });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("eFootball manual join error:", error.message);
             return res.status(500).json({ success: false, message: "Unable to join match." });
         } finally {

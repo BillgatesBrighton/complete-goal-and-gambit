@@ -21,12 +21,13 @@ function listen(app) {
 }
 
 test("admin announcement publishing queues audience delivery and scheduled delivery persists without early push", async (t) => {
+    process.env.ADMIN_USER_IDS = "39,40";
     const queued = [];
     const inserted = [];
     const pool = {
         query: async (sql) => {
             assert.match(String(sql), /SELECT id, username, role FROM users/);
-            return { rows: [{ id: 1, username: "admin", role: "admin" }] };
+            return { rows: [{ id: 39, username: "briton", role: "admin" }] };
         },
         connect: async () => ({
             query: async (sql, values) => {
@@ -59,7 +60,7 @@ test("admin announcement publishing queues audience delivery and scheduled deliv
         },
         sendPendingJobs: async () => []
     };
-    const auth = (req, _res, next) => { req.user = { userId: 1, username: "admin" }; next(); };
+    const auth = (req, _res, next) => { req.user = { userId: 39, username: "briton" }; next(); };
     const app = express();
     app.use(express.json());
     app.use("/api/admin", adminRoutes(pool, auth, undefined, pushService));
@@ -428,6 +429,7 @@ test("companion onboarding requires authenticated app registration, current term
 });
 
 test("companion tracker is administrator-only and reports real database aggregates", async (t) => {
+    process.env.ADMIN_USER_IDS = "39,40";
     const queries = [];
     const pool = {
         async query(sql, values) {
@@ -435,7 +437,7 @@ test("companion tracker is administrator-only and reports real database aggregat
             queries.push({ query, values });
             if (/SELECT id, username, role FROM users WHERE id = \$1/.test(query)) {
                 const id = Number(values[0]);
-                return { rows: [{ id, username: id === 1 ? "admin" : "player", role: id === 1 ? "admin" : "player" }] };
+                return { rows: [{ id, username: id === 39 ? "briton" : "player", role: id === 39 ? "admin" : "player" }] };
             }
             if (query.includes("total_members")) return { rows: [{ total_members: 3, guide_acknowledged: 2, terms_accepted: 2, onboarding_complete: 1, downloaded_members: 1, anonymous_downloads: 4, registered_members: 1, recently_active_members: 1, notifications_granted: 1, notifications_denied: 0, notifications_unknown: 0 }] };
             if (query.includes("SELECT COUNT(*)::int AS total FROM member_rows")) return { rows: [{ total: 1 }] };
@@ -459,7 +461,7 @@ test("companion tracker is administrator-only and reports real database aggregat
     assert.equal(denied.status, 403);
     assert.equal(queries.length, 1, "a non-admin is rejected before tracker data is queried");
 
-    const response = await fetch(url, { headers: { "x-test-user": "1" } });
+    const response = await fetch(url, { headers: { "x-test-user": "39" } });
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.stats.total_members, 3);
@@ -477,7 +479,7 @@ test("companion tracker is administrator-only and reports real database aggregat
     assert.deepEqual(memberQuery.values.slice(0, 4), [companionRoutes.GUIDE_VERSION, companionRoutes.TERMS_VERSION, "%pla!%yer%", "pla%yer"]);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
 
-    const detail = await fetch("http://127.0.0.1:" + server.address().port + "/api/admin/companion-tracker/42", { headers: { "x-test-user": "1" } });
+    const detail = await fetch("http://127.0.0.1:" + server.address().port + "/api/admin/companion-tracker/42", { headers: { "x-test-user": "39" } });
     assert.equal(detail.status, 200);
     const detailBody = await detail.json();
     assert.equal(detailBody.member.username, "player");

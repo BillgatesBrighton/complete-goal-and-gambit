@@ -279,13 +279,14 @@ CREATE TABLE IF NOT EXISTS chess_scheduled_matches (
     id                      BIGSERIAL PRIMARY KEY,
     host_user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     guest_user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    scheduled_at             TIMESTAMPTZ NOT NULL,
+    scheduled_at             TIMESTAMPTZ,
     time_zone                VARCHAR(64) NOT NULL DEFAULT 'Africa/Nairobi',
     time_control             VARCHAR(20) NOT NULL DEFAULT '10+5',
     status                   VARCHAR(20) NOT NULL DEFAULT 'pending',
     host_ready_at            TIMESTAMPTZ,
     guest_ready_at           TIMESTAMPTZ,
     match_id                 INTEGER REFERENCES chess_matches(id) ON DELETE SET NULL,
+    stake_amount             NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (stake_amount >= 0),
     reminder_60m_sent_at     TIMESTAMPTZ,
     reminder_10m_sent_at     TIMESTAMPTZ,
     reminder_start_sent_at   TIMESTAMPTZ,
@@ -295,6 +296,9 @@ CREATE TABLE IF NOT EXISTS chess_scheduled_matches (
     CONSTRAINT chess_scheduled_matches_status CHECK (status IN ('pending','accepted','declined','cancelled','started')),
     CONSTRAINT chess_scheduled_matches_control CHECK (time_control IN ('10+5','3+2','1+1'))
 );
+ALTER TABLE chess_scheduled_matches ALTER COLUMN scheduled_at DROP NOT NULL;
+ALTER TABLE chess_scheduled_matches
+    ADD COLUMN IF NOT EXISTS stake_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (stake_amount >= 0);
 CREATE INDEX IF NOT EXISTS idx_chess_scheduled_matches_due
     ON chess_scheduled_matches (scheduled_at)
     WHERE status='accepted';

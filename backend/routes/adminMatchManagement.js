@@ -5,6 +5,7 @@ const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { recordJournal } = require("../services/financialLedger");
 const chessRouteFactory = require("./chess");
 const settleChessMatch = chessRouteFactory.settleMatch;
+const { createAdminOnly } = require("../middleware/adminAuthorization");
 
 const TERMINAL = new Set(["completed", "cancelled"]);
 const CHESS_ACTIVE = new Set(["waiting", "active"]);
@@ -13,21 +14,7 @@ const KONAMI_ACTIVE = new Set(["waiting", "ready", "playing", "awaiting_verifica
 module.exports = function createAdminMatchManagementRoutes(pool, authenticateToken) {
     const router = express.Router();
 
-    async function adminOnly(req, res, next) {
-        res.setHeader("Cache-Control", "private, no-store");
-        res.setHeader("Pragma", "no-cache");
-        try {
-            const result = await pool.query("SELECT id,username,role FROM users WHERE id=$1", [req.user.userId]);
-            if (!result.rows.length || result.rows[0].role !== "admin") {
-                return res.status(403).json({ success: false, message: "Administrator access required." });
-            }
-            req.admin = result.rows[0];
-            return next();
-        } catch (error) {
-            console.error("Admin match authorization failed:", error.message);
-            return res.status(500).json({ success: false, message: "Could not verify administrator access." });
-        }
-    }
+    const adminOnly = createAdminOnly(pool, "Admin match authorization failed");
 
     function validId(value) {
         const id = Number(value);

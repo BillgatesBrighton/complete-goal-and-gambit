@@ -167,7 +167,7 @@ function createChessEngineRelay(pool, io, options) {
                         requestId: data && data.requestId,
                         matchId: Number(data && data.matchId) || 0,
                         available: false,
-                        message: "Native chess validation is temporarily unavailable."
+                        message: "Chess move verification is temporarily unavailable."
                     });
                 });
         });
@@ -348,7 +348,6 @@ function createChessEngineRelay(pool, io, options) {
             clockEstimate: data.clockEstimate && typeof data.clockEstimate === "object" ? data.clockEstimate : null,
             agreesWithServer: data.legal === true && data.stale !== true && data.historyComplete === true &&
                 data.agreesWithExpectedPosition === true && resultingFen === item.expectedFen,
-            source: "android-native-chess-engine"
         };
         if (!verifyStoredMatchState(match)) await reportStoredIntegrityFailure(match);
         io.to(item.browserSocketId).emit("chess:engine:result", response);
@@ -361,7 +360,6 @@ function createChessEngineRelay(pool, io, options) {
                 legalMoves: authoritativeLegalMoves,
                 legalMovesVerified: true,
                 predictionCacheHit: true,
-                source: "android-native-chess-engine"
             });
         }
     }

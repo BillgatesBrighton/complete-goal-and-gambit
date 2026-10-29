@@ -9,6 +9,7 @@ const path = require("path");
 const createAdminMatchManagementRoutes = require("../routes/adminMatchManagement");
 
 test("admins can view filtered matches, cancel and refund an unsettled match, then clear and restore it", async (t) => {
+    process.env.ADMIN_USER_IDS = "39,40";
     const queries = [];
     const writes = [];
     const currentMatch = {
@@ -37,8 +38,8 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
     const pool = {
         async query(sql, params) {
             queries.push({ sql: String(sql), params });
-            if (/SELECT id,username,role FROM users WHERE id=\$1/i.test(String(sql))) {
-                return { rows: [{ id: Number(params[0]), username: Number(params[0]) === 1 ? "admin" : "player", role: Number(params[0]) === 1 ? "admin" : "user" }] };
+            if (/SELECT id,\s*username,\s*role FROM users WHERE id\s*=\s*\$1/i.test(String(sql))) {
+                return { rows: [{ id: Number(params[0]), username: Number(params[0]) === 39 ? "briton" : "player", role: Number(params[0]) === 39 ? "admin" : "user" }] };
             }
         if (String(sql).includes("SELECT player_white_id,player_black_id,status,settled_at,connection_paused_at FROM chess_matches")) return { rows: [{ player_white_id: 21, player_black_id: 22, status: chessMatch.status, settled_at: chessMatch.settled_at, connection_paused_at: chessMatch.connection_paused_at || null }] };
             if (String(sql).includes("FROM efootball_matches m")) return { rows: [konamiListRow] };
@@ -101,19 +102,19 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
     assert.equal(player.status, 403, "players cannot access admin match management");
     assert.equal(queries.filter((item) => item.sql.includes("FROM efootball_matches m")).length, 0, "unauthorized users do not reach match data queries");
 
-    const listed = await fetch(base + "?game=konami&type=ranked", { headers: { "x-test-user": "1" } });
+    const listed = await fetch(base + "?game=konami&type=ranked", { headers: { "x-test-user": "39" } });
     const listBody = await listed.json();
     assert.equal(listed.status, 200);
     assert.equal(listBody.matches[0].can_cancel_refund, true);
     assert.equal(listBody.matches[0].can_edit_score, true);
     assert.match(queries.at(-1).sql, /CASE WHEN m\.mode='tournament'/, "Konami rows are classified by ranked, league, or tournament mode");
 
-    const chessListed = await fetch(base + "?game=chess&type=casual", { headers: { "x-test-user": "1" } });
+    const chessListed = await fetch(base + "?game=chess&type=casual", { headers: { "x-test-user": "39" } });
     const chessListBody = await chessListed.json();
     assert.equal(chessListed.status, 200);
     assert.equal(chessListBody.matches[0].can_edit_score, true);
     const chessResult = await fetch(base + "/chess/55/result", {
-        method: "POST", headers: { "x-test-user": "1", "content-type": "application/json" },
+        method: "POST", headers: { "x-test-user": "39", "content-type": "application/json" },
         body: JSON.stringify({ result: "white_win", reason: "Screenshot confirmed White won." })
     });
     assert.equal(chessResult.status, 200);
@@ -121,7 +122,7 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
     assert.ok(writes.some((item) => item.sql.includes("admin_match_management_events") && item.params[0] === 55), "Chess result changes are audited with the settlement");
 
     const cancel = await fetch(base + "/konami/44/cancel-refund", {
-        method: "POST", headers: { "x-test-user": "1", "content-type": "application/json" },
+        method: "POST", headers: { "x-test-user": "39", "content-type": "application/json" },
         body: JSON.stringify({ reason: "Player support requested cancellation." })
     });
     const cancelBody = await cancel.json();
@@ -131,16 +132,16 @@ test("admins can view filtered matches, cancel and refund an unsettled match, th
     assert.equal(writes.filter((item) => item.sql.startsWith("INSERT INTO transactions")).length, 2);
     assert.ok(writes.some((item) => item.sql.includes("admin_match_management_events")), "cancellation is audited");
     const duplicateCancel = await fetch(base + "/konami/44/cancel-refund", {
-        method: "POST", headers: { "x-test-user": "1", "content-type": "application/json" },
+        method: "POST", headers: { "x-test-user": "39", "content-type": "application/json" },
         body: JSON.stringify({ reason: "Trying the same refund again." })
     });
     assert.equal(duplicateCancel.status, 409, "a settled match cannot receive a second admin refund");
     assert.equal(writes.filter((item) => item.sql.startsWith("UPDATE wallets")).length, 2);
 
-    const clear = await fetch(base + "/konami/44/clear", { method: "POST", headers: { "x-test-user": "1" } });
+    const clear = await fetch(base + "/konami/44/clear", { method: "POST", headers: { "x-test-user": "39" } });
     assert.equal(clear.status, 200);
     assert.ok(writes.some((item) => item.sql.startsWith("UPDATE efootball_matches SET admin_cleared_at")));
-    const restore = await fetch(base + "/konami/44/restore", { method: "POST", headers: { "x-test-user": "1" } });
+    const restore = await fetch(base + "/konami/44/restore", { method: "POST", headers: { "x-test-user": "39" } });
     assert.equal(restore.status, 200);
     assert.equal(currentMatch.admin_cleared_at, null);
 

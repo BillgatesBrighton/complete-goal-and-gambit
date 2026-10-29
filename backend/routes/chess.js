@@ -896,7 +896,39 @@ return {
     connectionLostUserId:
         match.connection_lost_user_id == null ? null : Number(match.connection_lost_user_id)
 };
+}
 
+// A shared match-room update is not personalized to either player. Keep this
+// projection limited to the public board, participants, clocks, and match data.
+function publicSocketMatchState(match, knownPosition, knownMove) {
+    const state = publicMatchState(match, null, knownPosition, knownMove);
+    return {
+        matchId: state.matchId,
+        status: state.status,
+        result: state.result,
+        winnerId: state.winnerId,
+        playerWhiteId: state.playerWhiteId,
+        playerBlackId: state.playerBlackId,
+        fen: state.fen,
+        lastMove: state.lastMove,
+        checkSquare: state.checkSquare,
+        pgn: state.pgn,
+        whiteName: state.whiteName,
+        blackName: state.blackName,
+        whiteRating: state.whiteRating,
+        blackRating: state.blackRating,
+        whiteTimeMs: state.whiteTimeMs,
+        blackTimeMs: state.blackTimeMs,
+        activeColor: state.activeColor,
+        timeControl: state.timeControl,
+        matchType: state.matchType,
+        stake: state.stake,
+        drawOfferUserId: state.drawOfferUserId,
+        startedAt: state.startedAt,
+        finishedAt: state.finishedAt,
+        connectionPaused: state.connectionPaused,
+        connectionPauseReason: state.connectionPauseReason
+    };
 }
 
 // ======================================================
@@ -1411,7 +1443,7 @@ try {
 // helpers that survived. Create-match, matchmaking, move, draw offer
 // and flag-timer routes still need to be restored/written.
 //
-module.exports = function (pool, authenticateToken, io, pushService) {
+module.exports = function (pool, authenticateToken, io, pushService, accountPresence) {
 
     const router = express.Router();
     let connectionMonitor = null;
@@ -1473,6 +1505,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
     function queueChessTurnNotification(matchId, match, color, ply) {
         const nextUserId = Number(color === "w" ? match.player_white_id : match.player_black_id);
         if (!Number.isSafeInteger(nextUserId) || nextUserId <= 0 || !Number.isInteger(ply) || ply <= 0) return;
+        if (accountPresence && typeof accountPresence.isChessMatchVisible === "function" &&
+            accountPresence.isChessMatchVisible(nextUserId, matchId)) return;
         queueChessNotifications(matchId, [nextUserId], "turn:" + ply,
             "Chess · Your turn", "It is your turn in chess. Open your chessboard to continue.");
     }
@@ -1928,10 +1962,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                 [userId]
             );
             if (!account.rows.length || account.rows[0].account_status !== "active") {
-                throw new Error("Your account cannot start a chess match.");
+                throw Object.assign(new Error("Your account cannot start a Chess match."), { status: 403 });
             }
             if (!["chess", "both"].includes(account.rows[0].game)) {
-                throw new Error("Your account is not registered for Chess.");
+                throw Object.assign(new Error("Your account is not registered for Chess."), { status: 403 });
             }
             const playerRating = Number(account.rows[0].rating) || DEFAULT_RATING;
             const bracket = getRatingBracket(playerRating);
@@ -2010,7 +2044,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             res.status(201).json({success:true, matched:false, match:publicMatchState(match,userId)});
         } catch(e){
             try{await client.query("ROLLBACK")}catch(_){}
-            res.status(e.status || 400).json({success:false,message:e.message});
+            const status = Number(e && e.status);
+            if (status >= 400 && status < 500) return res.status(status).json({success:false,message:e.message});
+            console.error("Chess matchmaking failed:", e && e.message);
+            res.status(500).json({success:false,message:"Unable to start Chess matchmaking. Try again."});
         } finally{client.release();}
     });
 
@@ -2058,10 +2095,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
         try {
             await client.query("BEGIN");
             const r = await client.query(`SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE`, [matchId]);
-            if (!r.rows.length) throw new Error("Chess match not found.");
+            if (!r.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
             const m = r.rows[0];
-            if (Number(m.player_white_id) !== userId) throw new Error("Only the player who opened the search can cancel it.");
-            if (m.status !== "waiting") throw new Error("This match has already started.");
+            if (Number(m.player_white_id) !== userId) throw Object.assign(new Error("Only the player who opened the search can cancel it."), { status: 403 });
+            if (m.status !== "waiting") throw Object.assign(new Error("This match has already started."), { status: 409 });
             const stake = Number(m.stake_amount || 0);
             if (stake > 0) await unlockStake(client, userId, stake, `CHESS-CANCEL-${matchId}-${userId}`, "Chess search cancelled - stake refunded");
             await client.query(`UPDATE chess_matches SET status='cancelled', finished_at=NOW(), settled_at=NOW(), payout_status='refunded' WHERE id=$1`, [matchId]);
@@ -2069,7 +2106,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             res.json({success:true, message:"Search cancelled."});
         } catch(e) {
             try{await client.query("ROLLBACK")}catch(_){}
-            res.status(400).json({success:false,message:e.message});
+            const status = Number(e && e.status);
+            if (status >= 400 && status < 500) return res.status(status).json({success:false,message:e.message});
+            console.error("Chess search cancellation failed:", e && e.message);
+            res.status(500).json({success:false,message:"Could not cancel this Chess search. Try again."});
         } finally {client.release();}
     });
 
@@ -2179,7 +2219,10 @@ module.exports = function (pool, authenticateToken, io, pushService) {
             return res.json({ success: true, match: publicMatchState(updated, userId) });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            return res.status(error.status || 400).json({ success: false, message: error.message });
+            const status = Number(error && error.status);
+            if (status >= 400 && status < 500) return res.status(status).json({ success: false, message: error.message });
+            console.error("Chess match join failed:", error && error.message);
+            return res.status(500).json({ success: false, message: "Unable to join this Chess match. Try again." });
         } finally {
             client.release();
         }
@@ -2349,7 +2392,8 @@ module.exports = function (pool, authenticateToken, io, pushService) {
                     });
                 } else {
                     io.to("chess_match_" + matchId).emit("chess:move", {
-                        success: true, matchId: matchId, actorUserId: userId, move: move
+                        success: true, matchId: matchId, actorUserId: userId, move: move,
+                        match: publicSocketMatchState(updated, chess, move)
                     });
                 }
             }
@@ -2427,4 +2471,7 @@ module.exports = function (pool, authenticateToken, io, pushService) {
 module.exports.settleMatch = settleMatch;
 module.exports.createMatchPosition = createMatchPosition;
 module.exports.publicMatchState = publicMatchState;
+module.exports.lockStake = lockStake;
+module.exports.unlockStake = unlockStake;
+module.exports.ALLOWED_STAKES = ALLOWED_STAKES;
 

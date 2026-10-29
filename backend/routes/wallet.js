@@ -399,11 +399,13 @@ const routerFactory = function(
                 const duplicatePending = error && error.code === "23505" &&
                     String(error.constraint || "").includes("idx_manual_withdrawal_one_pending_per_user");
                 const status = Number(error && error.status) || (duplicatePending ? 409 : 500);
+                if (status >= 500) console.error("Withdrawal request creation failed:", error && error.message);
                 return res.status(status).json({
                     success: false,
                     message: duplicatePending
                         ? "You already have a withdrawal request awaiting admin payment."
-                        : error.message || "Could not create the withdrawal request."
+                        : status < 500 ? error.message || "Could not create the withdrawal request."
+                            : "Could not create the withdrawal request. Try again."
                 });
             } finally {
                 if (client) client.release();

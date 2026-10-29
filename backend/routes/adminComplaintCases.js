@@ -6,6 +6,7 @@ const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { recordJournal } = require("../services/financialLedger");
 const { safeStoragePath } = require("../services/privateEvidence");
+const { createAdminOnly } = require("../middleware/adminAuthorization");
 
 const CASE_STATUSES = new Set(["open", "investigating", "awaiting_player", "awaiting_evidence", "escalated", "resolved", "dismissed"]);
 const EVIDENCE_DIR = path.join(__dirname, "..", "uploads", "complaint-evidence");
@@ -13,21 +14,7 @@ const EVIDENCE_DIR = path.join(__dirname, "..", "uploads", "complaint-evidence")
 module.exports = function createAdminComplaintCases(pool, authenticateToken, pushService) {
     const router = express.Router();
 
-    async function adminOnly(req, res, next) {
-        res.setHeader("Cache-Control", "private, no-store");
-        res.setHeader("Pragma", "no-cache");
-        try {
-            const result = await pool.query("SELECT id,username,role FROM users WHERE id=$1", [req.user.userId]);
-            if (!result.rows.length || result.rows[0].role !== "admin") {
-                return res.status(403).json({ success: false, message: "Administrator access required." });
-            }
-            req.admin = result.rows[0];
-            return next();
-        } catch (error) {
-            console.error("Complaint admin authorization failed:", error.message);
-            return res.status(500).json({ success: false, message: "Could not verify administrator access." });
-        }
-    }
+    const adminOnly = createAdminOnly(pool, "Complaint admin authorization failed");
 
     function validId(value) {
         const id = Number(value);

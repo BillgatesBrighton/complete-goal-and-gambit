@@ -7,13 +7,31 @@ const fs = require("fs");
 const path = require("path");
 const adminRoutes = require("../routes/admin");
 const adminComplaintCases = require("../routes/adminComplaintCases");
+const { configuredAdministratorIds, isAuthorizedAdministrator, publicAccountRole } = require("../middleware/adminAuthorization");
 
 async function main() {
+    process.env.ADMIN_USER_IDS = "39,40";
+    assert.deepStrictEqual(Array.from(configuredAdministratorIds()).sort((a, b) => a - b), [39, 40], "the explicit allowlist contains exactly the two existing administrators");
+    assert(isAuthorizedAdministrator({ id: 39, role: "admin" }));
+    assert(isAuthorizedAdministrator({ id: 40, role: "admin" }));
+    assert.strictEqual(publicAccountRole({ id: 39, role: "admin" }), "admin");
+    assert.strictEqual(publicAccountRole({ id: 40, role: "admin" }), "admin");
+    assert(!isAuthorizedAdministrator({ id: 41, role: "admin" }), "a database admin role outside the immutable allowlist is not authorization");
+    assert(!isAuthorizedAdministrator({ id: 39, role: "user" }), "the allowlist alone does not grant a database role");
+    assert.strictEqual(publicAccountRole({ id: 41, role: "admin" }), "user", "unlisted roles are not exposed to clients");
+    assert.strictEqual(configuredAdministratorIds("39,40,41").size, 0, "the configuration rejects more than two accounts");
+    assert.strictEqual(configuredAdministratorIds("").size, 0, "missing allowlist configuration fails closed");
+
+    const authRoutes = fs.readFileSync(path.join(__dirname, "../routes/auth.js"), "utf8");
+    assert(authRoutes.includes("user.role = publicAccountRole(user)"), "registration and login responses must expose only an allowlisted admin role");
+    assert(authRoutes.includes("changedUser.role = publicAccountRole(changedUser)"), "account-update responses must preserve the same role policy");
     const adminPage = fs.readFileSync(path.join(__dirname, "../../frontend/pages/admin.html"), "utf8");
     const adminScript = fs.readFileSync(path.join(__dirname, "../../frontend/js/admin.js"), "utf8");
     const privateDashboard = fs.readFileSync(path.join(__dirname, "../private-pages/admin-dashboard.html"), "utf8");
     const reviewPage = fs.readFileSync(path.join(__dirname, "../../frontend/pages/admin-verifications.html"), "utf8");
     const privateReviewPage = fs.readFileSync(path.join(__dirname, "../private-pages/admin-verifications.html"), "utf8");
+    const publicDarajaPage = fs.readFileSync(path.join(__dirname, "../../frontend/pages/daraja-check.html"), "utf8");
+    const privateDarajaPage = fs.readFileSync(path.join(__dirname, "../private-pages/admin-daraja-check.html"), "utf8");
     assert(!adminPage.includes("GOAL$GAMBIT Admin Desk"), "the public page must not contain the dashboard markup");
     assert(adminPage.includes("/api/admin/dashboard-page"), "the public page must request the dashboard from the backend");
     assert(adminPage.includes('GG.api("/api/me", { noRedirect: true })'), "the public admin loader must show authentication failures instead of silently redirecting away");
@@ -28,6 +46,9 @@ async function main() {
     assert(reviewLoader, "the public result-review page must have its role-checking loader");
     new Function(reviewLoader[1]);
     assert(privateReviewPage.includes("<h1>⚖ Result Reviews</h1>"), "the private backend copy must retain the result-review screen");
+    assert(!publicDarajaPage.includes("SEND STK PROMPT"), "public static files must not expose administrator diagnostics controls");
+    assert(publicDarajaPage.includes("/api/admin/daraja-check-page"), "Daraja controls must load from the protected backend page route");
+    assert(privateDarajaPage.includes("SEND STK PROMPT"), "the private page retains its legitimate administrator controls");
     assert(adminScript.includes('r.data.user.role!=="admin"'), "the dashboard must verify the current account role");
     assert(adminScript.includes("/api/admin/password-recovery?status="), "the recovery manager must load pending and processed request statuses");
     assert(privateDashboard.includes('id="passwordRecoveryFilter"'), "the recovery manager must provide a status filter");
@@ -46,7 +67,7 @@ async function main() {
             queryLog.push(String(sql));
             if (/SELECT id,\s*username,\s*role FROM users WHERE id\s*=\s*\$1/i.test(String(sql))) {
                 const accountId = Number(params[0]);
-                return { rows: [{ id: accountId, username: accountId === 1 ? "billgates" : accountId === 3 ? "briton" : "player", role: [1, 3].includes(accountId) ? "admin" : "player" }] };
+                return { rows: [{ id: accountId, username: accountId === 40 ? "billgates" : accountId === 39 ? "briton" : "player", role: [39, 40, 41].includes(accountId) ? "admin" : "player" }] };
             }
             if (/FROM password_recovery_requests r/i.test(String(sql))) {
                 const status = params && params[0] === "all" ? "all" : "pending";
@@ -90,7 +111,7 @@ async function main() {
     function authenticateTestUser(req, res, next) {
         const id = Number(req.get("x-test-user"));
         if (!Number.isInteger(id) || id <= 0) return res.status(401).json({ success: false });
-        req.user = { userId: id };
+        req.user = { userId: id, role: req.get("x-test-role") || "player" };
         next();
     }
     app.use("/api/admin", adminRoutes(pool, authenticateTestUser));
@@ -122,31 +143,42 @@ async function main() {
         const playerReviewPage = await fetch(adminBase + "/result-review-page", { headers: { "x-test-user": "2" } });
         assert.strictEqual(playerReviewPage.status, 403, "non-admins must not be served the result-review screen");
 
-        const admin = await fetch(base, { headers: { "x-test-user": "1" } });
+        const forgedRole = await fetch(base, { headers: { "x-test-user": "2", "x-test-role": "admin" } });
+        assert.strictEqual(forgedRole.status, 403, "a forged client-side role cannot access complaint APIs");
+        const unlistedDatabaseAdmin = await fetch(base, { headers: { "x-test-user": "41" } });
+        assert.strictEqual(unlistedDatabaseAdmin.status, 403, "an account with an admin database role outside the allowlist is denied");
+
+        const admin = await fetch(base, { headers: { "x-test-user": "40" } });
         const adminBody = await admin.text();
         assert.strictEqual(admin.status, 200, "admins must be able to load complaint cases");
         assert(adminBody.includes(phone), "the admin complaint dashboard should include registered phone numbers");
         assert.strictEqual(admin.headers.get("cache-control"), "private, no-store", "admin case data must not be cached");
 
-        const adminPageResponse = await fetch(adminBase + "/dashboard-page", { headers: { "x-test-user": "1" } });
+        const adminPageResponse = await fetch(adminBase + "/dashboard-page", { headers: { "x-test-user": "40" } });
         const adminPageBody = await adminPageResponse.text();
         assert.strictEqual(adminPageResponse.status, 200, "admins must be served the private dashboard HTML");
         assert(adminPageBody.includes("GOAL$GAMBIT Admin Desk"), "the admin page endpoint should serve the dashboard to admins");
         assert.strictEqual(adminPageResponse.headers.get("cache-control"), "private, no-store", "private dashboard HTML must not be cached");
-        const secondAdminPage = await fetch(adminBase + "/dashboard-page", { headers: { "x-test-user": "3" } });
+        const secondAdminPage = await fetch(adminBase + "/dashboard-page", { headers: { "x-test-user": "39" } });
         assert.strictEqual(secondAdminPage.status, 200, "the second authorized admin must also be served the private dashboard");
         assert((await secondAdminPage.text()).includes("GOAL$GAMBIT Admin Desk"), "both admins must receive the same admin page");
-        const adminReviewPage = await fetch(adminBase + "/result-review-page", { headers: { "x-test-user": "1" } });
+        const adminReviewPage = await fetch(adminBase + "/result-review-page", { headers: { "x-test-user": "40" } });
         assert.strictEqual(adminReviewPage.status, 200, "admins must be served the private result-review screen");
         assert((await adminReviewPage.text()).includes("Result Reviews"), "admins should receive the result-review markup");
 
-        for (const adminId of [1, 3]) {
+        const darajaPage = await fetch(adminBase + "/daraja-check-page", { headers: { "x-test-user": "39" } });
+        assert.strictEqual(darajaPage.status, 200, "an allowlisted admin can load the protected Daraja page");
+        assert((await darajaPage.text()).includes("SEND STK PROMPT"));
+        const deniedDarajaPage = await fetch(adminBase + "/daraja-check-page", { headers: { "x-test-user": "2" } });
+        assert.strictEqual(deniedDarajaPage.status, 403, "ordinary players cannot load protected administrator markup");
+
+        for (const adminId of [40, 39]) {
             const recoveryQueue = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": String(adminId) } });
             assert.strictEqual(recoveryQueue.status, 200, "each authorized admin must be able to view all recovery requests");
             const queueBody = await recoveryQueue.json();
             assert.strictEqual(queueBody.requests.length, 2, "both admins must see the same recovery queue");
         }
-        for (const [adminId, requestId] of [[1, "00000000-0000-4000-8000-000000000001"], [3, "00000000-0000-4000-8000-000000000002"]]) {
+        for (const [adminId, requestId] of [[40, "00000000-0000-4000-8000-000000000001"], [39, "00000000-0000-4000-8000-000000000002"]]) {
             const reviewed = await fetch(adminBase + "/password-recovery/" + requestId + "/review", {
                 method: "POST",
                 headers: { "x-test-user": String(adminId), "Content-Type": "application/json" },
@@ -155,8 +187,8 @@ async function main() {
             assert.strictEqual(reviewed.status, 200, "each admin must independently approve a verified player request");
             assert.strictEqual(recoveryRows.get(requestId).status, "approved", "approval status must persist for refreshes");
         }
-        assert.deepStrictEqual(reviewedRequests.map(row => row.reviewer), [1, 3], "each admin must be recorded as the reviewer for their own request");
-        const updatedQueue = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": "3" } });
+        assert.deepStrictEqual(reviewedRequests.map(row => row.reviewer), [40, 39], "each admin must be recorded as the reviewer for their own request");
+        const updatedQueue = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": "39" } });
         const updatedBody = await updatedQueue.json();
         assert(updatedBody.requests.every(row => row.status === "approved"), "either admin can refresh the shared queue and see persisted review statuses");
         const unauthorizedRecovery = await fetch(adminBase + "/password-recovery?status=all", { headers: { "x-test-user": "2" } });

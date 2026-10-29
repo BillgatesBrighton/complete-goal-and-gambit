@@ -3229,7 +3229,7 @@ function renderOverview(fixtures, standings) {
 async function exitLeague(action, button) {
   const message = action === "cancel"
     ? "Cancel your league entry before your first opponent fixture is released? Your locked entry stake will be refunded."
-    : "Forfeit this league? Your first opponent receives a 3–0 walkover. Your locked stake will not be refunded and will be split equally between both admin wallets.";
+    : "Forfeit this league? Your first opponent receives a 3–0 walkover. Your locked stake will not be refunded.";
   if (!confirm(message)) return;
   button.disabled = true;
   button.textContent = action === "cancel" ? "Cancelling…" : "Forfeiting…";

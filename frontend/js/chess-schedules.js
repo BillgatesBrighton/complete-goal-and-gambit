@@ -3,7 +3,11 @@
 (function () {
     var form = document.getElementById("chessScheduleForm");
     var dateInput = document.getElementById("chessScheduleAt");
+    var dateField = document.getElementById("chessScheduleDateField");
     var opponentInput = document.getElementById("chessScheduleOpponent");
+    var invitationTypeInput = document.getElementById("chessInvitationType");
+    var stakeInput = document.getElementById("chessChallengeStake");
+    var stakeField = document.getElementById("chessScheduleStakeField");
     var clockInput = document.getElementById("chessScheduleClock");
     var submitButton = document.getElementById("chessScheduleSubmit");
     var feedback = document.getElementById("chessScheduleFeedback");
@@ -25,6 +29,14 @@
     function showFeedback(message, kind) {
         feedback.textContent = message || "";
         feedback.className = "chess-schedule-feedback" + (kind ? " " + kind : "");
+    }
+
+    function applyInvitationType() {
+        var direct = invitationTypeInput.value === "direct";
+        dateField.hidden = direct;
+        dateInput.required = !direct;
+        stakeField.hidden = !direct;
+        submitButton.textContent = direct ? "Send challenge" : "Send match invitation";
     }
 
     function button(label, action, scheduleId, secondary) {
@@ -53,9 +65,19 @@
             var heading = document.createElement("strong");
             heading.textContent = (schedule.isHost ? "You invited " : "Invitation from ") + schedule.opponentUsername;
             var time = document.createElement("p");
-            time.textContent = new Date(schedule.scheduledAt).toLocaleString() + " · " + schedule.timeControl;
+            time.textContent = schedule.isDirectChallenge
+                ? "Direct challenge · KSh " + Number(schedule.stakeAmount || 0).toFixed(2) + " · " + schedule.timeControl
+                : new Date(schedule.scheduledAt).toLocaleString() + " · " + schedule.timeControl;
             var status = document.createElement("p");
-            if (schedule.status === "pending") {
+            if (schedule.isDirectChallenge && schedule.status === "pending") {
+                status.textContent = schedule.isHost ? "Waiting for the other player to accept. Your stake is reserved." : "Accept to reserve the same stake and start the game.";
+            } else if (schedule.isDirectChallenge && schedule.status === "started") {
+                status.textContent = "Challenge accepted · the Chess game is ready.";
+            } else if (schedule.isDirectChallenge && schedule.status === "declined") {
+                status.textContent = schedule.isHost ? "Challenge declined · your reserved stake was returned." : "You declined this Chess challenge.";
+            } else if (schedule.isDirectChallenge && schedule.status === "cancelled") {
+                status.textContent = schedule.isHost ? "Challenge cancelled · your reserved stake was returned." : "The challenger cancelled this Chess challenge.";
+            } else if (schedule.status === "pending") {
                 status.textContent = schedule.isHost ? "Waiting for the other player to accept." : "Please accept or decline this invitation.";
             } else if (schedule.status === "accepted") {
                 status.textContent = "Accepted · " + (schedule.youReady ? "You are ready" : "You are not ready yet") + " · " + (schedule.opponentReady ? "opponent is ready" : "opponent is not ready");
@@ -80,7 +102,7 @@
                 if (!schedule.youReady && Date.now() < opensAt) ready.title = "Ready opens 10 minutes before the scheduled time.";
                 actions.appendChild(ready);
             }
-            if (schedule.canCancel) actions.appendChild(button("Cancel match", "cancel", schedule.id, true));
+            if (schedule.canCancel) actions.appendChild(button(schedule.isDirectChallenge ? "Cancel challenge" : "Cancel match", "cancel", schedule.id, true));
             if (schedule.matchId) {
                 var open = document.createElement("a");
                 open.className = "chess-schedule-action";
@@ -104,30 +126,36 @@
 
     form.addEventListener("submit", async function (event) {
         event.preventDefault();
-        setDateLimits();
-        var localDate = new Date(dateInput.value);
-        if (!dateInput.value || !Number.isFinite(localDate.getTime())) {
-            showFeedback("Choose a valid future date and time.", "error");
-            return;
+        var direct = invitationTypeInput.value === "direct";
+        var localDate = null;
+        if (!direct) {
+            setDateLimits();
+            localDate = new Date(dateInput.value);
+            if (!dateInput.value || !Number.isFinite(localDate.getTime())) {
+                showFeedback("Choose a valid future date and time.", "error");
+                return;
+            }
         }
         submitButton.disabled = true;
-        showFeedback("Sending the Chess invitation…");
+        showFeedback(direct ? "Sending the Chess challenge…" : "Sending the Chess invitation…");
         try {
             var result = await GG.api("/api/chess/schedules", {
                 method: "POST",
                 body: {
+                    type: direct ? "direct" : "scheduled",
                     opponentUsername: opponentInput.value.trim(),
-                    scheduledAt: localDate.toISOString(),
+                    stakeAmount: direct ? Number(stakeInput.value) : 0,
+                    ...(localDate ? { scheduledAt: localDate.toISOString() } : {}),
                     timeControl: clockInput.value,
                     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Nairobi"
                 },
                 noRedirect: true
             });
             if (!result.ok) {
-                showFeedback((result.data && result.data.message) || "Could not schedule the Chess match.", "error");
+                showFeedback((result.data && result.data.message) || (direct ? "Could not send the Chess challenge." : "Could not schedule the Chess match."), "error");
                 return;
             }
-            showFeedback("Invitation sent. If your opponent has Companion notifications enabled, they’ll receive an alert.", "success");
+            showFeedback((result.data && result.data.message) || (direct ? "Challenge sent." : "Invitation sent. If your opponent has Companion notifications enabled, they’ll receive an alert."), "success");
             opponentInput.value = "";
             await refreshSchedules();
         } catch (_) {
@@ -142,7 +170,9 @@
         if (!control || control.disabled) return;
         var action = control.dataset.action;
         var id = encodeURIComponent(control.dataset.scheduleId);
-        if (action === "cancel" && !window.confirm("Cancel this scheduled Chess match?")) return;
+        if (action === "cancel" && !window.confirm(control.textContent === "Cancel challenge"
+            ? "Cancel this Chess challenge? Its reserved stake will be returned to your wallet."
+            : "Cancel this scheduled Chess match?")) return;
         control.disabled = true;
         var route = action === "accept" || action === "decline" ? "/respond" : "/" + action;
         var body = action === "accept" || action === "decline" ? { action: action } : {};
@@ -150,7 +180,7 @@
             var result = await GG.api("/api/chess/schedules/" + id + route, { method: "POST", body: body, noRedirect: true });
             if (!result.ok) {
                 showFeedback((result.data && result.data.message) || "Could not update this scheduled match.", "error");
-            } else if (action === "ready" && result.data.started && result.data.matchId) {
+            } else if ((action === "ready" || action === "accept") && result.data.started && result.data.matchId) {
                 location.href = "board.html?matchId=" + encodeURIComponent(result.data.matchId);
                 return;
             } else {
@@ -165,6 +195,8 @@
     });
 
     setDateLimits();
+    invitationTypeInput.addEventListener("change", applyInvitationType);
+    applyInvitationType();
     refreshSchedules();
     window.setInterval(refreshSchedules, 20000);
     window.addEventListener("pageshow", function (event) {

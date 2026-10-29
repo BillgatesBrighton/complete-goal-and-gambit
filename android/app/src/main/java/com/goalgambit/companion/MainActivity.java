@@ -11,6 +11,8 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
@@ -45,7 +47,10 @@ import java.util.regex.Pattern;
 
 public final class MainActivity extends Activity {
     static final String ACTION_PUSH_RECEIVED = "com.goalgambit.companion.PUSH_RECEIVED";
+    private static volatile boolean activityResumed;
+    private static volatile long foregroundChessMatchId;
     private static final ExecutorService API_EXECUTOR = Executors.newSingleThreadExecutor();
+    private final Handler chessPresenceHandler = new Handler(Looper.getMainLooper());
     private LinearLayout content;
     private ScrollView screenScroll;
     private TextView statusView;
@@ -74,13 +79,29 @@ public final class MainActivity extends Activity {
     private boolean companionTermsAccepted;
     private String latestCompanionVersion;
     private ChessEngineSocket chessEngineSocket;
+    private ChessSoundPlayer chessSoundPlayer;
     private String chessEngineToken;
     private String termsStatusInFlightToken;
     private String termsStatusCheckedToken;
+    private final Runnable chessPresenceHeartbeat = new Runnable() {
+        @Override public void run() {
+            updateChessForegroundPresence();
+            if (activityResumed) chessPresenceHandler.postDelayed(this, 25000);
+        }
+    };
 
     private final BroadcastReceiver pushReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(android.content.Context context, Intent intent) {
+            long incomingChessMatchId = intent.getLongExtra(Notifications.EXTRA_CHESS_MATCH_ID, 0);
+            String incomingEventKey = intent.getStringExtra(Notifications.EXTRA_EVENT_KEY);
+            if (chessSoundPlayer != null && incomingEventKey != null) chessSoundPlayer.playNotification(incomingEventKey);
+            if (incomingChessMatchId > 0) {
+                selectedChessMatchId = incomingChessMatchId;
+                selectedChessMatchEventKey = incomingEventKey;
+                addChessMatchNotice(incomingChessMatchId, incomingEventKey);
+                updateChessForegroundPresence();
+            }
             refreshCompanionData();
             refreshNotificationCount();
         }
@@ -90,6 +111,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         Notifications.createChannel(this);
+        chessSoundPlayer = new ChessSoundPlayer(this);
         selectedMatchId = getIntent().getLongExtra(Notifications.EXTRA_MATCH_ID, 0);
         selectedChessMatchEventKey = getIntent().getStringExtra(Notifications.EXTRA_EVENT_KEY);
         selectedChessMatchId = getIntent().getLongExtra(Notifications.EXTRA_CHESS_MATCH_ID,
@@ -104,6 +126,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         if (!pushReceiverRegistered) {
             IntentFilter filter = new IntentFilter(ACTION_PUSH_RECEIVED);
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(pushReceiver, filter, RECEIVER_NOT_EXPORTED);
@@ -113,6 +136,9 @@ public final class MainActivity extends Activity {
         String bearer = TokenStore.read(this);
         if (bearer != null && companionTermsAccepted) {
             ensureChessEngineSocket(bearer);
+            updateChessForegroundPresence();
+            chessPresenceHandler.removeCallbacks(chessPresenceHeartbeat);
+            chessPresenceHandler.post(chessPresenceHeartbeat);
             syncCompanionInstallation();
             if (!SupportQueueStore.pending(this, TokenStore.accountUserId(bearer)).isEmpty()) enqueueSupportSync();
             refreshCompanionData();
@@ -122,6 +148,10 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        activityResumed = false;
+        chessPresenceHandler.removeCallbacks(chessPresenceHeartbeat);
+        foregroundChessMatchId = 0;
+        if (chessEngineSocket != null) chessEngineSocket.setForegroundMatchId(0);
         if (pushReceiverRegistered) {
             unregisterReceiver(pushReceiver);
             pushReceiverRegistered = false;
@@ -132,6 +162,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         stopChessEngineSocket();
+        if (chessSoundPlayer != null) chessSoundPlayer.release();
         super.onDestroy();
     }
 
@@ -143,6 +174,7 @@ public final class MainActivity extends Activity {
         selectedChessMatchEventKey = intent.getStringExtra(Notifications.EXTRA_EVENT_KEY);
         selectedChessMatchId = intent.getLongExtra(Notifications.EXTRA_CHESS_MATCH_ID,
             Notifications.chessMatchIdFromEventKey(selectedChessMatchEventKey));
+        if (activityResumed) updateChessForegroundPresence();
         selectedAnnouncementId = intent.getLongExtra(Notifications.EXTRA_ANNOUNCEMENT_ID, 0);
         selectedPushEventId = intent.getLongExtra(Notifications.EXTRA_PUSH_EVENT_ID, 0);
         markSelectedNotificationRead();
@@ -175,7 +207,7 @@ public final class MainActivity extends Activity {
         TextView title = text("GOAL$GAMBIT", 27, Color.rgb(237, 195, 53), true);
         content.addView(title, params(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         String buildLabel = BuildConfig.DEBUG ? "TRIAL BUILD" : "RELEASE BUILD";
-        TextView subtitle = text("Chess engine and notification companion · " + buildLabel + " · v" + BuildConfig.VERSION_NAME, 13, Color.LTGRAY, false);
+        TextView subtitle = text("Notifications and chess match updates · " + buildLabel + " · v" + BuildConfig.VERSION_NAME, 13, Color.LTGRAY, false);
         content.addView(subtitle, marginParams(-1, -2, 0, 4, 0, 8));
         welcomeGreetingView = text("Welcome back,", 14, Color.rgb(201, 184, 111), false);
         welcomeGreetingView.setVisibility(View.GONE);
@@ -395,7 +427,7 @@ public final class MainActivity extends Activity {
         content.addView(signOut, marginParams(-1, -2, 0, 0, 0, 14));
         signOut.setOnClickListener(view -> disableNotifications(true));
         serviceStatusView = text("Checking companion services…", 13, Color.LTGRAY, false);
-        chessEngineStatusView = text("Native chess engine: connecting…", 13, Color.LTGRAY, false);
+        chessEngineStatusView = text("Checking chess match updates…", 13, Color.LTGRAY, false);
         content.addView(chessEngineStatusView, marginParams(-1, -2, 0, 0, 0, 9));
         upcomingStatusView = text("Checking upcoming games…", 15, Color.WHITE, false);
         upcomingStatusView.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -775,13 +807,34 @@ public final class MainActivity extends Activity {
             stopChessEngineSocket();
             return;
         }
-        if (chessEngineSocket != null && bearer.equals(chessEngineToken)) return;
+        if (chessEngineSocket != null && bearer.equals(chessEngineToken)) {
+            updateChessForegroundPresence();
+            return;
+        }
         stopChessEngineSocket();
         chessEngineToken = bearer;
         chessEngineSocket = new ChessEngineSocket(bearer, message -> {
-            if (chessEngineStatusView != null) chessEngineStatusView.setText("Native chess engine: " + message);
+            if (chessEngineStatusView != null) chessEngineStatusView.setText(message);
+        }, (verifiedMatchId, ply, flags, captured, check, checkmate) -> {
+            if (chessSoundPlayer != null)
+                chessSoundPlayer.playVerifiedMove(verifiedMatchId, ply, flags, captured, check, checkmate);
         });
         chessEngineSocket.connect();
+        updateChessForegroundPresence();
+    }
+
+    private void updateChessForegroundPresence() {
+        long matchId = activityResumed && companionTermsAccepted ? selectedChessMatchId : 0;
+        foregroundChessMatchId = matchId;
+        if (chessEngineSocket != null) chessEngineSocket.setForegroundMatchId(matchId);
+    }
+
+    static boolean isForegroundForChessMatch(long matchId) {
+        return activityResumed && matchId > 0 && foregroundChessMatchId == matchId;
+    }
+
+    static boolean isActivityResumed() {
+        return activityResumed;
     }
 
     private void stopChessEngineSocket() {
@@ -926,6 +979,9 @@ public final class MainActivity extends Activity {
 
     private void addChessMatchNotice(long matchId, String eventKey) {
         if (matchId <= 0 || content == null || !companionTermsAccepted) return;
+        selectedChessMatchId = matchId;
+        selectedChessMatchEventKey = eventKey;
+        updateChessForegroundPresence();
         if (chessMatchNoticeCard != null && chessMatchNoticeCard.getParent() instanceof ViewGroup) {
             ((ViewGroup) chessMatchNoticeCard.getParent()).removeView(chessMatchNoticeCard);
         }

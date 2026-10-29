@@ -131,7 +131,7 @@ test("authenticated native engine receives a server-confirmed move and returns a
     });
     const response = browser.latest("chess:engine:result").payload;
     assert.equal(response.agreesWithServer, true);
-    assert.equal(response.source, "android-native-chess-engine");
+    assert.equal(Object.hasOwn(response, "source"), false, "user-facing match responses do not expose internal engine implementation details");
     assert.equal(response.legalMovesVerified, true);
     assert.equal(response.predictionCacheHit, true);
     assert.equal(response.positionVersion, 1);

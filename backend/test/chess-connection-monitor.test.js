@@ -6,6 +6,7 @@ const express = require("express");
 const http = require("http");
 const chessRoutes = require("../routes/chess");
 const createChessConnectionMonitor = require("../services/chessConnectionMonitor");
+const { leaveChessConnectionOnMatchChange } = require("../services/chessSocketRooms");
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -56,6 +57,31 @@ test("connection monitor counts tabs, pauses on the last socket, and resumes the
         matchId: 501, playerWhiteId: 41, playerBlackId: 42, connectionPausedAt: new Date()
     });
     assert.equal(resumed.length, 2);
+    monitor.stop();
+});
+
+test("same-match socket retries do not simulate a disconnect before reconnecting", async () => {
+    const paused = [];
+    const monitor = createChessConnectionMonitor({
+        async pauseMatch(matchId, userId) { paused.push([matchId, userId]); return { paused: true }; },
+        async resumeMatch() { return { resumed: true }; }
+    });
+    const white = fakeSocket("white-retry", 41);
+    const black = fakeSocket("black-retry", 42);
+    const details = { matchId: 501, playerWhiteId: 41, playerBlackId: 42, status: "active" };
+
+    await monitor.joinMatch(white, details);
+    await monitor.joinMatch(black, details);
+    assert.equal(monitor.isMatchReady(501), true);
+    const pausesBeforeRetry = paused.length;
+
+    assert.equal(leaveChessConnectionOnMatchChange(white, 501, monitor), false,
+        "the server keeps the same match socket registered when handling a repeated join");
+    await monitor.joinMatch(white, details);
+    assert.equal(paused.length, pausesBeforeRetry,
+        "a same-match retry must not trigger another pause transition");
+    assert.equal(monitor.isMatchReady(501), true);
+
     monitor.stop();
 });
 

@@ -229,7 +229,10 @@ module.exports = function (pool, authenticateToken) {
             res.json({ success: true, message: "Joined the " + league.name + " League.", entryFee: fee });
         } catch (e) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            res.status(e.status || 400).json({ success: false, message: e.message });
+            const status = Number(e && e.status);
+            if (status >= 400 && status < 500) return res.status(status).json({ success: false, message: e.message });
+            console.error("League entry failed:", e && e.message);
+            res.status(500).json({ success: false, message: "Could not join this league. Try again." });
         } finally {
             client.release();
         }
@@ -317,7 +320,7 @@ module.exports = function (pool, authenticateToken) {
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("League cancellation error:", error.message);
             return res.status(500).json({ success: false, message: "Could not cancel your league entry safely." });
         } finally {
@@ -432,12 +435,12 @@ module.exports = function (pool, authenticateToken) {
                 forfeited: true,
                 stakeTransferred: fee,
                 message: fee > 0
-                    ? "League forfeited. Your KSh " + fee.toFixed(2) + " stake was split between both admin wallets, and your opponent received a walkover."
+                    ? "League forfeited. Your KSh " + fee.toFixed(2) + " stake will not be refunded, and your opponent received a walkover."
                     : "League forfeited. Your opponent received a walkover."
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("League forfeiture error:", error.message);
             return res.status(500).json({ success: false, message: "Could not forfeit the league entry safely." });
         } finally {

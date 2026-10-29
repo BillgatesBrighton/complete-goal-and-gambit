@@ -12,6 +12,12 @@ function isCurrentChessJoinAttempt(socket, generation) {
     return socket.chessJoinGeneration === generation;
 }
 
+function leaveChessConnectionOnMatchChange(socket, requestedMatchId, connectionMonitor) {
+    if (!socket || !connectionMonitor || !socket.chessConnection) return false;
+    if (Number(socket.chessConnection.matchId) === Number(requestedMatchId)) return false;
+    return connectionMonitor.leaveSocket(socket);
+}
+
 function hasValidChessMatchSeats(match) {
     const whiteId = Number(match && match.player_white_id);
     const blackId = Number(match && match.player_black_id);
@@ -36,6 +42,7 @@ function joinChessMatchRoom(socket, matchId) {
 module.exports = {
     beginChessJoinAttempt,
     isCurrentChessJoinAttempt,
+    leaveChessConnectionOnMatchChange,
     hasValidChessMatchSeats,
     joinChessMatchRoom
 };

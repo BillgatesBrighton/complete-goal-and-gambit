@@ -30,9 +30,10 @@ const createPushRoutes = require("./routes/push");
 const createWebPushService = require("./services/webPush");
 const createAndroidPushService = require("./services/androidPush");
 const createChessScheduleReminders = require("./services/chessScheduleReminders");
+const createAccountPresence = require("./services/accountPresence");
 const createChessEngineRelay = require("./services/chessEngineRelay");
 const createChessConnectionMonitor = require("./services/chessConnectionMonitor");
-const { beginChessJoinAttempt, isCurrentChessJoinAttempt, hasValidChessMatchSeats, joinChessMatchRoom } = require("./services/chessSocketRooms");
+const { beginChessJoinAttempt, isCurrentChessJoinAttempt, leaveChessConnectionOnMatchChange, hasValidChessMatchSeats, joinChessMatchRoom } = require("./services/chessSocketRooms");
 const createAdminAnnouncementReminders = require("./services/adminAnnouncementReminders");
 const createEfootballScheduler = require("./services/efootballScheduler");
 const tournamentRoutes = require("./routes/tournaments");
@@ -47,6 +48,7 @@ const adminWalletRoutes = require("./routes/adminWallet");
 const chatRoutes = require("./routes/chat");
 const companionRoutes = require("./routes/companion");
 const authenticateToken = require("./middleware/authMiddleware");
+const { publicAccountRole } = require("./middleware/adminAuthorization");
 const gameAccess = require("./middleware/gameAccess");
 const repairDuplicateSupportThreads = require("./db/repairSupportThreads");
 
@@ -100,6 +102,7 @@ const pool = new pg.Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000
 });
+const accountPresence = createAccountPresence();
 const webPushService = createWebPushService(pool);
 const androidPushService = createAndroidPushService(pool);
 const pushService = {
@@ -141,7 +144,9 @@ const pushService = {
         adminAnnouncementReminders.stop();
     }
 };
-const chessScheduleReminders = createChessScheduleReminders(pool, pushService);
+const chessScheduleReminders = createChessScheduleReminders(pool, pushService, {
+    isWebsitePresent: function (userId) { return accountPresence.isWebsitePresent(userId); }
+});
 const adminAnnouncementReminders = createAdminAnnouncementReminders(pool, pushService);
 
 authenticateToken.setPool(pool);
@@ -325,7 +330,7 @@ const io = new Server(
 
 );
 
-const chessApiRouter = chessRoutes(pool, authenticateToken, io, pushService);
+const chessApiRouter = chessRoutes(pool, authenticateToken, io, pushService, accountPresence);
 const chessEngineRelay = createChessEngineRelay(pool, io, {
     pauseForIntegrity: chessApiRouter.pauseForIntegrity
 });
@@ -414,11 +419,12 @@ io.use(
                 return next(new Error("This account is currently suspended."));
             }
 
+            socket.clientType = String(socket.handshake.auth && socket.handshake.auth.clientType || "").slice(0, 32);
             socket.user = {
                 ...decoded,
                 userId: user.id,
                 username: user.username,
-                role: user.role
+                role: publicAccountRole(user)
             };
             return next();
         } catch (error) {
@@ -454,6 +460,41 @@ io.on(
         if (wasOffline) broadcastOnlineUsers();
         else socket.emit("presence:update", { onlineUserIds: getOnlineUserIds() });
 
+        socket.on("website:presence", function(data) {
+            if (socket.clientType !== "website") return;
+            accountPresence.setWebsitePresence(presenceUserId, socket.id, Boolean(data && data.active === true));
+        });
+
+        socket.on("chess:companion:presence", async function(data) {
+            if (socket.clientType !== "android-companion") return;
+            const matchId = Number(data && data.matchId);
+            const active = Boolean(data && data.active === true);
+            if (!active) {
+                if (socket.chessCompanionPresenceMatchId) {
+                    accountPresence.setChessMatchPresence(presenceUserId, socket.chessCompanionPresenceMatchId, socket.id, false);
+                    socket.chessCompanionPresenceMatchId = null;
+                }
+                return;
+            }
+            if (!Number.isSafeInteger(matchId) || matchId <= 0) return;
+            try {
+                const result = await pool.query(
+                    "SELECT id,player_white_id,player_black_id,status FROM chess_matches WHERE id=$1",
+                    [matchId]
+                );
+                const match = result.rows[0];
+                if (!match || match.status !== "active" ||
+                    ![Number(match.player_white_id), Number(match.player_black_id)].includes(presenceUserId)) return;
+                if (socket.chessCompanionPresenceMatchId && socket.chessCompanionPresenceMatchId !== matchId) {
+                    accountPresence.setChessMatchPresence(presenceUserId, socket.chessCompanionPresenceMatchId, socket.id, false);
+                }
+                socket.chessCompanionPresenceMatchId = matchId;
+                accountPresence.setChessMatchPresence(presenceUserId, matchId, socket.id, true);
+            } catch (error) {
+                console.error("Companion chess presence could not be checked:", error.message);
+            }
+        });
+
         // ==================================================
         // JOIN CHESS MATCH
         // ==================================================
@@ -461,7 +502,14 @@ io.on(
         socket.on(
             "chess:join",
             async function(data) {
-                chessConnectionMonitor.leaveSocket(socket);
+                const requestedMatchId = Number(data && data.matchId);
+                if (socket.chessPresenceMatchId && socket.chessPresenceMatchId !== requestedMatchId) {
+                    accountPresence.setChessMatchPresence(socket.user.userId, socket.chessPresenceMatchId, socket.id, false);
+                    socket.chessPresenceMatchId = null;
+                }
+                // Rejoining the same match on a live socket must preserve its
+                // monitor record. The monitor handles actual match changes.
+                leaveChessConnectionOnMatchChange(socket, data && data.matchId, chessConnectionMonitor);
                 const joinGeneration = beginChessJoinAttempt(socket);
 
                 try {
@@ -582,6 +630,9 @@ io.on(
                         return;
 
                     }
+
+                    socket.chessPresenceMatchId = matchId;
+                    accountPresence.setChessMatchPresence(userId, matchId, socket.id, true);
 
                     const room = joinChessMatchRoom(socket, matchId);
                     await chessConnectionMonitor.joinMatch(socket, {
@@ -779,6 +830,7 @@ io.on(
                 );
 
                 const presenceUserId = Number(socket.user && socket.user.userId);
+                accountPresence.clearSocket(socket.id);
                 chessConnectionMonitor.leaveSocket(socket);
                 const connections = onlineUserSockets.get(presenceUserId);
                 if (connections) {
@@ -845,7 +897,7 @@ app.use(
 // Scheduled matches need their own route before /api/chess/:id is mounted.
 app.use(
     "/api/chess/schedules",
-    chessScheduleRoutes(pool, authenticateToken, pushService)
+    chessScheduleRoutes(pool, authenticateToken, pushService, io)
 );
 
 app.use(
@@ -1048,12 +1100,13 @@ app.get(
 
             }
 
+            const currentUser = result.rows[0];
+            currentUser.role = req.user.role;
             res.json({
 
                 success: true,
 
-                user:
-                    result.rows[0]
+                user: currentUser
 
             });
 

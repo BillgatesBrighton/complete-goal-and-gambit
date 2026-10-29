@@ -28,9 +28,13 @@ import io.socket.engineio.client.transports.WebSocket;
 /** Authenticated, optional companion connection for native chess-state processing. */
 final class ChessEngineSocket {
     interface StatusListener { void onStatus(String status); }
+    interface EventListener {
+        void onVerifiedMove(long matchId, int ply, String flags, boolean captured, boolean check, boolean checkmate);
+    }
 
     private final String bearer;
     private final StatusListener statusListener;
+    private final EventListener eventListener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService engineExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService predictionExecutor = Executors.newSingleThreadExecutor(task -> {
@@ -44,17 +48,22 @@ final class ChessEngineSocket {
     private final Set<Long> awaitingAuthoritativeResync = Collections.synchronizedSet(new HashSet<>());
     private volatile Socket socket;
     private volatile boolean closed;
+    private volatile long foregroundMatchId;
 
-    ChessEngineSocket(String bearer, StatusListener statusListener) {
+    ChessEngineSocket(String bearer, StatusListener statusListener, EventListener eventListener) {
         this.bearer = bearer;
         this.statusListener = statusListener;
+        this.eventListener = eventListener;
     }
 
     void connect() {
         if (bearer == null || bearer.trim().isEmpty() || closed) return;
         try {
             IO.Options options = new IO.Options();
-            options.auth = Collections.singletonMap("token", bearer);
+            java.util.HashMap<String, String> socketAuth = new java.util.HashMap<>();
+            socketAuth.put("token", bearer);
+            socketAuth.put("clientType", "android-companion");
+            options.auth = socketAuth;
             options.reconnection = true;
             options.reconnectionAttempts = Integer.MAX_VALUE;
             options.reconnectionDelay = 1000;
@@ -67,25 +76,26 @@ final class ChessEngineSocket {
             socket = created;
             created.on(Socket.EVENT_CONNECT, args -> {
                 subscribedMatches.clear();
-                setStatus("Connected · syncing active chess matches");
+                setStatus("Syncing chess match updates…");
                 created.emit("chess:engine:ready");
+                emitForegroundPresence(created);
             });
             created.on(Socket.EVENT_DISCONNECT, args -> {
                 subscribedMatches.clear();
-                setStatus("Offline · website chess keeps working with its local rules engine");
+                setStatus("Chess match updates are unavailable. The website chessboard remains available.");
             });
             created.on(Socket.EVENT_CONNECT_ERROR, args -> {
-                setStatus("Offline · website chess keeps working with its local rules engine");
+                setStatus("Chess match updates are unavailable. The website chessboard remains available.");
             });
             created.on("chess:engine:matches", args -> {
                 JSONObject payload = firstObject(args);
                 if (payload == null || !payload.optBoolean("success", false)) {
-                    setStatus("Connected · no active chess matches to assist");
+                    setStatus("No active chess matches.");
                     return;
                 }
                 JSONArray matches = payload.optJSONArray("matches");
                 if (matches == null || matches.length() == 0) {
-                    setStatus("Connected · waiting for a chess match");
+                    setStatus("Chess match updates are ready.");
                     return;
                 }
                 for (int index = 0; index < matches.length(); index++) {
@@ -122,12 +132,12 @@ final class ChessEngineSocket {
                         emitIntegrityReport(created, matchId, payload.optInt("ply", 0),
                             "snapshot_mismatch", "snapshot:" + matchId + ":" + payload.optInt("ply", 0),
                             result.resultingFen, fen);
-                        setStatus("Connected · chess snapshot needs server reconciliation");
+                        setStatus("The server is checking the chess position.");
                         return;
                     }
                     setStatus(payload.optBoolean("connectionPaused", false)
                         ? "Game paused by server · both chess clocks stopped"
-                        : "Connected · native chess engine ready for " + matchId);
+                        : "Chess match is synchronized.");
                     if (!payload.optBoolean("connectionPaused", false) &&
                         "active".equalsIgnoreCase(payload.optString("status", ""))) {
                         schedulePrediction(() -> engine.precomputeCurrentPosition(matchId, fen));
@@ -150,7 +160,7 @@ final class ChessEngineSocket {
                     awaitingAuthoritativeResync.add(matchId);
                     setStatus(payload.optBoolean("connectionPaused", false)
                         ? "Game paused by server · waiting for safe reconnection"
-                        : "Server position verified · synchronizing companion");
+                        : "Chess match sync is being restored.");
                 }
             });
             created.on("chess:engine:match_state", args -> {
@@ -160,13 +170,29 @@ final class ChessEngineSocket {
                 if (payload.optBoolean("connectionPaused", false)) {
                     setStatus("Game paused by server · both chess clocks stopped");
                 } else if (matchId > 0) {
-                    setStatus("Connection restored · synchronizing chess match " + matchId);
+                    setStatus("Chess match sync is being restored.");
                 }
             });
             created.connect();
         } catch (URISyntaxException | RuntimeException error) {
-            setStatus("Offline · website chess keeps working with its local rules engine");
+            setStatus("Chess match updates are unavailable. The website chessboard remains available.");
         }
+    }
+
+    void setForegroundMatchId(long matchId) {
+        foregroundMatchId = matchId > 0 ? matchId : 0;
+        Socket active = socket;
+        if (active != null && active.connected()) emitForegroundPresence(active);
+    }
+
+    private void emitForegroundPresence(Socket active) {
+        if (active == null || !active.connected()) return;
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("matchId", foregroundMatchId);
+            payload.put("active", foregroundMatchId > 0);
+            active.emit("chess:companion:presence", payload);
+        } catch (Exception ignored) {}
     }
 
     private void subscribe(long matchId) {
@@ -234,6 +260,16 @@ final class ChessEngineSocket {
 
         if (!closed && active == socket && active.connected()) {
             active.emit("chess:engine:result", response);
+            if (result.legal && result.historyComplete && result.agreesWithExpectedPosition && !result.stale &&
+                eventListener != null) {
+                String flags = move.optString("flags", "");
+                boolean captured = move.has("captured") && !move.isNull("captured") &&
+                    !move.optString("captured", "").isEmpty();
+                mainHandler.post(() -> {
+                    if (!closed && active == socket) eventListener.onVerifiedMove(
+                        matchId, (int) ply, flags, captured, result.check, result.checkmate);
+                });
+            }
             int predictionBudget = predictionBranchBudget(payload.optString("timeControl", ""));
             if (result.legal && result.historyComplete && result.agreesWithExpectedPosition &&
                 payload.optBoolean("clockIsCurrent", false) && !result.checkmate &&

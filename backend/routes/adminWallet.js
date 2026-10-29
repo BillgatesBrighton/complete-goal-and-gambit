@@ -5,6 +5,7 @@ const { randomUUID } = require("crypto");
 const { recordJournal } = require("../services/financialLedger");
 const { creditPlatform } = require("../services/adminWalletAccounting");
 const financialRateLimit = require("../middleware/financialRateLimit");
+const { createAdminOnly } = require("../middleware/adminAuthorization");
 
 const WITHDRAWAL_FEE_RATE = 0.05;
 const MAX_WITHDRAWAL = 1000000;
@@ -24,19 +25,7 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
     const withdrawalResolutionLimit = financialRateLimit("admin-player-withdrawal-resolution", { windowMs: 10 * 60 * 1000, max: 60 });
     const adminWithdrawalLimit = financialRateLimit("admin-wallet-withdrawal", { windowMs: 10 * 60 * 1000, max: 10 });
 
-    async function adminOnly(req, res, next) {
-        res.setHeader("Cache-Control", "private, no-store");
-        try {
-            const result = await pool.query("SELECT id,role FROM users WHERE id=$1", [req.user.userId]);
-            if (!result.rows.length || result.rows[0].role !== "admin") {
-                return res.status(403).json({ success: false, message: "Administrator access required." });
-            }
-            return next();
-        } catch (error) {
-            console.error("Admin wallet authorization failed:", error.message);
-            return res.status(500).json({ success: false, message: "Could not verify administrator access." });
-        }
-    }
+    const adminOnly = createAdminOnly(pool, "Admin wallet authorization failed");
 
     router.get("/", authenticateToken, adminOnly, async (req, res) => {
         const adminId = Number(req.user.userId);
@@ -267,9 +256,11 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            return res.status(Number(error.status) || 500).json({
+            const status = Number(error.status) || 500;
+            if (status >= 500) console.error("Manual withdrawal resolution failed:", error.message);
+            return res.status(status).json({
                 success: false,
-                message: error.message || "Could not complete the manual withdrawal."
+                message: status >= 500 ? "Could not complete the manual withdrawal." : error.message
             });
         } finally {
             client.release();
@@ -308,7 +299,9 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
             return res.json({ success: true, message: "Withdrawal cancelled and the reserved funds returned to the player." });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            return res.status(Number(error.status) || 500).json({ success: false, message: error.message || "Could not cancel the withdrawal." });
+            const status = Number(error.status) || 500;
+            if (status >= 500) console.error("Manual withdrawal cancellation failed:", error.message);
+            return res.status(status).json({ success: false, message: status >= 500 ? "Could not cancel the withdrawal." : error.message });
         } finally { client.release(); }
     });
 
@@ -411,7 +404,8 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
             const status = Number(error.status) || (error.code === "23505" ? 409 : 500);
-            return res.status(status).json({ success: false, message: error.message || "Could not create the administrator withdrawal." });
+            if (status >= 500) console.error("Administrator withdrawal could not be created:", error.message);
+            return res.status(status).json({ success: false, message: status >= 500 ? "Could not create the administrator withdrawal." : error.message });
         } finally {
             client.release();
         }

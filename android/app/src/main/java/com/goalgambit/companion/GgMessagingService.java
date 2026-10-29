@@ -31,7 +31,20 @@ public final class GgMessagingService extends FirebaseMessagingService {
         if (TokenStore.read(this) == null) return;
         Map<String, String> data = message.getData();
         if (data == null || data.isEmpty()) return;
-        Notifications.showPush(this, data);
-        sendBroadcast(new Intent(MainActivity.ACTION_PUSH_RECEIVED).setPackage(getPackageName()));
+        String eventKey = data.get("eventKey");
+        long chessMatchId = Notifications.chessMatchIdFromEventKey(eventKey);
+        boolean chessEventInForeground = eventKey != null &&
+            (eventKey.startsWith("chess-match:") || eventKey.startsWith("chess-schedule-")) &&
+            MainActivity.isActivityResumed();
+        boolean activeTurnInForeground = eventKey != null && eventKey.contains(":turn:") &&
+            MainActivity.isForegroundForChessMatch(chessMatchId);
+        if (!activeTurnInForeground && !chessEventInForeground) Notifications.showPush(this, data);
+        Intent received = new Intent(MainActivity.ACTION_PUSH_RECEIVED).setPackage(getPackageName());
+        if (eventKey != null) received.putExtra(Notifications.EXTRA_EVENT_KEY, eventKey);
+        if (chessMatchId > 0) {
+            received.putExtra(Notifications.EXTRA_CHESS_MATCH_ID, chessMatchId);
+            received.putExtra(Notifications.EXTRA_EVENT_KEY, eventKey);
+        }
+        sendBroadcast(received);
     }
 }

@@ -22,7 +22,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         complaintUpload(req, res, function(error) {
             if (!error) return next();
             const tooLarge = error.code === "LIMIT_FILE_SIZE";
-            return res.status(tooLarge ? 413 : 400).json({ success: false, message: tooLarge ? "Evidence must be 8 MB or smaller." : error.message });
+            return res.status(tooLarge ? 413 : 400).json({ success: false, message: tooLarge ? "Evidence must be 8 MB or smaller." : "Evidence could not be uploaded. Check the file and try again." });
         });
     }
     function isOnline(id) {

@@ -151,7 +151,7 @@
     }
     box.hidden = false;
     status.textContent = entry.canForfeit
-      ? "Your first match is complete. You can forfeit now; your locked tournament stake for this clock and stake will go to the admin wallets."
+      ? "Your first match is complete. You can forfeit now; your locked tournament stake will not be refunded."
       : entry.canCancel
         ? "You can cancel before your first match. Any stake locked by an unstarted tournament search will be refunded."
         : "Finish or resolve your current match before forfeiting the tournament.";
@@ -163,7 +163,7 @@
   async function submitEntryAction(action, button) {
     const message = action === "cancel"
       ? "Cancel this tournament entry before your first match? Any stake locked for an unstarted tournament search will be returned to your available wallet balance."
-      : "Forfeit after your first completed match? Your locked Chess tournament stake for this clock and stake will be transferred to the admin wallets, not returned to you. Finish any match in progress before forfeiting.";
+      : "Forfeit after your first completed match? Your locked Chess tournament stake will not be refunded. Finish any match in progress before forfeiting.";
     if (!confirm(message)) return;
     entryActionPending = true;
     button.disabled = true;

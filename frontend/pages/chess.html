@@ -327,6 +327,7 @@ main {
 .chess-schedule-intro { max-width:760px; margin:-5px 0 16px; color:#999; font-size:13px; line-height:1.6; }
 .chess-schedule-form { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; align-items:end; padding:16px; border:1px solid #292929; border-radius:12px; background:#101010; }
 .chess-schedule-field { display:grid; gap:6px; min-width:0; color:#bbb; font-size:12px; font-weight:700; }
+.chess-schedule-field[hidden] { display:none; }
 .chess-schedule-field input,.chess-schedule-field select { width:100%; min-height:42px; padding:9px 10px; border:1px solid #393939; border-radius:8px; background:#090909; color:#fff; font:inherit; }
 .chess-schedule-submit { min-height:42px; padding:9px 13px; border:0; border-radius:8px; background:#f4bd20; color:#111; font-weight:900; cursor:pointer; }
 .chess-schedule-submit:disabled,.chess-schedule-action:disabled { opacity:.55; cursor:wait; }
@@ -758,18 +759,24 @@ Choose your format and compete at your level.
   <div class="section-head">
     <div><div class="small-label">UPCOMING GAMES</div><h2 id="chessScheduleTitle">Schedule a Chess match</h2></div>
   </div>
-  <p class="chess-schedule-intro">Invite another Chess player and choose a time within the next 30 days. After they accept, both players can mark themselves ready near the start time. The Android Companion can send reminders about accepted matches.</p>
+  <p class="chess-schedule-intro">Challenge a Chess player for a supported stake and start as soon as they accept, or schedule a future match with reminders.</p>
   <form id="chessScheduleForm" class="chess-schedule-form">
+    <label class="chess-schedule-field" for="chessInvitationType">Invitation type
+      <select id="chessInvitationType"><option value="direct">Challenge now · staked game</option><option value="scheduled">Schedule a future match</option></select>
+    </label>
     <label class="chess-schedule-field" for="chessScheduleOpponent">Opponent username
       <input id="chessScheduleOpponent" type="text" minlength="3" maxlength="30" autocomplete="off" placeholder="GOAL$GAMBIT username" required>
     </label>
-    <label class="chess-schedule-field" for="chessScheduleAt">Date and time
+    <label id="chessScheduleDateField" class="chess-schedule-field" for="chessScheduleAt" hidden>Date and time
       <input id="chessScheduleAt" type="datetime-local" required>
+    </label>
+    <label id="chessScheduleStakeField" class="chess-schedule-field" for="chessChallengeStake">Stake
+      <select id="chessChallengeStake"><option value="20">KSh 20</option><option value="50">KSh 50</option><option value="100">KSh 100</option></select>
     </label>
     <label class="chess-schedule-field" for="chessScheduleClock">Chess clock
       <select id="chessScheduleClock"><option value="10+5">Rapid · 10+5</option><option value="3+2">Blitz · 3+2</option><option value="1+1">Bullet · 1+1</option></select>
     </label>
-    <button id="chessScheduleSubmit" class="chess-schedule-submit" type="submit">Send match invitation</button>
+    <button id="chessScheduleSubmit" class="chess-schedule-submit" type="submit">Send challenge</button>
   </form>
   <p id="chessScheduleFeedback" class="chess-schedule-feedback" role="status" aria-live="polite"></p>
   <div id="chessScheduleList" class="chess-schedule-list" aria-live="polite"><p class="chess-schedule-empty">Loading your scheduled matches…</p></div>

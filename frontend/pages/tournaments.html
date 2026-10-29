@@ -146,7 +146,7 @@ function tournamentCard(tournament) {
     (prizeAmounts.length ? '<div class="facts awards"><div class="fact"><span>1st place</span><strong>KSh ' + prizeAmounts[0].toLocaleString("en-KE") + '</strong></div><div class="fact"><span>2nd place</span><strong>KSh ' + prizeAmounts[1].toLocaleString("en-KE") + '</strong></div><div class="fact"><span>3rd place</span><strong>KSh ' + prizeAmounts[2].toLocaleString("en-KE") + '</strong></div></div>' : '') +
     '<div class="progress" aria-label="' + players + ' of ' + capacity + ' places filled"><span data-tournament-progress style="width:' + progress + '%"></span></div>' +
     '<div class="capacity"><span data-tournament-count>' + players + ' entered</span><span>' + capacity + ' places</span></div>' +
-    '<p class="card-help">' + (fullScheduled ? "All places are filled. The tournament starts automatically at the displayed EAT time; your fixtures will appear in the Match Hub." : isActive ? "This tournament is active. Open your group and fixtures in the Match Hub." : forfeited ? "You forfeited this tournament; your entry stake was sent to the admin wallets." : joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
+    '<p class="card-help">' + (fullScheduled ? "All places are filled. The tournament starts automatically at the displayed EAT time; your fixtures will appear in the Match Hub." : isActive ? "This tournament is active. Open your group and fixtures in the Match Hub." : forfeited ? "You forfeited this tournament; your entry stake will not be refunded." : joined ? (fee > 0 ? "Your entry is saved. The entry fee is held in your locked wallet balance." : "Your free entry is saved to your account.") : escape(feeText)) + '</p>' +
     '<a class="groups-link" href="tournament-bracket.html?tournament=' + encodeURIComponent(id) + '">' + (joined ? 'Open your group &amp; fixtures' : 'View groups &amp; fixtures') + '</a>' +
     (joined ? (canCancel ? '<button class="join cancel-entry" type="button" data-cancel-id="' + id + '">Cancel entry and refund stake</button>' : canForfeit ? '<button class="join forfeit-entry" type="button" data-forfeit-id="' + id + '">Forfeit tournament · send stake to admins</button>' : '') : forfeited ? '' : '<button class="join" type="button" data-join-id="' + id + '"' + (canJoin ? '' : ' disabled') + '>' + escape(buttonText) + '</button>') +
     '</article>';
@@ -203,7 +203,7 @@ async function cancelTournament(id, button) {
 }
 
 async function forfeitTournament(id, button) {
-  if (!confirm("Forfeit after your first completed match? Any remaining fixtures will be awarded as walkovers. Your locked entry fee will not be refunded; it will be split between both admin wallets.")) return;
+  if (!confirm("Forfeit after your first completed match? Any remaining fixtures will be awarded as walkovers. Your locked entry fee will not be refunded.")) return;
   button.disabled = true;
   button.textContent = "Forfeiting…";
   const result = await GG.api("/api/tournaments/" + encodeURIComponent(id) + "/forfeit", {

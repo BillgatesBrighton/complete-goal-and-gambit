@@ -7,13 +7,14 @@ const express = require("express");
 const createAdminWalletRoutes = require("../routes/adminWallet");
 
 test("admin wallet history clear endpoint clears the view without deleting ledger records", async (t) => {
+    process.env.ADMIN_USER_IDS = "39,40";
     const queries = [];
     const clearedAt = "2026-10-13T12:00:00.000Z";
     const pool = {
         async query(sql, params) {
             const text = String(sql).trim();
             queries.push({ text, params });
-            if (text === "SELECT id,role FROM users WHERE id=$1") return { rows: [{ id: 9, role: "admin" }] };
+            if (/SELECT id,\s*username,\s*role FROM users WHERE id\s*=\s*\$1/i.test(text)) return { rows: [{ id: 39, username: "briton", role: "admin" }] };
             if (text.startsWith("INSERT INTO admin_wallets")) return { rows: [] };
             if (text.startsWith("SELECT balance,reserved_balance,currency FROM admin_wallets")) return { rows: [{ balance: "80.00", reserved_balance: "10.00", currency: "KES" }] };
             if (text.startsWith("SELECT cleared_at FROM admin_wallet_history_clears")) return { rows: [{ cleared_at: null }] };
@@ -30,7 +31,7 @@ test("admin wallet history clear endpoint clears the view without deleting ledge
     const app = express();
     app.use(express.json());
     app.use("/api/admin/wallet", createAdminWalletRoutes(pool, (req, _res, next) => {
-        req.user = { userId: 9 };
+        req.user = { userId: 39 };
         next();
     }, null));
     const server = http.createServer(app);

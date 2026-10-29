@@ -10,6 +10,7 @@ const path = require("path");
 const vm = require("vm");
 const express = require("express");
 const chessRoutes = require("../routes/chess");
+const createAccountPresence = require("../services/accountPresence");
 
 let BrowserChess;
 before(async () => {
@@ -45,7 +46,7 @@ function matchRow(overrides = {}) {
     };
 }
 
-async function startChessApi(pool, io, userId = 41, pushService, connectionMonitor) {
+async function startChessApi(pool, io, userId = 41, pushService, connectionMonitor, accountPresence) {
     const app = express();
     app.use(express.json());
     const routePool = Object.create(pool);
@@ -58,7 +59,7 @@ async function startChessApi(pool, io, userId = 41, pushService, connectionMonit
     const router = chessRoutes(routePool, (req, _res, next) => {
         req.user = { userId };
         next();
-    }, io, pushService);
+    }, io, pushService, accountPresence);
     if (connectionMonitor) router.setConnectionMonitor(connectionMonitor);
     app.use("/api/chess", router);
     const server = http.createServer(app);
@@ -390,7 +391,7 @@ test("a successful chess move queues a private turn alert for only the opponent 
     const notifications = [];
     let resolveQueued;
     const queued = new Promise(resolve => { resolveQueued = resolve; });
-    let connections = 0;
+    const accountPresence = createAccountPresence();
     const pool = {
         async query(sql) {
             const text = String(sql);
@@ -399,27 +400,16 @@ test("a successful chess move queues a private turn alert for only the opponent 
             throw new Error("Unexpected top-level SQL in chess notification test: " + text.slice(0, 120));
         },
         async connect() {
-            connections++;
-            if (connections === 1) {
-                return {
-                    async query(sql, params) {
-                        const text = String(sql).trim();
-                        if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
-                        if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
-                        if (text.startsWith("UPDATE chess_matches SET fen=$1")) {
-                            current = matchRow({ fen: params[0], pgn: params[1], white_time_ms: params[2], black_time_ms: params[3], active_color: params[4], last_move_at: new Date() });
-                            return { rows: [] };
-                        }
-                        throw new Error("Unexpected chess move query: " + text.slice(0, 120));
-                    },
-                    release() {}
-                };
-            }
             return {
-                async query(sql) {
+                async query(sql, params) {
                     const text = String(sql).trim();
                     if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT chess_push_0|RELEASE SAVEPOINT chess_push_0)$/.test(text)) return { rows: [] };
-                    throw new Error("Unexpected chess notification transaction query: " + text);
+                    if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
+                    if (text.startsWith("UPDATE chess_matches SET fen=$1")) {
+                        current = matchRow({ fen: params[0], pgn: params[1], white_time_ms: params[2], black_time_ms: params[3], active_color: params[4], last_move_at: new Date() });
+                        return { rows: [] };
+                    }
+                    throw new Error("Unexpected chess notification transaction query: " + text.slice(0, 120));
                 },
                 release() {}
             };
@@ -432,7 +422,7 @@ test("a successful chess move queues a private turn alert for only the opponent 
             return { created: true };
         }
     };
-    const api = await startChessApi(pool, null, 41, pushService);
+    const api = await startChessApi(pool, null, 41, pushService, null, accountPresence);
     t.after(api.close);
 
     const response = await fetch(api.base + "/501/move", {
@@ -452,6 +442,18 @@ test("a successful chess move queues a private turn alert for only the opponent 
     assert.equal(notifications[0].notification.eventKey, "chess-match:501:turn:1");
     assert.equal(notifications[0].notification.matchId, undefined, "chess IDs must not enter the existing eFootball-only push match_id column");
     assert.equal(notifications[0].notification.androidOnly, true);
+
+    accountPresence.setChessMatchPresence(41, 501, "white-board", true);
+    const blackApi = await startChessApi(pool, null, 42, pushService, null, accountPresence);
+    t.after(blackApi.close);
+    const blackMove = await fetch(blackApi.base + "/501/move", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: "e7", to: "e5" })
+    });
+    assert.equal(blackMove.status, 200, "the other player can continue from the authoritative position");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(notifications.length, 1, "a turn reminder is suppressed while its recipient is viewing this exact match");
 });
 
 test("expired-clock GET rechecks under the existing row lock before settling", async t => {
@@ -500,7 +502,7 @@ test("expired-clock GET rechecks under the existing row lock before settling", a
     assert.equal(updates, 0, "a clock refreshed before the lock must not be settled");
 });
 
-test("move event identifies the authenticated actor without broadcasting match state", async t => {
+test("move event delivers shared authoritative state without personalized player fields", async t => {
     let current = matchRow();
     const emitted = [];
     const io = { to(room) { return { emit(event, data) { emitted.push({ room, event, data }); } }; } };
@@ -547,7 +549,13 @@ test("move event identifies the authenticated actor without broadcasting match s
     assert.ok(moveEvent);
     assert.equal(moveEvent.data.actorUserId, 41);
     assert.equal(moveEvent.data.matchId, 501);
-    assert.equal(Object.hasOwn(moveEvent.data, "match"), false);
+    assert.equal(moveEvent.data.match.matchId, 501);
+    assert.equal(moveEvent.data.match.activeColor, "b");
+    assert.equal(moveEvent.data.match.fen, body.match.fen);
+    assert.equal(moveEvent.data.match.pgn, body.match.pgn);
+    assert.equal(Object.hasOwn(moveEvent.data.match, "playerColor"), false);
+    assert.equal(Object.hasOwn(moveEvent.data.match, "opponentId"), false);
+    assert.equal(Object.hasOwn(moveEvent.data.match, "ratingBracket"), false);
     assert.equal(Object.hasOwn(moveEvent.data, "fen"), false);
     assert.equal(Object.hasOwn(moveEvent.data, "playerColor"), false);
 });
@@ -617,6 +625,7 @@ class FakeElement {
     append(...children) { children.forEach(child => this.appendChild(child)); }
     closest() { return null; }
     setAttribute(name, value) { this.attributes[name] = String(value); }
+    removeAttribute(name) { delete this.attributes[name]; }
     getAttribute(name) { return this.attributes[name] ?? null; }
     focus() {}
     setPointerCapture(pointerId) { this.pointerCapture = pointerId; }
@@ -662,6 +671,7 @@ function createBoardHarness(fetchImpl, { search = "?matchId=1", iframe = false, 
         hidden: false,
         getElementById(id) { if (!elements.has(id)) elements.set(id, new FakeElement()); return elements.get(id); },
         createElement() { return new FakeElement(); },
+        createElementNS() { return new FakeElement(); },
         elementFromPoint() { return null; },
         addEventListener(name, callback) { documentListeners[name] = callback; }
     };
@@ -816,10 +826,10 @@ test("white and black perspectives show the authenticated player below the board
         const squares = harness.board.getBoardSquares();
         if (color === "w") {
             assert.equal(squares.get("e1").element.style.gridRow, "8");
-            assert.equal(squares.get("e1").glyph.textContent, "♔");
+            assert.equal(squares.get("e1").pieceUse.getAttribute("href"), "../images/chess-pieces.svg#wk");
         } else {
             assert.equal(squares.get("e8").element.style.gridRow, "8");
-            assert.equal(squares.get("e8").glyph.textContent, "♚");
+            assert.equal(squares.get("e8").pieceUse.getAttribute("href"), "../images/chess-pieces.svg#bk");
         }
 
         const positionBeforeFlip = { fen: match.fen, pgn: match.pgn, activeColor: match.activeColor, playerColor: match.playerColor };
@@ -941,6 +951,33 @@ test("repeated identical board initialization creates at most one matchmaking re
     assert.equal(harness.board.getState().matchId, 990);
 });
 
+test("browser online event refreshes state without emitting a duplicate match join", async () => {
+    const harness = createBoardHarness(async () => responseFor({
+        success: true,
+        connectionReady: true,
+        match: browserMatch(1)
+    }), { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.setupSocket();
+    const socket = harness.sockets[0];
+    socket.connected = true;
+    socket.trigger("connect");
+    await new Promise(resolve => setImmediate(resolve));
+
+    const countEvent = name => socket.emitted.filter(([event]) => event === name).length;
+    const joinsBeforeOnline = countEvent("chess:join");
+    const watchesBeforeOnline = countEvent("chess:engine:watch");
+    harness.windowListeners.online();
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(countEvent("chess:join"), joinsBeforeOnline,
+        "the browser online event must not rejoin a socket whose transport is already connected");
+    assert.equal(countEvent("chess:engine:watch"), watchesBeforeOnline,
+        "the existing engine watch remains attached to the connected socket");
+    assert.equal(harness.board.getState().matchId, 1,
+        "the authoritative match is still refreshed after the browser comes online");
+});
+
 test("piece selection calculates legal hints locally without a legal-moves API request", async t => {
     let requests = 0;
     const harness = createBoardHarness(async url => {
@@ -1012,13 +1049,14 @@ test("a verified companion prediction waits for its exact authoritative FEN and 
         "a different castling-rights position at the same ply cannot replace the exact cached state");
 });
 
-test("premove is queued provisionally and submitted only after the opponent move is confirmed", async () => {
+test("premove is queued provisionally and submitted only after the opponent move is confirmed", async t => {
     const afterE4 = new BrowserChess(INITIAL_FEN);
     afterE4.move({ from: "e2", to: "e4" });
     const onBlackTurn = browserMatch(1, afterE4.pgn());
     onBlackTurn.fen = afterE4.fen();
     onBlackTurn.activeColor = "b";
     let posts = 0;
+    let gets = 0;
     let submitted = null;
     const official = new BrowserChess(INITIAL_FEN);
     official.move({ from: "e2", to: "e4" });
@@ -1032,10 +1070,13 @@ test("premove is queued provisionally and submitted only after the opponent move
             submitted = JSON.parse(options.body);
             return responseFor({ success: true, match: confirmed });
         }
+        gets++;
         throw new Error("The provisional premove should not fetch or submit early: " + url);
     }, { search: "" });
     harness.board.setMatchId(1);
     harness.board.applyState(onBlackTurn);
+    harness.board.setupSocket();
+    harness.board.setRealtimeMatchReady(true);
 
     harness.board.clickSquare("g1");
     assert.deepEqual(harness.board.getLegalTargets().map(move => move.to), ["e2", "f3", "h3"]);
@@ -1045,15 +1086,36 @@ test("premove is queued provisionally and submitted only after the opponent move
     assert.equal(harness.elements.get("cancelPremoveButton").hidden, false);
     assert.match(harness.elements.get("gameStatus").textContent, /premove queued/i);
 
-    harness.board.applyState(afterBlack);
+    const premoveReceivedAt = performance.now();
+    harness.board.getSocket().trigger("chess:move", {
+        success: true, matchId: 1, actorUserId: 42, move: { from: "e7", to: "e5", flags: "n" },
+        match: { ...afterBlack, playerWhiteId: 41, playerBlackId: 42 }
+    });
     await new Promise(resolve => setImmediate(resolve));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(posts, 1, "the queued action is submitted once after a changed authoritative position gives the player the turn");
+    assert.equal(gets, 0, "the shared move snapshot avoids a redundant match GET before the premove submission");
     assert.equal(submitted.from, "g1");
     assert.equal(submitted.to, "f3");
     assert.equal(submitted.expectedFen, afterBlack.fen);
     assert.equal(harness.board.getState().fen, confirmed.fen);
     assert.equal(harness.elements.get("cancelPremoveButton").hidden, true);
+    t.diagnostic("Authoritative opponent-event to premove POST dispatch (one mocked in-process sample; excludes network/server confirmation): " +
+        (performance.now() - premoveReceivedAt).toFixed(3) + " ms.");
+});
+
+test("the board renderer references local scalable SVG silhouettes for all twelve pieces", () => {
+    const harness = createBoardHarness(async () => { throw new Error("Piece rendering should not fetch"); }, { search: "" });
+    harness.board.setMatchId(1);
+    harness.board.applyState(browserMatch(1));
+    const cells = harness.board.getBoardSquares();
+    assert.equal(cells.get("a1").pieceUse.attributes.href, "../images/chess-pieces.svg#wr");
+    assert.equal(cells.get("e1").pieceUse.attributes.href, "../images/chess-pieces.svg#wk");
+    assert.equal(cells.get("a8").pieceUse.attributes.href, "../images/chess-pieces.svg#br");
+    assert.equal(cells.get("e8").pieceUse.attributes.href, "../images/chess-pieces.svg#bk");
+    const svg = fs.readFileSync(path.join(__dirname, "../../frontend/images/chess-pieces.svg"), "utf8");
+    for (const id of ["wk", "wq", "wr", "wb", "wn", "wp", "bk", "bq", "br", "bb", "bn", "bp"])
+        assert.match(svg, new RegExp('<symbol id="' + id + '"'));
 });
 
 test("premove can be cancelled and an opponent capture that makes it illegal is discarded", async () => {

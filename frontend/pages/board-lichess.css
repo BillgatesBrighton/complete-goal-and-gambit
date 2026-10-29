@@ -60,18 +60,17 @@
     place-items: center;
     width: 100%;
     height: 100%;
-    font-family: "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols 2", serif;
-    font-size: clamp(30px, 7.4vw, 70px);
     line-height: 1;
     user-select: none;
     filter: drop-shadow(0 2px 1px #0007);
     transition: transform .1s ease;
 }
+.piece-glyph svg { width: 82%; height: 82%; overflow: visible; pointer-events: none; filter: drop-shadow(0 2px 1.5px #0008); }
 .piece-glyph.dragging { transition: none; pointer-events: none; z-index: 6; }
 
 .square:hover .piece-glyph { transform: translateY(-1px); }
-.white-piece { color: #fff; text-shadow: 0 1px 2px #161616, 1px 0 #303030, -1px 0 #303030; }
-.black-piece { color: #34332f; text-shadow: 0 1px 1px #fff8; }
+.white-piece { color: #fffaf0; }
+.black-piece { color: #2b2925; }
 
 .coord-rank, .coord-file {
     position: absolute;
@@ -86,5 +85,5 @@
 
 @media (max-width: 600px) {
     .chess-board { width: min(100%, 600px); border-width: 3px; border-radius: 0; }
-    .piece-glyph { font-size: clamp(27px, 10vw, 56px); }
+    .piece-glyph svg { width: 84%; height: 84%; }
 }

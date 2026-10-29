@@ -130,7 +130,7 @@ async function cancelTournamentEntry(button) {
   location.href = "tournaments.html?refund=" + encodeURIComponent(Number(result.data.refunded || 0));
 }
 async function forfeitTournamentEntry(button) {
-  if (!confirm("Forfeit after your first completed match? Any remaining fixtures will be awarded as walkovers. Your locked entry fee will not be refunded; it will be split between both admin wallets.")) return;
+  if (!confirm("Forfeit after your first completed match? Any remaining fixtures will be awarded as walkovers. Your locked entry fee will not be refunded.")) return;
   button.disabled = true;
   button.textContent = "Forfeiting…";
   const result = await GG.api("/api/tournaments/" + encodeURIComponent(tournamentId) + "/forfeit", { method:"POST", body:{}, noRedirect:true });

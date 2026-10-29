@@ -312,7 +312,7 @@ module.exports = function (pool, authenticateToken) {
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("Chess tournament cancellation error:", error.message);
             return res.status(500).json({ success: false, message: "Could not cancel your chess tournament entry safely." });
         } finally {
@@ -422,12 +422,12 @@ module.exports = function (pool, authenticateToken) {
                 forfeited: true,
                 stakeTransferred: forfeitedAmount,
                 message: forfeitedAmount > 0
-                    ? "Tournament forfeited. KSh " + forfeitedAmount.toFixed(2) + " was transferred to the administrator wallets."
+                    ? "Tournament forfeited. Your KSh " + forfeitedAmount.toFixed(2) + " stake will not be refunded."
                     : "Tournament forfeited. You are removed from this season's standings."
             });
         } catch (error) {
             await client.query("ROLLBACK").catch(() => {});
-            if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+            if (Number(error.status) >= 400 && Number(error.status) < 500) return res.status(error.status).json({ success: false, message: error.message });
             console.error("Chess tournament forfeiture error:", error.message);
             return res.status(500).json({ success: false, message: "Could not forfeit the chess tournament entry safely." });
         } finally {

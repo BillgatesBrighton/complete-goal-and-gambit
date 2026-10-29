@@ -44,6 +44,7 @@ public final class SettingsActivity extends Activity {
     private final Map<String, CheckBox> checks = new LinkedHashMap<>();
     private TextView status;
     private Button saveButton;
+    private CheckBox chessSounds;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -82,6 +83,17 @@ public final class SettingsActivity extends Activity {
             checks.put(entry.getKey(), check);
             root.addView(check, margins(-1, -2, 0, 0, 0, 3));
         }
+
+        chessSounds = new CheckBox(this);
+        chessSounds.setText("Chess sounds in the Companion");
+        chessSounds.setTextColor(Color.WHITE);
+        chessSounds.setButtonTintList(android.content.res.ColorStateList.valueOf(Color.rgb(237, 195, 53)));
+        chessSounds.setChecked(getSharedPreferences(ChessSoundPlayer.PREFERENCES, MODE_PRIVATE)
+            .getBoolean(ChessSoundPlayer.ENABLED_KEY, true));
+        chessSounds.setOnCheckedChangeListener((button, enabled) ->
+            getSharedPreferences(ChessSoundPlayer.PREFERENCES, MODE_PRIVATE).edit()
+                .putBoolean(ChessSoundPlayer.ENABLED_KEY, enabled).apply());
+        root.addView(chessSounds, margins(-1, -2, 0, 0, 0, 10));
 
         saveButton = button("SAVE NOTIFICATION PREFERENCES");
         saveButton.setOnClickListener(view -> savePreferences());

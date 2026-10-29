@@ -15,6 +15,9 @@ function formatScheduledAt(value, timeZone) {
 function createChessScheduleReminders(pool, pushService, options) {
     options = options || {};
     const intervalMs = Number(options.intervalMs) || 60000;
+    const isWebsitePresent = typeof options.isWebsitePresent === "function"
+        ? options.isWebsitePresent
+        : function () { return false; };
     let timer = null;
     let busy = false;
 
@@ -61,6 +64,10 @@ function createChessScheduleReminders(pool, pushService, options) {
                 : "Your Chess match is coming up";
             const userIds = [Number(schedule.host_user_id), Number(schedule.guest_user_id)];
             for (const userId of userIds) {
+                // A visible authenticated website session can already show the
+                // user's Match Hub. Suppress only this personal game reminder;
+                // unrelated announcements and security notices are unaffected.
+                if (isWebsitePresent(userId)) continue;
                 const body = phase === "start"
                     ? "Your Chess game is scheduled for " + timestamp + ". Open GOAL$GAMBIT and check your Match Hub."
                     : phase === "10m"

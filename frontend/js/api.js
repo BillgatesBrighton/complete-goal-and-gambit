@@ -32,6 +32,8 @@
     var frontendRootUrl = new URL("../", apiScriptUrl);
     var presenceSocket = null;
     var presenceScriptPending = false;
+    var websitePresenceTimer = null;
+    var presenceLifecycleInstalled = false;
     var onlineUserIds = new Set();
     var companionNoticeCheckInFlight = false;
     var companionNoticeRefreshPending = false;
@@ -72,12 +74,26 @@
     }
 
     function disconnectPresence() {
+        if (websitePresenceTimer) {
+            window.clearInterval(websitePresenceTimer);
+            websitePresenceTimer = null;
+        }
         if (presenceSocket) {
             var socket = presenceSocket;
             presenceSocket = null;
             socket.disconnect();
         }
         publishPresence([]);
+    }
+
+    function emitWebsitePresence() {
+        if (!presenceSocket || !presenceSocket.connected) return;
+        presenceSocket.emit("website:presence", {
+            // Only the Chess page renders scheduled Chess game details. A
+            // visible homepage or unrelated page must not suppress reminders.
+            active: /\/pages\/chess\.html$/i.test(location.pathname) &&
+                document.visibilityState !== "hidden"
+        });
     }
 
     function startPresence() {
@@ -87,10 +103,16 @@
         function connect() {
             if (!window.io || !getToken() || presenceSocket) return;
             var socket = window.io(API_BASE || location.origin, {
-                auth: { token: getToken() },
+                auth: { token: getToken(), clientType: "website" },
                 transports: ["websocket", "polling"]
             });
             presenceSocket = socket;
+            socket.on("connect", function() {
+                emitWebsitePresence();
+                if (!websitePresenceTimer) {
+                    websitePresenceTimer = window.setInterval(emitWebsitePresence, 25000);
+                }
+            });
             socket.on("presence:update", function(data) {
                 publishPresence(data && data.onlineUserIds);
             });
@@ -101,11 +123,22 @@
                 window.dispatchEvent(new CustomEvent("gg:notification-update", { detail: data || {} }));
             });
             socket.on("disconnect", function(reason) {
+                if (websitePresenceTimer) {
+                    window.clearInterval(websitePresenceTimer);
+                    websitePresenceTimer = null;
+                }
                 publishPresence([]);
                 if (reason === "io server disconnect" && presenceSocket === socket) {
                     presenceSocket = null;
                 }
             });
+        }
+
+        if (!presenceLifecycleInstalled) {
+            presenceLifecycleInstalled = true;
+            document.addEventListener("visibilitychange", emitWebsitePresence);
+            window.addEventListener("focus", emitWebsitePresence);
+            window.addEventListener("blur", emitWebsitePresence);
         }
 
         if (window.io) {

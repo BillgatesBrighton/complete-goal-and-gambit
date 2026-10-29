@@ -8,6 +8,7 @@ const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { recordJournal } = require("../services/financialLedger");
 const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
 const financialRateLimit = require("../middleware/financialRateLimit");
+const { createAdminOnly } = require("../middleware/adminAuthorization");
 const companionGuideVersion = require("./companion").GUIDE_VERSION;
 const companionTermsVersion = require("./companion").TERMS_VERSION;
 
@@ -37,24 +38,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         return existing.rows[0].id;
     }
 
-    async function adminOnly(req, res, next) {
-        res.setHeader("Cache-Control", "private, no-store");
-        res.setHeader("Pragma", "no-cache");
-        try {
-            const r = await pool.query(
-                `SELECT id, username, role FROM users WHERE id = $1`,
-                [req.user.userId]
-            );
-            if (!r.rows.length || r.rows[0].role !== "admin") {
-                return res.status(403).json({success:false,message:"Administrator access required."});
-            }
-            req.admin = r.rows[0];
-            next();
-        } catch (e) {
-            console.error("Admin authorization error:", e.message);
-            res.status(500).json({success:false,message:"Could not verify administrator access."});
-        }
-    }
+    const adminOnly = createAdminOnly(pool, "Admin authorization error");
 
     router.get("/efootball-scheduler", authenticateToken, adminOnly, async function(req, res) {
         if (!efootballScheduler || typeof efootballScheduler.snapshot !== "function") {
@@ -85,6 +69,15 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             if (error && !res.headersSent) {
                 console.error("Private admin result-review page could not be served:", error.message);
                 res.status(500).json({ success: false, message: "Could not load administrator result reviews." });
+            }
+        });
+    });
+
+    router.get("/daraja-check-page", authenticateToken, adminOnly, (req, res) => {
+        res.sendFile(path.join(__dirname, "..", "private-pages", "admin-daraja-check.html"), (error) => {
+            if (error && !res.headersSent) {
+                console.error("Private Daraja diagnostics page could not be served:", error.message);
+                res.status(500).json({ success: false, message: "Could not load Daraja diagnostics." });
             }
         });
     });
