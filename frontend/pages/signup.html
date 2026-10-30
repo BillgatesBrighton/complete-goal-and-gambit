@@ -110,6 +110,25 @@
                 style="width:100%;padding:15px;margin:8px 0 20px;"
             >
 
+            <label for="email">
+                Email Address
+            </label>
+
+            <input
+                type="email"
+                id="email"
+                name="email"
+                placeholder="you@example.com"
+                required
+                maxlength="254"
+                autocomplete="email"
+                style="width:100%;padding:15px;margin:8px 0 20px;"
+            >
+
+            <small style="display:block;color:#9a9a9a;margin:-12px 0 20px;">
+                We will send a verification link to this address. A verified email is required for automatic password recovery.
+            </small>
+
 
             <label for="password">
                 Password
@@ -260,7 +279,7 @@
 </footer>
 
 
-<script src="../js/api.js?v=20261029-user-facing-status"></script>
+<script src="../js/api.js?v=20261030-email-recovery"></script>
 <script>
 if (GG.getToken()) {
     location.replace("dashboard.html");
@@ -302,14 +321,20 @@ document.getElementById("signupForm").addEventListener("submit", async function 
     var button = event.target.querySelector("button[type=submit]");
     var username = document.getElementById("username").value.trim();
     var phone = document.getElementById("phone").value.trim();
+    var email = document.getElementById("email").value.trim().toLowerCase();
     var password = document.getElementById("password").value;
     var game = gameSelect.value;
     var ratingText = document.getElementById("chessRating").value.trim();
 
     message.textContent = "";
 
-    if (!username || !phone || !password || !game) {
+    if (!username || !phone || !email || !password || !game) {
         message.textContent = "Please complete all fields.";
+        return;
+    }
+
+    if (!document.getElementById("email").validity.valid || email.length > 254) {
+        message.textContent = "Enter a valid email address.";
         return;
     }
 
@@ -342,7 +367,7 @@ document.getElementById("signupForm").addEventListener("submit", async function 
 
     var result = await GG.api("/api/auth/register", {
         method: "POST",
-        body: { username: username, phone: phone, password: password, game: game, chessRating: chessRating },
+        body: { username: username, phone: phone, email: email, password: password, game: game, chessRating: chessRating },
         noRedirect: true
     });
 
@@ -354,6 +379,11 @@ document.getElementById("signupForm").addEventListener("submit", async function 
     }
 
     GG.saveSession(result.data.token, result.data.user, game);
+    if (result.data.emailVerificationSent === false) {
+        message.textContent = result.data.message || "Account created. Open Account settings to request another verification link.";
+        window.setTimeout(function(){ location.replace("account.html"); }, 1000);
+        return;
+    }
     location.replace("dashboard.html");
 });
 </script>

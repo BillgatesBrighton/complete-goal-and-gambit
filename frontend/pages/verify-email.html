@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#090909">
+  <title>GOAL$GAMBIT | Verify Email</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .verify-card{max-width:560px;margin:48px auto;padding:26px;text-align:left;border:1px solid #3a3525;border-radius:16px;background:#111}
+    .verify-status{min-height:1.5em;color:#f4bd20;line-height:1.6}
+  </style>
+</head>
+<body>
+  <header class="navbar"><a href="index.html" class="brand"><span class="brand-icon">♛</span><span>GOAL$GAMBIT</span></a></header>
+  <main>
+    <section class="final-section">
+      <span class="section-label">ACCOUNT SECURITY</span>
+      <h2>Verify your <span>email.</span></h2>
+      <section class="verify-card">
+        <p id="verificationStatus" class="verify-status" role="status" aria-live="polite">Checking your verification link…</p>
+        <p><a id="accountLink" href="account.html" class="text-link" hidden>Return to Account settings</a></p>
+        <p><a href="login.html" class="text-link">Return to sign in</a></p>
+      </section>
+    </section>
+  </main>
+  <script src="../js/api.js?v=20261030-email-recovery"></script>
+  <script>
+    (async function(){
+      "use strict";
+      var status=document.getElementById("verificationStatus");
+      var accountLink=document.getElementById("accountLink");
+      var fragment=new URLSearchParams(location.hash.slice(1));
+      var id=fragment.get("id")||"";
+      var secret=fragment.get("secret")||"";
+      if(!id||!secret){status.textContent="This verification link is incomplete or invalid. Request a new link from Account settings.";return}
+      var result=await GG.api("/api/auth/email/verify",{method:"POST",body:{id:id,secret:secret},noRedirect:true});
+      if(!result.ok){status.textContent=result.data.message||"This verification link is invalid or expired. Request a new link from Account settings.";return}
+      history.replaceState(null,"",location.pathname+location.search);
+      status.textContent="Your email address is verified. It can now be used for secure password recovery.";
+      accountLink.hidden=false;
+    })();
+  </script>
+</body>
+</html>

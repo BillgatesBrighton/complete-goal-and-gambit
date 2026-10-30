@@ -4,6 +4,9 @@ const express = require("express");
 const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const rateLimit = require("../middleware/rateLimit");
+const createToken = require("../services/authToken");
+const defaultEmailService = require("../services/emailService");
+const { publicAccountRole } = require("../middleware/adminAuthorization");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -50,17 +53,12 @@ function configuredRecoveryPage(options) {
     }
 }
 
-function redirectToPrivateRecoveryPage(res, pageUrl, ticketId, secret) {
-    const url = new URL(pageUrl.toString());
-    url.hash = new URLSearchParams({ ticket: ticketId, secret: secret }).toString();
-    res.status(303).setHeader("Location", url.toString());
-    return res.end();
-}
-
 module.exports = function passwordRecoveryRoutes(pool, options) {
     options = options || {};
     const router = express.Router();
     const recoveryPage = configuredRecoveryPage(options);
+    const emailService = options.emailService || defaultEmailService;
+    const io = options.io || null;
     const requestLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
         max: 4,
@@ -84,44 +82,47 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
         next();
     });
 
-    // The recovery request is a top-level same-browser form submission. Its
-    // response redirects to the configured site page, so the bearer token is
-    // never returned in JSON or exposed to cross-origin JavaScript.
+    // The public response is intentionally consistent and never reveals whether
+    // a username/phone pair exists. A reset link goes only to a verified email.
     router.use(express.urlencoded({ extended: false, limit: "2kb" }));
 
     router.post("/request", requestLimiter, async function(req, res) {
-        if (!recoveryPage) {
-            return res.status(503).type("text/plain").send("Password recovery is temporarily unavailable. Please contact GOAL$GAMBIT support.");
+        if (!recoveryPage || !emailService || typeof emailService.isConfigured !== "function" || !emailService.isConfigured()) {
+            return res.status(503).json({ success: false, message: "Password recovery is temporarily unavailable. Please try again later." });
         }
         const username = normalizeUsername(req.body && req.body.username);
         const phone = normalizePhone(req.body && req.body.phone);
-        const ticketId = crypto.randomUUID();
-        const secret = crypto.randomBytes(32).toString("base64url");
-        const privateRedirect = function() { return redirectToPrivateRecoveryPage(res, recoveryPage, ticketId, secret); };
         if (username.length < 3 || username.length > 30 || !/^[a-z0-9_]+$/.test(username) || !phone) {
-            return privateRedirect();
+            return res.status(202).json({ success: true, message: "If the details match an active account with a verified email, a reset link may arrive at that address." });
         }
 
         let client;
         let transactionOpen = false;
+        let recoveryId = null;
+        let secret = null;
+        let recipientEmail = null;
+        let usernameForEmail = null;
         try {
             client = await pool.connect();
-            // Validate both registration credentials against the active account
-            // before creating any recovery ticket. Lock the row so a concurrent
-            // account change cannot replace the phone between validation and insert.
             await client.query("BEGIN");
             transactionOpen = true;
             const account = await client.query(
-                "SELECT id, phone FROM users WHERE username=$1 AND account_status='active' FOR UPDATE",
+                "SELECT id,phone,email,email_verified_at,auth_version FROM users WHERE username=$1 AND account_status='active' FOR UPDATE",
                 [username]
             );
-            if (!account.rows.length || normalizePhone(account.rows[0].phone) !== phone) {
+            const row = account.rows[0];
+            recipientEmail = row && row.email_verified_at ? String(row.email || "").trim().toLowerCase() : null;
+            if (!row || normalizePhone(row.phone) !== phone || !recipientEmail) {
                 await client.query("ROLLBACK");
                 transactionOpen = false;
-                return privateRedirect();
+                return res.status(202).json({ success: true, message: "If the details match an active account with a verified email, a reset link may arrive at that address." });
             }
 
-            const userId = Number(account.rows[0].id);
+            const userId = Number(row.id);
+            usernameForEmail = username;
+            const authVersion = Number(row.auth_version || 0);
+            recoveryId = crypto.randomUUID();
+            secret = crypto.randomBytes(32).toString("base64url");
             // A newer request makes all earlier pending or approved links for
             // this account unusable before the new one is inserted.
             await client.query(
@@ -133,18 +134,32 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
 
             await client.query(
                 `INSERT INTO password_recovery_requests
-                    (id,user_id,requested_username,submitted_phone,secret_hash,status,expires_at)
-                 VALUES($1,$2,$3,$4,$5,'pending',NOW()+INTERVAL '30 minutes')`,
-                [ticketId, userId, username, phone, hashSecret(secret)]
+                    (id,user_id,requested_username,submitted_phone,secret_hash,status,expires_at,approval_expires_at,auth_version_at_approval)
+                 VALUES($1,$2,$3,$4,$5,'approved',NOW()+INTERVAL '30 minutes',NOW()+INTERVAL '30 minutes',$6)`,
+                [recoveryId, userId, username, phone, hashSecret(secret), authVersion]
             );
             await client.query("COMMIT");
             transactionOpen = false;
+            client.release();
+            client = null;
 
-            return privateRedirect();
+            const resetLink = new URL(recoveryPage.toString());
+            resetLink.hash = new URLSearchParams({ ticket: recoveryId, secret }).toString();
+            try {
+                await emailService.sendPasswordRecoveryEmail(recipientEmail, usernameForEmail, resetLink.toString());
+            } catch (_) {
+                await pool.query(
+                    `UPDATE password_recovery_requests SET status='expired',secret_hash=$1
+                      WHERE id=$2 AND status='approved'`,
+                    [hashSecret(crypto.randomBytes(32).toString("hex")), recoveryId]
+                ).catch(function() {});
+                console.error("Password recovery email delivery failed.");
+            }
+            return res.status(202).json({ success: true, message: "If the details match an active account with a verified email, a reset link may arrive at that address." });
         } catch (error) {
-            if (transactionOpen) await client.query("ROLLBACK").catch(function() {});
-            console.error("Support-assisted password recovery request failed.");
-            return res.status(503).type("text/plain").send("Could not submit the recovery request. Please try again later.");
+            if (transactionOpen && client) await client.query("ROLLBACK").catch(function() {});
+            console.error("Password recovery request failed:", error && error.code || "INTERNAL");
+            return res.status(202).json({ success: true, message: "If the details match an active account with a verified email, a reset link may arrive at that address." });
         } finally {
             if (client) client.release();
         }
@@ -178,7 +193,7 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
                 approvalExpiresAt: request.approval_expires_at || null
             });
         } catch (error) {
-            console.error("Support-assisted password recovery status failed:", error && error.message);
+            console.error("Password recovery status failed:", error && error.code || "INTERNAL");
             return res.status(500).json({ success: false, message: "Could not check the recovery request. Please try again." });
         }
     });
@@ -216,7 +231,8 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
             }
 
             const account = await client.query(
-                "SELECT id,auth_version FROM users WHERE id=$1 AND account_status='active' FOR UPDATE",
+                `SELECT id,username,phone,rating,game,role,account_status,auth_version,email,email_verified_at,created_at
+                   FROM users WHERE id=$1 AND account_status='active' FOR UPDATE`,
                 [recovery.user_id]
             );
             if (!account.rows.length || recovery.auth_version_at_approval == null ||
@@ -227,8 +243,10 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
             }
 
             const passwordHash = await bcrypt.hash(password, 12);
-            await client.query(
-                "UPDATE users SET password_hash=$1,auth_version=auth_version+1 WHERE id=$2",
+            const updatedAccount = await client.query(
+                `UPDATE users SET password_hash=$1,auth_version=auth_version+1
+                  WHERE id=$2
+                  RETURNING id,username,phone,rating,game,role,account_status,auth_version,email,email_verified_at,created_at`,
                 [passwordHash, recovery.user_id]
             );
             await client.query(
@@ -236,15 +254,38 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
                 [recovery.user_id]
             );
             await client.query(
+                `UPDATE password_recovery_requests
+                    SET status='expired',secret_hash=$1
+                  WHERE user_id=$2 AND id<>$3 AND status IN ('pending','approved')`,
+                [hashSecret(crypto.randomBytes(32).toString("hex")), recovery.user_id, recovery.id]
+            );
+            await client.query(
+                "UPDATE email_verification_requests SET consumed_at=NOW() WHERE user_id=$1 AND consumed_at IS NULL",
+                [recovery.user_id]
+            );
+            await client.query(
                 "UPDATE password_recovery_requests SET status='completed',completed_at=NOW(),secret_hash=$1 WHERE id=$2",
                 [hashSecret(crypto.randomBytes(32).toString("hex")), recovery.id]
             );
+            const user = updatedAccount.rows[0];
+            user.role = publicAccountRole(user);
+            const token = createToken(user);
             await client.query("COMMIT");
             transactionOpen = false;
-            return res.json({ success: true, message: "Password reset. Sign in with your new password." });
+            if (io) io.in("user_" + user.id).disconnectSockets(true);
+            if (user.email && user.email_verified_at && typeof emailService.sendPasswordChangedNotice === "function") {
+                Promise.resolve(emailService.sendPasswordChangedNotice(user.email, user.username))
+                    .catch(function() { console.error("Password change notice delivery failed."); });
+            }
+            return res.json({
+                success: true,
+                message: "Password changed. You are now signed in.",
+                token,
+                user
+            });
         } catch (error) {
-            if (transactionOpen) await client.query("ROLLBACK").catch(function() {});
-            console.error("Support-assisted password reset failed:", error && error.message);
+            if (transactionOpen && client) await client.query("ROLLBACK").catch(function() {});
+            console.error("Password reset failed:", error && error.code || "INTERNAL");
             return res.status(503).json({ success: false, message: "Could not reset the password. Please contact support and try again." });
         } finally {
             if (client) client.release();

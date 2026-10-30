@@ -130,6 +130,9 @@ if (-not $env:PASSWORD_RESET_FRONTEND_URL) {
     # Use the existing recovery/reset page on the current GitHub Pages site.
     $env:PASSWORD_RESET_FRONTEND_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/password-recovery.html"
 }
+if (-not $env:EMAIL_VERIFICATION_FRONTEND_URL) {
+    $env:EMAIL_VERIFICATION_FRONTEND_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/verify-email.html"
+}
 $env:ALLOW_TEST_DEPOSITS = "false"
 $env:TEST_WALLET_MODE = "false"
 $env:DOTENV_CONFIG_PATH = $envFile

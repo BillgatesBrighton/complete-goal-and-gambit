@@ -860,7 +860,7 @@ app.use(
 
 app.use(
     "/api/auth/password-recovery",
-    passwordRecoveryRoutes(pool)
+    passwordRecoveryRoutes(pool, { io })
 );
 
 app.use(
@@ -1071,6 +1071,8 @@ app.get(
                         id,
                         username,
                         phone,
+                        email,
+                        email_verified_at,
                         rating,
                         game,
                         role,

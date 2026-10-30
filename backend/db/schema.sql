@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
     suspended_until     TIMESTAMPTZ,
     moderation_reason   TEXT,
     auth_version        INTEGER      NOT NULL DEFAULT 0,
+    email               VARCHAR(254),
+    email_verified_at   TIMESTAMPTZ,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
@@ -23,6 +25,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL D
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS moderation_reason TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(254);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ALTER COLUMN game SET DEFAULT 'both';
 ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user';
 ALTER TABLE users ALTER COLUMN account_status SET DEFAULT 'active';
@@ -41,9 +45,9 @@ CREATE TABLE IF NOT EXISTS password_reset_codes (
 CREATE INDEX IF NOT EXISTS idx_password_reset_codes_expiry
     ON password_reset_codes(expires_at);
 
--- Support-assisted recovery never resets an account until an administrator
--- records an identity check. The claimant's one-time link is stored only as
--- a hash and becomes usable for 30 minutes after approval.
+-- Recovery links are stored only as hashes. Verified-email links are approved
+-- automatically after the account's username and phone are matched; legacy
+-- support-assisted requests remain pending until an administrator reviews them.
 CREATE TABLE IF NOT EXISTS password_recovery_requests (
     id                  UUID PRIMARY KEY,
     user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -66,6 +70,26 @@ CREATE INDEX IF NOT EXISTS idx_password_recovery_requests_status
     ON password_recovery_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_password_recovery_requests_user
     ON password_recovery_requests(user_id, created_at DESC);
+
+-- Email addresses remain optional for legacy accounts. Only verified addresses
+-- must be unique; an unverified signup cannot reserve someone else's address.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_verified_email_unique_lower
+    ON users (LOWER(email)) WHERE email IS NOT NULL AND email_verified_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS email_verification_requests (
+    id           UUID PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email        VARCHAR(254) NOT NULL,
+    token_hash   CHAR(64) NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    consumed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_user_pending
+    ON email_verification_requests(user_id, created_at DESC)
+    WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_verification_expiry
+    ON email_verification_requests(expires_at);
 
 CREATE TABLE IF NOT EXISTS wallets (
     id              SERIAL PRIMARY KEY,

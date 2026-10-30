@@ -839,6 +839,7 @@
         } catch (e) {}
 
         fillProfile(user);
+        showEmailRecoveryReminder(user);
         var balance = await refreshBalance();
         if (balance !== null) fillBalance(balance);
         await showDashboardAnnouncements();
@@ -846,6 +847,35 @@
             showAndroidCompanionReminder().catch(function() {});
         }
         return user;
+    }
+
+    function showEmailRecoveryReminder(user) {
+        if (!document.body || !user || (user.email && user.email_verified_at)) return;
+        if (document.getElementById("gg-email-recovery-reminder")) return;
+
+        var reminder = document.createElement("aside");
+        reminder.id = "gg-email-recovery-reminder";
+        reminder.setAttribute("role", "note");
+        reminder.style.cssText = "box-sizing:border-box;max-width:1120px;margin:12px auto;padding:12px 16px;border:1px solid #b88716;border-left:4px solid #f4bd20;border-radius:10px;background:#19160e;color:#f5f1e4;font:14px/1.5 system-ui,Segoe UI,sans-serif";
+
+        var message = document.createElement("span");
+        message.textContent = user.email
+            ? "Verify your email address in Account settings to enable secure password recovery."
+            : "Add an email address in Account settings so you can receive secure password recovery links.";
+        var link = document.createElement("a");
+        link.href = "account.html#email-recovery-settings";
+        link.textContent = " Add or verify email";
+        link.style.cssText = "display:inline-block;margin-left:6px;color:#f4bd20;font-weight:700";
+        reminder.append(message, link);
+
+        var heading = document.querySelector("main h1, .container h1, .both-wrap h1");
+        var insertionPoint = heading && heading.closest(".hero") ? heading.closest(".hero") : heading;
+        if (insertionPoint && insertionPoint.parentNode) {
+            insertionPoint.insertAdjacentElement("afterend", reminder);
+        } else {
+            var main = document.querySelector("main") || document.querySelector(".container") || document.body;
+            main.insertBefore(reminder, main.firstChild);
+        }
     }
 
     function announcementDismissalState() {

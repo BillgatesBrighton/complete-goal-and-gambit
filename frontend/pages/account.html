@@ -57,7 +57,7 @@
                 <div class="field">
                     <label for="newPhone">New phone number <span class="help">(leave blank to keep it)</span></label>
                     <input id="newPhone" type="tel" maxlength="24" autocomplete="tel" placeholder="07XXXXXXXX or +2547XXXXXXXX">
-                    <p class="help">Use a phone number you control. Password recovery codes go to this number.</p>
+                    <p class="help">Use a phone number you control. Password recovery also requires a verified email address.</p>
                 </div>
                 <div class="field">
                     <label for="currentGame">Current game</label>
@@ -91,8 +91,28 @@
                 <div id="accountStatus" class="status" role="status" aria-live="polite"></div>
             </form>
         </section>
+
+        <section id="email-recovery-settings" class="card" style="margin-top:16px" aria-labelledby="emailHeading">
+            <h2 id="emailHeading">Email and password recovery</h2>
+            <p class="intro">A verified email gives you a private password-reset link and helps protect your account.</p>
+            <div id="emailRecoveryNotice" class="security-note" role="status" aria-live="polite" hidden></div>
+            <p class="help" id="currentEmailStatus">Checking your email status…</p>
+            <form id="emailVerificationForm" novalidate>
+                <div class="field">
+                    <label for="newEmail">Add or change email address</label>
+                    <input id="newEmail" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" required>
+                    <p class="help">Your current verified address remains active until you verify the new one.</p>
+                </div>
+                <div class="field">
+                    <label for="emailCurrentPassword">Current password</label>
+                    <input id="emailCurrentPassword" type="password" maxlength="128" autocomplete="current-password" required>
+                </div>
+                <button id="sendEmailVerification" class="submit" type="submit">Send verification link</button>
+                <div id="emailStatus" class="status" role="status" aria-live="polite"></div>
+            </form>
+        </section>
     </main>
-    <script src="../js/api.js?v=20261029-user-facing-status"></script>
+    <script src="../js/api.js?v=20261030-email-recovery"></script>
     <script>
         (function(){
             "use strict";
@@ -110,6 +130,12 @@
                 currentUsername=String(result.data.user.username||"");
                 $("currentUsername").value=currentUsername;
                 $("currentPhone").value=String(result.data.user.phone||"");
+                var verifiedAt=result.data.user.email_verified_at;
+                var email=String(result.data.user.email||"");
+                $("currentEmailStatus").textContent=verifiedAt&&email?"Verified email: "+email:(email?"Email awaiting verification: "+email:"No verified email is set on this account.");
+                $("emailRecoveryNotice").hidden=!!(verifiedAt&&email);
+                $("emailRecoveryNotice").textContent=verifiedAt&&email?"":"Add and verify an email address to make password recovery easier. This is optional for continuing to use your account.";
+                if(email&&!verifiedAt)$("newEmail").value=email;
                 currentGame=String(result.data.user.game||"both").toLowerCase();
                 $("currentGame").value=currentGame==="konami"?"eFootball":currentGame==="chess"?"Chess":"Both Chess and eFootball";
             }
@@ -147,6 +173,17 @@
                 $("confirmPassword").value="";
                 show(result.data.message||"Account updated.",false);
                 if(changedGame)window.setTimeout(function(){location.replace("dashboard.html")},900);
+            });
+            $("emailVerificationForm").addEventListener("submit",async function(event){
+                event.preventDefault();
+                var email=$("newEmail").value.trim().toLowerCase();
+                if(!$("newEmail").validity.valid||email.length>254){$("emailStatus").textContent="Enter a valid email address.";$("emailStatus").classList.add("error");return}
+                var button=$("sendEmailVerification");button.disabled=true;$("emailStatus").classList.remove("error");$("emailStatus").textContent="Sending verification link…";
+                var result=await GG.api("/api/auth/email/request-verification",{method:"POST",body:{email:email,currentPassword:$("emailCurrentPassword").value},noRedirect:true});
+                button.disabled=false;
+                if(!result.ok){$("emailStatus").classList.add("error");$("emailStatus").textContent=result.data.message||"Could not send the verification link.";return}
+                $("newEmail").value="";$("emailCurrentPassword").value="";
+                $("emailStatus").textContent=result.data.message||"Check your email for the verification link.";
             });
             loadAccount();
         })();

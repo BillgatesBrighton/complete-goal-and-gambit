@@ -2,10 +2,12 @@
 
 const express = require("express");
 const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
 const rateLimit = require("../middleware/rateLimit");
 const { publicAccountRole } = require("../middleware/adminAuthorization");
+const createToken = require("../services/authToken");
+const defaultEmailService = require("../services/emailService");
 const router = express.Router();
 
 const loginLimiter = rateLimit({
@@ -24,6 +26,18 @@ const registerLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 10,
     message: "Too many accounts created from this connection. Try again later."
+});
+
+const emailVerificationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 4,
+    message: "Too many email verification requests. Please wait before trying again."
+});
+
+const emailVerificationAttemptLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: "Too many email verification attempts. Please wait before trying again."
 });
 
 
@@ -48,30 +62,6 @@ function normalizePhone(value) {
 }
 
 
-function createToken(user) {
-
-    if (!process.env.JWT_SECRET) {
-        throw new Error(
-            "JWT_SECRET is not configured."
-        );
-    }
-
-
-    return jwt.sign(
-        {
-            userId: user.id,
-            username: user.username,
-            authVersion: Number(user.auth_version || 0)
-        },
-        process.env.JWT_SECRET,
-        {
-            expiresIn: "7d"
-        }
-    );
-
-}
-
-
 // ======================================================
 function normalizePhoneForSms(value) {
     let phone = String(value || "").trim().replace(/[()\s-]/g, "");
@@ -82,10 +72,49 @@ function normalizePhoneForSms(value) {
     return /^\+[1-9]\d{8,14}$/.test(phone) ? phone : null;
 }
 
+function normalizeEmail(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+    return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+}
+
+function hashEmailToken(secret) {
+    return crypto.createHash("sha256").update(String(secret)).digest("hex");
+}
+
+function makeEmailToken(pageEnvName) {
+    let pageText = String(process.env[pageEnvName] || "").trim();
+    if (!pageText && pageEnvName === "EMAIL_VERIFICATION_FRONTEND_URL") {
+        try { pageText = new URL("verify-email.html", process.env.PASSWORD_RESET_FRONTEND_URL).toString(); }
+        catch (_) {}
+    }
+    let pageUrl;
+    try {
+        pageUrl = new URL(pageText);
+        if (pageUrl.username || pageUrl.password || pageUrl.search || pageUrl.hash) return null;
+        if (pageUrl.protocol !== "https:" && !(pageUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(pageUrl.hostname))) return null;
+    } catch (_) { return null; }
+    const id = crypto.randomUUID();
+    const secret = crypto.randomBytes(32).toString("base64url");
+    pageUrl.hash = new URLSearchParams({ id, secret }).toString();
+    return { id, secret, hash: hashEmailToken(secret), url: pageUrl.toString() };
+}
+
+function tokenMatches(expectedHash, secret) {
+    if (!/^[a-f0-9]{64}$/i.test(String(expectedHash || ""))) return false;
+    const expected = Buffer.from(expectedHash, "hex");
+    const actual = Buffer.from(hashEmailToken(secret), "hex");
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
 // ROUTES
 // ======================================================
 
-module.exports = function(pool, authenticateToken, io) {
+module.exports = function(pool, authenticateToken, io, options) {
+    options = options || {};
+    const emailService = options.emailService || defaultEmailService;
 
 
     // ==================================================
@@ -96,21 +125,19 @@ module.exports = function(pool, authenticateToken, io) {
         "/register",
         registerLimiter,
         async function(req, res) {
-
-            const client =
-                await pool.connect();
-
-
+            let client;
             try {
 
                 let {
                     username,
                     phone,
                     password,
+                    email,
                     game,
                     chessRating
-                } = req.body;
+                } = req.body || {};
 
+                email = normalizeEmail(email);
                 game = String(game || "").trim().toLowerCase();
                 if (!["chess", "konami", "both"].includes(game)) {
                     return res.status(400).json({
@@ -138,6 +165,13 @@ module.exports = function(pool, authenticateToken, io) {
 
                 phone =
                     normalizePhone(phone);
+
+                if (!isValidEmail(email)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Enter a valid email address."
+                    });
+                }
 
 
                 // -------------------------------
@@ -232,6 +266,22 @@ module.exports = function(pool, authenticateToken, io) {
 
                 }
 
+                if (!emailService || typeof emailService.isConfigured !== "function" || !emailService.isConfigured()) {
+                    return res.status(503).json({
+                        success: false,
+                        message: "Email verification is temporarily unavailable. Please try again later."
+                    });
+                }
+                const verification = makeEmailToken("EMAIL_VERIFICATION_FRONTEND_URL");
+                if (!verification) {
+                    return res.status(503).json({
+                        success: false,
+                        message: "Email verification is temporarily unavailable. Please try again later."
+                    });
+                }
+
+                client = await pool.connect();
+
 
                 // -------------------------------
                 // BEGIN TRANSACTION
@@ -251,11 +301,13 @@ module.exports = function(pool, authenticateToken, io) {
                         FROM users
                         WHERE username = $1
                            OR phone = $2
+                           OR (LOWER(email) = $3 AND email_verified_at IS NOT NULL)
                         LIMIT 1
                         `,
                         [
                             username,
-                            phone
+                            phone,
+                            email
                         ]
                     );
 
@@ -274,7 +326,7 @@ module.exports = function(pool, authenticateToken, io) {
                         success: false,
 
                         message:
-                            "Username or phone number already exists."
+                            "Username, phone number or email is already linked to an account."
 
                     });
 
@@ -303,6 +355,7 @@ module.exports = function(pool, authenticateToken, io) {
                         (
                             username,
                             phone,
+                            email,
                             password_hash,
                             rating,
                             game
@@ -313,23 +366,27 @@ module.exports = function(pool, authenticateToken, io) {
                             $2,
                             $3,
                             $4,
-                            $5
+                            $5,
+                            $6
                         )
                         RETURNING
                             id,
                             username,
                             phone,
+                            email,
                             rating,
                             game,
                             role,
                             account_status,
                             suspended_until,
                             auth_version,
+                            email_verified_at,
                             created_at
                         `,
                         [
                             username,
                             phone,
+                            email,
                             passwordHash,
                             startRating,
                             game
@@ -339,6 +396,13 @@ module.exports = function(pool, authenticateToken, io) {
 
                 const user =
                     userResult.rows[0];
+
+                await client.query(
+                    `INSERT INTO email_verification_requests
+                        (id,user_id,email,token_hash,expires_at)
+                     VALUES($1,$2,$3,$4,NOW()+INTERVAL '30 minutes')`,
+                    [verification.id, user.id, email, verification.hash]
+                );
 
 
                 // -------------------------------
@@ -372,6 +436,18 @@ module.exports = function(pool, authenticateToken, io) {
 
                 await client.query("COMMIT");
 
+                let emailVerificationSent = true;
+                try {
+                    await emailService.sendVerificationEmail(email, username, verification.url);
+                } catch (_) {
+                    emailVerificationSent = false;
+                    await pool.query(
+                        "UPDATE email_verification_requests SET consumed_at=NOW() WHERE id=$1 AND consumed_at IS NULL",
+                        [verification.id]
+                    ).catch(function() {});
+                    console.error("Registration email verification delivery failed.");
+                }
+
 
                 // -------------------------------
                 // TOKEN
@@ -388,7 +464,11 @@ module.exports = function(pool, authenticateToken, io) {
                     success: true,
 
                     message:
-                        "Account created successfully.",
+                        emailVerificationSent
+                            ? "Account created. Check your email to verify your address."
+                            : "Account created, but the verification email could not be sent. Sign in and request another verification link from Account settings.",
+
+                    emailVerificationSent,
 
                     token,
 
@@ -416,10 +496,13 @@ module.exports = function(pool, authenticateToken, io) {
                     error.message
                 );
 
-                if (error.code === "23505") {
+                if (error && error.code === "23505") {
+                    const constraint = String(error.constraint || "").toLowerCase();
                     return res.status(409).json({
                         success: false,
-                        message: "Username or phone number already exists."
+                        message: constraint.includes("email")
+                            ? "That email address is already linked to an account."
+                            : "Username or phone number already exists."
                     });
                 }
 
@@ -436,12 +519,170 @@ module.exports = function(pool, authenticateToken, io) {
 
             } finally {
 
-                client.release();
+                if (client) client.release();
 
             }
 
         }
     );
+
+    router.post("/email/verify", emailVerificationAttemptLimiter, async function(req, res) {
+        const body = req.body || {};
+        const id = String(body.id || "").trim();
+        const secret = String(body.secret || "").trim();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ||
+            !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
+            return res.status(400).json({ success: false, message: "This verification link is invalid or expired." });
+        }
+
+        let client;
+        let transactionOpen = false;
+        let previousEmail = null;
+        let account = null;
+        let verifiedEmail = null;
+        try {
+            client = await pool.connect();
+            await client.query("BEGIN");
+            transactionOpen = true;
+            const request = await client.query(
+                `SELECT id,user_id,email,token_hash,expires_at,consumed_at
+                   FROM email_verification_requests WHERE id=$1 FOR UPDATE`,
+                [id]
+            );
+            if (!request.rows.length || !tokenMatches(request.rows[0].token_hash, secret) ||
+                request.rows[0].consumed_at || new Date(request.rows[0].expires_at) <= new Date()) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(400).json({ success: false, message: "This verification link is invalid or expired." });
+            }
+
+            const row = request.rows[0];
+            const userResult = await client.query(
+                "SELECT id,username,email,email_verified_at FROM users WHERE id=$1 AND account_status='active' FOR UPDATE",
+                [row.user_id]
+            );
+            if (!userResult.rows.length) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(400).json({ success: false, message: "This verification link is invalid or expired." });
+            }
+            account = userResult.rows[0];
+            previousEmail = account.email_verified_at ? account.email : null;
+            verifiedEmail = normalizeEmail(row.email);
+            const updated = await client.query(
+                "UPDATE users SET email=$1,email_verified_at=NOW() WHERE id=$2 AND account_status='active' RETURNING email_verified_at",
+                [verifiedEmail, account.id]
+            );
+            await client.query(
+                "UPDATE email_verification_requests SET consumed_at=NOW() WHERE user_id=$1 AND consumed_at IS NULL",
+                [account.id]
+            );
+            await client.query("COMMIT");
+            transactionOpen = false;
+
+            if (previousEmail && previousEmail.toLowerCase() !== verifiedEmail) {
+                try { await emailService.sendEmailChangedNotice(previousEmail, account.username, verifiedEmail); }
+                catch (_) { console.error("Email address change notice delivery failed."); }
+            }
+            return res.json({
+                success: true,
+                message: "Email address verified successfully.",
+                email: verifiedEmail,
+                emailVerifiedAt: updated.rows[0].email_verified_at
+            });
+        } catch (error) {
+            if (transactionOpen && client) await client.query("ROLLBACK").catch(function() {});
+            if (error && error.code === "23505") {
+                return res.status(409).json({ success: false, message: "That email address is already linked to another account." });
+            }
+            console.error("Email verification failed:", error && error.code || "INTERNAL");
+            return res.status(503).json({ success: false, message: "Could not verify this email. Please try again later." });
+        } finally {
+            if (client) client.release();
+        }
+    });
+
+    router.post("/email/request-verification", authenticateToken, emailVerificationLimiter, async function(req, res) {
+        const body = req.body || {};
+        const email = normalizeEmail(body.email);
+        const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
+        if (!isValidEmail(email)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
+        if (!currentPassword) return res.status(400).json({ success: false, message: "Enter your current password to confirm this email change." });
+        if (!emailService || typeof emailService.isConfigured !== "function" || !emailService.isConfigured()) {
+            return res.status(503).json({ success: false, message: "Email verification is temporarily unavailable. Please try again later." });
+        }
+        const verification = makeEmailToken("EMAIL_VERIFICATION_FRONTEND_URL");
+        if (!verification) return res.status(503).json({ success: false, message: "Email verification is temporarily unavailable. Please try again later." });
+
+        let client;
+        let transactionOpen = false;
+        let account;
+        try {
+            client = await pool.connect();
+            await client.query("BEGIN");
+            transactionOpen = true;
+            const userResult = await client.query(
+                `SELECT id,username,email,email_verified_at,password_hash
+                   FROM users WHERE id=$1 AND account_status='active' FOR UPDATE`,
+                [req.user.userId]
+            );
+            if (!userResult.rows.length) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(404).json({ success: false, message: "Active account not found." });
+            }
+            account = userResult.rows[0];
+            if (!(await bcrypt.compare(currentPassword, account.password_hash))) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(401).json({ success: false, message: "Current password is incorrect." });
+            }
+            if (account.email_verified_at && normalizeEmail(account.email) === email) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(409).json({ success: false, message: "That email address is already verified on your account." });
+            }
+            const duplicate = await client.query(
+                "SELECT id FROM users WHERE LOWER(email)=$1 AND email_verified_at IS NOT NULL AND id<>$2 LIMIT 1",
+                [email, account.id]
+            );
+            if (duplicate.rows.length) {
+                await client.query("ROLLBACK");
+                transactionOpen = false;
+                return res.status(409).json({ success: false, message: "That email address is already linked to another account." });
+            }
+
+            await client.query(
+                "UPDATE email_verification_requests SET consumed_at=NOW() WHERE user_id=$1 AND consumed_at IS NULL",
+                [account.id]
+            );
+            await client.query(
+                `INSERT INTO email_verification_requests(id,user_id,email,token_hash,expires_at)
+                 VALUES($1,$2,$3,$4,NOW()+INTERVAL '30 minutes')`,
+                [verification.id, account.id, email, verification.hash]
+            );
+            await client.query("COMMIT");
+            transactionOpen = false;
+        } catch (error) {
+            if (transactionOpen && client) await client.query("ROLLBACK").catch(function() {});
+            console.error("Email verification request failed:", error && error.code || "INTERNAL");
+            return res.status(503).json({ success: false, message: "Could not request email verification. Please try again later." });
+        } finally {
+            if (client) client.release();
+        }
+
+        try {
+            await emailService.sendVerificationEmail(email, account.username, verification.url);
+            return res.status(202).json({ success: true, message: "Check that email address for a verification link. It expires in 30 minutes." });
+        } catch (_) {
+            await pool.query(
+                "UPDATE email_verification_requests SET consumed_at=NOW() WHERE id=$1 AND consumed_at IS NULL",
+                [verification.id]
+            ).catch(function() {});
+            console.error("Account email verification delivery failed.");
+            return res.status(503).json({ success: false, message: "The verification email could not be sent. Please try again later." });
+        }
+    });
 
 
     // ==================================================
@@ -497,6 +738,8 @@ module.exports = function(pool, authenticateToken, io) {
                             account_status,
                             suspended_until,
                             auth_version,
+                            email,
+                            email_verified_at,
                             created_at
                         FROM users
                         WHERE username = $1
@@ -617,6 +860,12 @@ module.exports = function(pool, authenticateToken, io) {
 
                         phone:
                             user.phone,
+
+                        email:
+                            user.email,
+
+                        email_verified_at:
+                            user.email_verified_at,
 
                         rating:
                             user.rating,
@@ -754,9 +1003,11 @@ module.exports = function(pool, authenticateToken, io) {
                     const constraint = String(error.constraint || "").toLowerCase();
                     return res.status(409).json({
                         success: false,
-                        message: constraint.includes("phone")
-                            ? "That phone number is already linked to another account."
-                            : "That username is already in use."
+                        message: constraint.includes("email")
+                            ? "That email address is already linked to another account."
+                            : constraint.includes("phone")
+                                ? "That phone number is already linked to another account."
+                                : "That username is already in use."
                     });
                 }
                 console.error("Account update error:", error && error.message);
