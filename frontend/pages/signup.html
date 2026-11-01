@@ -202,6 +202,12 @@
             </div>
 
 
+            <label for="termsAndAppAgreement" style="display:flex;align-items:flex-start;gap:10px;margin:0 0 22px;line-height:1.5;color:#e8e3d4;">
+                <input id="termsAndAppAgreement" type="checkbox" required style="width:18px;height:18px;flex:none;margin:3px 0 0;">
+                <span>I agree to the <a href="terms.html" target="_blank" rel="noopener">Terms</a> and understand I should download the GOAL$GAMBIT app to play. I’ll continue to the dashboard after creating my account.</span>
+            </label>
+
+
             <button
                 type="submit"
                 class="primary-button large"
@@ -309,6 +315,12 @@ document.getElementById("signupForm").addEventListener("submit", async function 
 
     if (password.length < 8) {
         message.textContent = "Password must be at least 8 characters.";
+        return;
+    }
+
+    if (!document.getElementById("termsAndAppAgreement").checked) {
+        message.textContent = "Please agree to the Terms and confirm you will download the GOAL$GAMBIT app to continue.";
+        document.getElementById("termsAndAppAgreement").focus();
         return;
     }
 
