@@ -1,0 +1,4 @@
+Fantasy chess-piece artwork by Maurizio Monge (chess-art).
+Source: https://github.com/lichess-org/lila/tree/master/public/piece/fantasy
+Original artwork repository: https://github.com/maurimo/chess-art
+License: MIT. See LICENSE.txt.
