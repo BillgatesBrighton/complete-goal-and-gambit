@@ -260,72 +260,6 @@
         card.querySelector("#gg-welcome-continue").focus();
     }
 
-    function showAndroidCompanionGate(data) {
-        if (!document.body || document.getElementById("gg-android-companion-required")) return;
-        var panel = document.createElement("section");
-        panel.id = "gg-android-companion-required";
-        panel.setAttribute("role", "alertdialog");
-        panel.setAttribute("aria-modal", "true");
-        panel.setAttribute("aria-labelledby", "gg-android-companion-title");
-        panel.style.cssText = "position:fixed;inset:0;z-index:2147483002;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.84);font:15px/1.5 Arial,sans-serif";
-
-        var card = document.createElement("div");
-        card.style.cssText = "box-sizing:border-box;width:min(520px,100%);padding:22px;border:1px solid #cba933;border-radius:14px;background:#111;color:#f7f2df;box-shadow:0 14px 42px rgba(0,0,0,.65)";
-        var title = document.createElement("h2");
-        title.id = "gg-android-companion-title";
-        title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
-        title.textContent = "Notifications required for eFootball";
-        var explanation = document.createElement("p");
-        explanation.textContent = "eFootball matches require an active Android notification registration for match alerts and room-code replies. Download and install the GOAL$GAMBIT app, sign in to this account, allow notifications, then return here and check activation. This player app currently does not register Android push tokens, so activation may remain unavailable until that is added. Chess remains available for Both accounts.";
-        var download = document.createElement("a");
-        download.href = "../downloads/goal-gambit-player-v1.1.0.apk";
-        download.textContent = "Download GOAL$GAMBIT Android App · v1.1.0";
-        download.setAttribute("download", "GOAL-GAMBIT-Player-v1.1.0.apk");
-        download.style.cssText = "display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0 0 14px;padding:10px 14px;border-radius:8px;background:#e4bd43;color:#111;font-weight:700;text-decoration:none";
-        var status = document.createElement("p");
-        status.setAttribute("role", "status");
-        status.setAttribute("aria-live", "polite");
-        status.style.cssText = "min-height:1.4em;margin:0 0 12px;color:#d0c9b5";
-        status.textContent = "The download is the current GOAL$GAMBIT Android player app. Android push-token registration is not yet included in this build; installing it alone will not activate eFootball alerts.";
-        var actions = document.createElement("div");
-        actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
-        var check = document.createElement("button");
-        check.type = "button";
-        check.textContent = "I enabled notifications — check activation";
-        check.style.cssText = "padding:10px 14px;border:0;border-radius:8px;background:#e4bd43;color:#111;font-weight:700";
-        var signout = document.createElement("button");
-        signout.type = "button";
-        signout.textContent = "Sign out";
-        signout.style.cssText = "padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee";
-        actions.style.flexDirection = "column";
-        actions.style.alignItems = "stretch";
-        actions.appendChild(download);
-        actions.appendChild(check);
-        actions.appendChild(signout);
-        card.appendChild(title);
-        card.appendChild(explanation);
-        card.appendChild(status);
-        card.appendChild(actions);
-        panel.appendChild(card);
-        document.body.appendChild(panel);
-
-        check.addEventListener("click", async function() {
-            check.disabled = true;
-            status.textContent = "Checking Android notification activation…";
-            var result = await api("/api/push/status", { noRedirect: true });
-            check.disabled = false;
-            if (result.ok && Number(result.data.activeAndroidDevices || 0) > 0) {
-                panel.remove();
-                location.reload();
-                return;
-            }
-            status.textContent = result.ok && !result.data.androidConfigured
-                ? "Android alerts are temporarily unavailable. Please try again later."
-                : result.data.message || "No Android notification device is registered yet. The current player app does not register push tokens, so try again after an app update adds Android push registration.";
-        });
-        signout.addEventListener("click", logout);
-    }
-
     async function showAndroidCompanionReminder() {
         if (!document.body || document.getElementById("gg-android-companion-reminder")) return;
         var result = await api("/api/push/status", { noRedirect: true });
@@ -415,10 +349,6 @@
             if (response.status === 401 && token && !options.noRedirect) {
                 clearSession();
                 location.href = "login.html";
-            }
-
-            if (response.status === 403 && data && data.code === "ANDROID_COMPANION_REQUIRED") {
-                showAndroidCompanionGate(data);
             }
 
             return { ok: response.ok, status: response.status, data: data || {} };

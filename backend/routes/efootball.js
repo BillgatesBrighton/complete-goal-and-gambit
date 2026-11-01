@@ -1890,7 +1890,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             );
             if (!activeDevice.rows.length) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "Open the GOAL$GAMBIT Companion on Android and enable notifications first." });
+                return res.status(409).json({ success: false, message: "An Android app is not registered for this account, so a push alert cannot be sent. You can continue the match without notifications." });
             }
 
             const reminderPrefix = "efootball-match:" + matchId + ":room-code-needed:manual:%";

@@ -8,11 +8,7 @@ module.exports = function gameAccess(pool, needed) {
     return async function (req, res, next) {
         try {
             const r = await pool.query(
-                `SELECT u.game,
-                        EXISTS (
-                            SELECT 1 FROM android_push_tokens t
-                             WHERE t.user_id=u.id AND t.active=TRUE
-                        ) AS android_companion_registered
+                `SELECT u.game
                    FROM users u
                   WHERE u.id=$1`,
                 [req.user.userId]
@@ -29,15 +25,6 @@ module.exports = function gameAccess(pool, needed) {
                         : "Your account is registered for Chess only."
                 });
             }
-
-            if (needed === "konami" && !r.rows[0].android_companion_registered) {
-                return res.status(403).json({
-                    success: false,
-                    code: "ANDROID_COMPANION_REQUIRED",
-                    message: "eFootball matches require an active Android notification registration for match alerts and room-code replies. Install the GOAL$GAMBIT Android app and enable notifications for this account. Chess remains available for Both accounts."
-                });
-            }
-
             return next();
         } catch (e) {
             return res.status(500).json({ success: false, message: "Could not verify game access." });
