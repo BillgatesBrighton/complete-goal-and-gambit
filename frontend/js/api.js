@@ -19,10 +19,6 @@
     var API_BASE = window.GG_API_BASE ||
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
     var TOKEN_KEY = "goalGambitToken";
-    var ANDROID_COMPANION_DOWNLOAD_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk";
-    // The APK is a static GitHub Pages asset, so download links must continue
-    // working when the player's phone cannot reach the companion API.
-    var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL;
     var POST_LOGIN_PATH_KEY = "goalGambitPostLoginPath";
     // Resolve the frontend root from this shared script so the worker stays
     // inside /frontend on GitHub Pages and works from the backend's static root.
@@ -204,69 +200,6 @@
         });
     }
 
-    function openPublicCompanionDownload() {
-        var url = new URL(ANDROID_COMPANION_DOWNLOAD_URL);
-        // GitHub Pages caches static files briefly; a unique query makes sure
-        // the fallback resolves to the APK currently published at this path.
-        url.searchParams.set("download", String(Date.now()));
-        window.location.assign(url.toString());
-    }
-
-    async function downloadCompanionApp(statusTarget) {
-        var token = getToken();
-        if (statusTarget) statusTarget.textContent = "Checking for the latest Android app…";
-        var controller = typeof AbortController === "function" ? new AbortController() : null;
-        var requestTimer = controller ? window.setTimeout(function() { controller.abort(); }, 10000) : null;
-        try {
-            var headers = { "Accept": "application/vnd.android.package-archive" };
-            if (token) headers.Authorization = "Bearer " + token;
-            var requestOptions = {
-                headers: headers,
-                cache: "no-store"
-            };
-            if (controller) requestOptions.signal = controller.signal;
-            var endpoint = token ? "/api/companion/download" : "/api/companion/public-download";
-            var response = await fetch(API_BASE + endpoint, requestOptions);
-            if (!response.ok) {
-                var problem = {};
-                try { problem = await response.json(); } catch (_) {}
-                throw new Error(problem.message || "The companion download could not be started. Try again shortly.");
-            }
-            var responseType = String(response.headers && response.headers.get("content-type") || "").toLowerCase();
-            if (responseType && responseType.indexOf("application/vnd.android.package-archive") === -1 &&
-                responseType.indexOf("application/octet-stream") === -1) {
-                throw new Error("The download did not return the Android app file.");
-            }
-            var blob = await response.blob();
-            if (!blob.size) throw new Error("The downloaded app file is empty. Please try again.");
-            var signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-            if (signature.length < 4 || signature[0] !== 0x50 || signature[1] !== 0x4b || signature[2] !== 0x03 || signature[3] !== 0x04) {
-                throw new Error("The downloaded app file is invalid. Please try again or contact support.");
-            }
-            var objectUrl = URL.createObjectURL(blob);
-            var link = document.createElement("a");
-            link.href = objectUrl;
-            link.download = "goal-gambit-companion.apk";
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.setTimeout(function() { URL.revokeObjectURL(objectUrl); }, 60000);
-            if (statusTarget) statusTarget.textContent = "Download started. Open the APK from your Downloads when it finishes.";
-            return true;
-        } catch (error) {
-            if (statusTarget) statusTarget.textContent = "Connection unavailable. Opening the official app download…";
-            try {
-                openPublicCompanionDownload();
-                return true;
-            } catch (_) {
-                if (statusTarget) statusTarget.textContent = "Connection unavailable. Use the official app download link instead.";
-                return false;
-            }
-        } finally {
-            if (requestTimer !== null) window.clearTimeout(requestTimer);
-        }
-    }
-
     function showCompanionWelcomeGuide(statusData) {
         if (!document.body || !getToken() || document.getElementById("gg-companion-welcome-guide")) return;
         if (/\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
@@ -276,17 +209,14 @@
         overlay.setAttribute("aria-modal", "true");
         overlay.setAttribute("aria-labelledby", "gg-welcome-title");
         overlay.style.cssText = "position:fixed;inset:0;z-index:2147483001;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.86);font:15px/1.55 Arial,Helvetica,sans-serif;color:#f5f1e4";
-        var apk = statusData && statusData.apk || {};
         var card = document.createElement("section");
         card.style.cssText = "box-sizing:border-box;width:min(760px,100%);max-height:calc(100dvh - 24px);overflow:auto;padding:clamp(16px,4vw,30px);border:1px solid #8b7124;border-radius:18px;background:#101112;box-shadow:0 18px 60px #000b";
         card.innerHTML = '<div style="color:#dfb82f;font-size:12px;font-weight:800;letter-spacing:.12em">GOAL$GAMBIT · COMPETE. WIN. EARN.</div>' +
             '<h1 id="gg-welcome-title" style="margin:5px 0 4px;color:#f5d45a;font-size:clamp(24px,5vw,34px)">Welcome to GOAL$GAMBIT</h1>' +
-            '<p style="margin:0 0 16px;color:#d5d0c2">Complete this quick setup before continuing. Your guide acknowledgement is separate from installing the app, enabling notifications, or adding wallet funds.</p>' +
+            '<p style="margin:0 0 16px;color:#d5d0c2">Review these account and wallet reminders. Acknowledging this guide does not confirm app installation, notification permission, or wallet funding.</p>' +
             '<div style="display:grid;gap:12px">' +
-            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">1 · Get the Android Companion</h2><p style="margin:0 0 10px">Use the official download below on a compatible Android device. Open the downloaded APK from Downloads and follow the installation screens. iPhones do not install Android APK files.</p><div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px"><button id="gg-welcome-download" type="button" style="padding:11px 16px;border:0;border-radius:9px;background:#dfb82f;color:#111;font-weight:800">Download Companion APK</button><span id="gg-welcome-download-status" role="status" aria-live="polite" style="color:#c9c3b5"></span></div><p id="gg-welcome-apk-info" style="margin:8px 0 0;color:#a9a69f;font-size:12px;overflow-wrap:anywhere"></p></article>' +
-            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">2 · Understand the Play Protect message</h2><p style="margin:0 0 10px">This app is distributed outside Google Play, so Play Protect may not recognize its developer. The message shown below says the app may be unsafe; it is not proof that the app is safe or harmful. Install only if you trust the official GOAL$GAMBIT website and can verify the APK. If Android blocks it and you cannot verify it, stop.</p><img id="gg-welcome-protect-image" alt="Example Google Play Protect warning for GOAL$GAMBIT Companion" style="display:block;width:min(100%,360px);height:auto;margin:0 auto;border:1px solid #4b4635;border-radius:10px"><p style="margin:7px 0 0;color:#aaa;font-size:12px">Example of the Google Play Protect warning that may appear when installing outside Google Play.</p></article>' +
-            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">3 · Sign in and allow notifications</h2><p style="margin:0">Open GOAL$GAMBIT Companion and sign in with your existing account. Allow notifications when Android asks. If you denied them earlier, enable them in Android Settings under the app. Notifications can help with match alerts and room-code communication; delivery also depends on your device notification and battery settings.</p></article>' +
-            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">4 · Fund your wallet before paid competitions</h2><p style="margin:0 0 10px">Open Wallet, choose Deposit, enter an amount, and follow the official payment instructions. Wait until the deposit is confirmed and visible as available balance. Pending deposits and funds locked in another match are not available entry funds. Review the entry fee and prize rules, never pay an administrator personally, and only deposit what you can afford to lose.</p><a href="wallet.html" style="display:inline-block;padding:10px 14px;border:1px solid #dfb82f;border-radius:9px;color:#f0cb4c;font-weight:800;text-decoration:none">Open Wallet</a></article>' +
+            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Android notifications</h2><p style="margin:0">The website no longer provides downloads for the Android Companion. Existing notification registrations and settings remain available under Notification Settings.</p></article>' +
+            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Wallet and competitions</h2><p style="margin:0 0 10px">Wait until deposits are confirmed and visible as available balance. Pending deposits and funds locked in another match are not available entry funds. Review the entry fee and prize rules, never pay an administrator personally, and only deposit what you can afford to lose.</p><a href="wallet.html" style="display:inline-block;padding:10px 14px;border:1px solid #dfb82f;border-radius:9px;color:#f0cb4c;font-weight:800;text-decoration:none">Open Wallet</a></article>' +
             '<p style="margin:0;color:#d5d0c2">Once setup is complete, follow the instructions in each match or competition and submit results honestly.</p>' +
             '<label style="display:flex;align-items:flex-start;gap:10px;padding:12px 0;color:#f5f1e4"><input id="gg-welcome-read" type="checkbox" style="width:20px;height:20px;flex:none;margin-top:2px">I have read this setup guide and understand that acknowledging it does not confirm app installation, notification permission, or wallet funding.</label>' +
             '<p id="gg-welcome-error" role="status" aria-live="polite" style="min-height:1.4em;margin:0;color:#ffaaa5"></p>' +
@@ -294,12 +224,6 @@
         overlay.appendChild(card);
         document.body.appendChild(overlay);
         document.body.style.overflow = "hidden";
-        card.querySelector("#gg-welcome-protect-image").src = new URL("pages/images/google-play-protect-warning.jpg", frontendRootUrl).href;
-        var info = card.querySelector("#gg-welcome-apk-info");
-        if (apk.version) info.textContent = "Version " + apk.version + (apk.fileSize ? " · " + (apk.fileSize / 1048576).toFixed(1) + " MB" : "") + (apk.sha256 ? " · SHA-256: " + apk.sha256 : "");
-        card.querySelector("#gg-welcome-download").addEventListener("click", function() {
-            downloadCompanionApp(card.querySelector("#gg-welcome-download-status"));
-        });
         var checkbox = card.querySelector("#gg-welcome-read");
         var continueButton = card.querySelector("#gg-welcome-continue");
         checkbox.addEventListener("change", function() {
@@ -320,7 +244,7 @@
             document.removeEventListener("keydown", preventGuideDismiss, true);
             document.body.style.overflow = "";
             overlay.remove();
-            refreshAndroidCompanionDownloadLink(true);
+            refreshCompanionOnboarding(true);
         });
         function preventGuideDismiss(event) {
             if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); }
@@ -333,7 +257,7 @@
             }
         }
         document.addEventListener("keydown", preventGuideDismiss, true);
-        card.querySelector("#gg-welcome-download").focus();
+        card.querySelector("#gg-welcome-continue").focus();
     }
 
     function showAndroidCompanionGate(data) {
@@ -357,12 +281,7 @@
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         status.style.cssText = "min-height:1.4em;margin:0 0 12px;color:#d0c9b5";
-        status.textContent = "After enabling notifications in the app, return here and check activation.";
-        var download = document.createElement("button");
-        download.type = "button";
-        download.textContent = "Download Android notification companion";
-        download.style.cssText = "display:inline-block;margin:0 0 12px;color:#e4bd43;font-weight:700;background:transparent;border:0;text-decoration:underline;cursor:pointer";
-        download.addEventListener("click", function() { downloadCompanionApp(status); });
+        status.textContent = "If an Android Companion is already registered to your account, enable notifications there and check again.";
         var actions = document.createElement("div");
         actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
         var check = document.createElement("button");
@@ -377,7 +296,6 @@
         actions.appendChild(signout);
         card.appendChild(title);
         card.appendChild(explanation);
-        card.appendChild(download);
         card.appendChild(status);
         card.appendChild(actions);
         panel.appendChild(card);
@@ -409,105 +327,25 @@
         banner.setAttribute("role", "status");
         banner.style.cssText = "box-sizing:border-box;padding:12px 16px;border:1px solid #80671e;border-radius:10px;background:#171307;color:#f5e9bd;margin:12px auto;max-width:1100px;font:14px/1.5 Arial,sans-serif";
         var message = document.createElement("span");
-        message.textContent = "This account has no Android Companion registered yet. Enable notifications in the companion to receive match alerts and room-code chat replies. Use the Android download link at the top of this page to get the app.";
+        message.textContent = "This account has no Android notification device registered yet. Existing registered Android apps can still enable match alerts and room-code replies.";
         banner.appendChild(message);
         document.body.insertBefore(banner, document.body.firstChild);
     }
 
-    function renderAndroidCompanionDownloadLink(statusData) {
-        if (!document.body || !getToken() || /\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
-        var banner = document.getElementById("gg-android-companion-download");
-        if (!banner) {
-            banner = document.createElement("aside");
-            banner.id = "gg-android-companion-download";
-            banner.setAttribute("aria-label", "Android notification companion setup");
-            banner.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 14px;width:100%;padding:10px 16px;border-bottom:1px solid #80671e;background:#171307;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
-            var message = document.createElement("span");
-            message.id = "gg-android-companion-message";
-            var download = document.createElement("button");
-            download.type = "button";
-            download.id = "gg-android-companion-download-button";
-            download.style.cssText = "color:#f4bd20;font-weight:700;text-decoration:underline";
-            var downloadStatus = document.createElement("span");
-            downloadStatus.setAttribute("role", "status");
-            downloadStatus.setAttribute("aria-live", "polite");
-            download.addEventListener("click", function() { downloadCompanionApp(downloadStatus); });
-            banner.append(message, download, downloadStatus);
-            document.body.insertBefore(banner, document.body.firstChild);
-        }
-        var message = banner.querySelector("#gg-android-companion-message");
-        var download = banner.querySelector("#gg-android-companion-download-button");
-        if (statusData && statusData.installationConfirmed) {
-            if (!statusData.termsAccepted) {
-                message.textContent = "Companion installation confirmed. Open the app and accept the current Terms and Conditions to finish setup.";
-            } else {
-                message.textContent = "Companion installation confirmed. Acknowledge the setup guide on this website to finish setup.";
-            }
-            download.textContent = "Get the Android app";
-        } else {
-            message.textContent = "GOAL$GAMBIT Android Companion: match alerts and room-code chat replies on your phone.";
-            download.textContent = "Download the Android app";
-        }
+    function removeAndroidCompanionDownloadUi() {
+        ["gg-android-companion-download", "gg-companion-update-reminder"].forEach(function(id) {
+            var element = document.getElementById(id);
+            if (element) element.remove();
+        });
     }
 
-    function removeAndroidCompanionDownloadLink() {
-        var banner = document.getElementById("gg-android-companion-download");
-        if (banner) banner.remove();
-    }
-
-    function isCompanionVersionOlder(installed, latest) {
-        var installedParts = String(installed || "").match(/\d+/g);
-        var latestParts = String(latest || "").match(/\d+/g);
-        if (!installedParts || !latestParts) return false;
-        for (var index = 0; index < Math.max(installedParts.length, latestParts.length); index += 1) {
-            var installedPart = Number(installedParts[index] || 0);
-            var latestPart = Number(latestParts[index] || 0);
-            if (!Number.isSafeInteger(installedPart) || !Number.isSafeInteger(latestPart)) return false;
-            if (installedPart !== latestPart) return installedPart < latestPart;
-        }
-        return false;
-    }
-
-    function renderCompanionUpdateReminder(statusData) {
-        if (!document.body || !getToken() || /\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
-        var installed = statusData && statusData.companion && statusData.companion.appVersion;
-        var latest = statusData && statusData.apk && statusData.apk.version;
-        var reminder = document.getElementById("gg-companion-update-reminder");
-        if (!isCompanionVersionOlder(installed, latest)) {
-            if (reminder) reminder.remove();
-            return;
-        }
-        if (!reminder) {
-            reminder = document.createElement("aside");
-            reminder.id = "gg-companion-update-reminder";
-            reminder.setAttribute("role", "status");
-            reminder.style.cssText = "box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 14px;padding:11px 16px;border-bottom:1px solid #80671e;background:#211a08;color:#f5e9bd;font:14px/1.5 Arial,sans-serif;text-align:center";
-            var message = document.createElement("strong");
-            message.id = "gg-companion-update-message";
-            var download = document.createElement("button");
-            download.type = "button";
-            download.textContent = "UPDATE APP";
-            download.style.cssText = "border:1px solid #e4bd43;border-radius:7px;padding:7px 12px;background:#e4bd43;color:#111;font-weight:800;cursor:pointer";
-            var result = document.createElement("span");
-            result.setAttribute("aria-live", "polite");
-            download.addEventListener("click", function() { downloadCompanionApp(result); });
-            reminder.append(message, download, result);
-            document.body.insertBefore(reminder, document.body.firstChild);
-        }
-        reminder.querySelector("#gg-companion-update-message").textContent =
-            "COMPANION UPDATE AVAILABLE · Installed v" + installed + " · Latest v" + latest;
-    }
-
-    async function refreshAndroidCompanionDownloadLink(force) {
+    async function refreshCompanionOnboarding(force) {
         if (!document.body) return;
         var token = getToken();
-        if (!token) {
-            removeAndroidCompanionDownloadLink();
-            var updateReminder = document.getElementById("gg-companion-update-reminder");
-            if (updateReminder) updateReminder.remove();
+        if (!token || /\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) {
+            removeAndroidCompanionDownloadUi();
             return;
         }
-        if (/\/pages\/(?:login|signup)\.html$/i.test(location.pathname)) return;
         if (companionNoticeCheckInFlight) {
             companionNoticeRefreshPending = true;
             return;
@@ -518,31 +356,17 @@
         var status = await api("/api/companion/status", { noRedirect: true });
         companionNoticeLastCheckedAt = Date.now();
         companionNoticeCheckInFlight = false;
-        if (getToken() !== token) {
-            removeAndroidCompanionDownloadLink();
-            var changedAccountReminder = document.getElementById("gg-companion-update-reminder");
-            if (changedAccountReminder) changedAccountReminder.remove();
-            return;
+        removeAndroidCompanionDownloadUi();
+        if (getToken() === token && status.ok && status.data.needsAcknowledgement) {
+            showCompanionWelcomeGuide(status.data);
         }
-        if (status.ok) renderCompanionUpdateReminder(status.data);
-        if (status.ok && status.data.onboardingComplete === true) {
-            removeAndroidCompanionDownloadLink();
-        } else {
-            // If the backend cannot verify completion, keep the existing notice.
-            renderAndroidCompanionDownloadLink(status.ok ? status.data : null);
-        }
-        if (status.ok && status.data.needsAcknowledgement) showCompanionWelcomeGuide(status.data);
-        if (companionNoticeRefreshPending) refreshAndroidCompanionDownloadLink(true);
+        if (companionNoticeRefreshPending) refreshCompanionOnboarding(true);
     }
 
-    function showAndroidCompanionDownloadLink() {
-        refreshAndroidCompanionDownloadLink(true);
-    }
-
-    window.addEventListener("focus", function() { refreshAndroidCompanionDownloadLink(true); });
-    window.addEventListener("pageshow", function() { refreshAndroidCompanionDownloadLink(true); });
+    window.addEventListener("focus", function() { refreshCompanionOnboarding(true); });
+    window.addEventListener("pageshow", function() { refreshCompanionOnboarding(true); });
     document.addEventListener("visibilitychange", function() {
-        if (!document.hidden) refreshAndroidCompanionDownloadLink(true);
+        if (!document.hidden) refreshCompanionOnboarding(true);
     });
 
     // Sends the request with the login token. Always resolves to
@@ -979,8 +803,6 @@
 
     window.GG = {
         API_BASE: API_BASE,
-        androidCompanionDownloadUrl: PUBLIC_COMPANION_DOWNLOAD_URL,
-        downloadCompanionApp: downloadCompanionApp,
         api: api,
         getToken: getToken,
         takePostLoginDestination: takePostLoginDestination,
@@ -1133,9 +955,9 @@
     }
 
     if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", showAndroidCompanionDownloadLink, { once: true });
+        document.addEventListener("DOMContentLoaded", function() { refreshCompanionOnboarding(true); }, { once: true });
     } else {
-        showAndroidCompanionDownloadLink();
+        refreshCompanionOnboarding(true);
     }
     initServerStatus();
 

@@ -11,7 +11,6 @@
 <header><div class="brand">GOAL$GAMBIT</div><a href="dashboard.html">Dashboard</a></header>
 <main>
 <h1>Notification Settings</h1><p class="lead">Manage GOAL$GAMBIT Companion alerts and review recent delivery activity.</p>
-<section class="card"><h2>GOAL$GAMBIT Companion App</h2><p class="muted">Download the latest Android companion or reinstall it if needed. This update link remains available after your setup is complete.</p><p id="companionUpdateNotice" class="success" role="status" aria-live="polite" hidden></p><a id="androidCompanionDownload" class="button" href="https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/downloads/goal-gambit-companion.apk">Download latest Android app</a></section>
 <section class="card"><h2>Companion status</h2><p class="muted">Browser notifications are turned off. Match alerts are sent through the Android Companion app.</p><div class="status-grid"><div class="status-cell"><small>Android Companion</small><strong id="companionRegistration">Checking…</strong></div><div class="status-cell" id="androidDeviceStatus" hidden><small>Registered Android companion builds</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="companionHelp" class="muted" role="status" aria-live="polite"></p></section>
 <section class="card"><h2>Recent Alerts</h2><p class="muted">Alerts are sent through the Companion app. A “Sent” label does not confirm that your phone displayed the alert.</p><div id="history">Loading notification history…</div></section>
 <section class="card"><a class="button secondary" href="match-hub.html">Match Hub</a><a class="button secondary" href="konami.html">eFootball dashboard</a></section>
@@ -20,26 +19,6 @@
 (function(){
   "use strict";if(!GG.requireLogin())return;
   var $=function(id){return document.getElementById(id);};
-  var companionDownload=$("androidCompanionDownload");
-  companionDownload.href=GG.androidCompanionDownloadUrl;
-  companionDownload.addEventListener("click",function(event){event.preventDefault();GG.downloadCompanionApp();});
-  function versionIsOlder(installed,latest){
-    var a=String(installed||"").match(/\d+/g),b=String(latest||"").match(/\d+/g);
-    if(!a||!b)return false;
-    for(var i=0;i<Math.max(a.length,b.length);i++){var left=Number(a[i]||0),right=Number(b[i]||0);if(left!==right)return left<right;}
-    return false;
-  }
-  async function refreshCompanionVersion(){
-    var notice=$("companionUpdateNotice");
-    var result=await GG.api("/api/companion/status",{noRedirect:true});
-    if(!result.ok)return;
-    var installed=result.data.companion&&result.data.companion.appVersion;
-    var latest=result.data.apk&&result.data.apk.version;
-    if(versionIsOlder(installed,latest)){
-      notice.textContent="Your Companion app (v"+installed+") is out of date. Update to v"+latest+" to get the latest fixes.";
-      notice.hidden=false;
-    }
-  }
   function fmt(value){try{return value?new Date(value).toLocaleString():"";}catch(_){return "";}}
   async function refreshStatus(){
     var status=await GG.getPushStatus();
@@ -68,7 +47,7 @@
       return "<div class='item'><strong>"+GG.escapeHTML(item.title)+"</strong><div>"+GG.escapeHTML(item.body)+"</div><small class='muted'>"+GG.escapeHTML(fmt(item.created_at))+" · "+GG.escapeHTML(delivery+clicked)+"</small></div>";
     }).join("");
   }
-  refreshStatus();refreshHistory();refreshCompanionVersion();
+  refreshStatus();refreshHistory();
 })();
 </script>
 </body></html>
