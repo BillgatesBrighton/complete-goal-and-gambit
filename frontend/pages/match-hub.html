@@ -881,8 +881,8 @@ button{
             <p class="description" style="margin-top:12px;">
                 Create the room in eFootball, then send its official code to your matched opponent from this Match Hub.
             </p>
-            <p class="description">Your Companion sends an alert when you are selected. If it did not appear, request another replyable alert here.</p>
-            <button class="secondary-btn hidden" id="sendRoomCodeNotificationButton" type="button">SEND ALERT TO COMPANION APP</button>
+            <p class="description">The GOAL$GAMBIT Android app sends an alert when you are selected. If it did not appear, request another replyable alert here.</p>
+            <button class="secondary-btn hidden" id="sendRoomCodeNotificationButton" type="button">SEND ALERT TO ANDROID APP</button>
             <p class="room-code-entry-status hidden" id="roomCodeNotificationStatus" role="status" aria-live="polite"></p>
             <button class="primary-btn hidden" id="openRoomCodeDialog" type="button">SEND ROOM CODE</button>
             <div class="role-banner hidden" id="senderCodeStatus" role="status" aria-live="polite"></div>
@@ -1334,17 +1334,18 @@ button{
         </div>
 
         <p class="description">
-            Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts and inline room-code replies while eFootball stays open.
+            Browser notifications are turned off. Download the GOAL$GAMBIT Android app for match alerts and inline room-code replies while eFootball stays open.
         </p>
 
-        <a href="notification-settings.html" class="secondary-btn" style="display:inline-block;text-decoration:none;margin-bottom:12px">COMPANION APP & NOTIFICATION SETTINGS</a>
+        <a href="../downloads/goal-gambit-player-v1.1.0.apk" download="GOAL-GAMBIT-Player-v1.1.0.apk" class="secondary-btn" style="display:inline-block;text-decoration:none;margin-bottom:12px">DOWNLOAD ANDROID APP · v1.1.0</a>
+        <a href="notification-settings.html" class="secondary-btn" style="display:inline-block;text-decoration:none;margin-bottom:12px">NOTIFICATION SETTINGS</a>
 
         <div
             class="notification-box"
             id="notificationStatus"
         >
             <p>
-                Keep Companion notifications allowed in Android settings to receive match alerts.
+                Keep GOAL$GAMBIT notifications allowed in Android settings to receive match alerts.
             </p>
         </div>
 
@@ -1844,8 +1845,8 @@ function updateRoomCodeForm(){
         notificationButton.classList.toggle("hidden", !canSend);
         notificationButton.disabled = roomCodeNotificationSubmitting || roomCodeNotificationCooldownUntil > Date.now();
         notificationButton.textContent = currentMatch && currentMatch.codeCorrectionRequested
-            ? "SEND REPLACEMENT ALERT TO COMPANION APP"
-            : "SEND ALERT TO COMPANION APP";
+            ? "SEND REPLACEMENT ALERT TO ANDROID APP"
+            : "SEND ALERT TO ANDROID APP";
     }
     if(button){
         button.classList.toggle("hidden", !canSend);
@@ -1873,14 +1874,14 @@ async function sendRoomCodeAppNotification(){
     roomCodeNotificationSubmitting = true;
     button.disabled = true;
     status.classList.remove("hidden");
-    status.textContent = "Sending a room-code alert to your Android Companion…";
+    status.textContent = "Sending a room-code alert to the GOAL$GAMBIT Android app…";
     status.classList.remove("error", "success", "pending");
     try{
         const result = await GG.api("/api/efootball/matches/" + encodeURIComponent(currentMatch.backendId) + "/room-code-notification", {
             method: "POST", noRedirect: true
         });
         if(!result.ok){
-            status.textContent = result.data.message || "The Companion notification could not be sent.";
+            status.textContent = result.data.message || "The Android app notification could not be sent.";
             status.classList.add("error");
             const retryAfterSeconds = Number(result.data.retryAfterSeconds);
             if(Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0){
@@ -1890,7 +1891,7 @@ async function sendRoomCodeAppNotification(){
             }
             return;
         }
-        status.textContent = result.data.message || "Firebase accepted the room-code alert for your Android Companion.";
+        status.textContent = result.data.message || "Firebase accepted the room-code alert for your Android app.";
         status.classList.add(result.data.pending ? "pending" : "success");
         const cooldownSeconds = Math.max(1, Number(result.data.retryAfterSeconds) || 60);
         roomCodeNotificationCooldownUntil = Date.now() + cooldownSeconds * 1000;

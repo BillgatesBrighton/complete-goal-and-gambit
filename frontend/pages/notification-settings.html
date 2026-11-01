@@ -10,9 +10,9 @@
 <body>
 <header><div class="brand">GOAL$GAMBIT</div><a href="dashboard.html">Dashboard</a></header>
 <main>
-<h1>Notification Settings</h1><p class="lead">Manage GOAL$GAMBIT Companion alerts and review recent delivery activity.</p>
-<section class="card"><h2>Companion status</h2><p class="muted">Browser notifications are turned off. Match alerts are sent through the Android Companion app.</p><div class="status-grid"><div class="status-cell"><small>Android Companion</small><strong id="companionRegistration">Checking…</strong></div><div class="status-cell" id="androidDeviceStatus" hidden><small>Registered Android companion builds</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="companionHelp" class="muted" role="status" aria-live="polite"></p></section>
-<section class="card"><h2>Recent Alerts</h2><p class="muted">Alerts are sent through the Companion app. A “Sent” label does not confirm that your phone displayed the alert.</p><div id="history">Loading notification history…</div></section>
+<h1>Notification Settings</h1><p class="lead">Manage GOAL$GAMBIT Android app alerts and review recent delivery activity.</p>
+<section class="card"><h2>Android app status</h2><p class="muted">Match alerts and room-code replies use Android push registration. The current player app download does not yet register Android push tokens, so installation alone will not activate these alerts.</p><a class="button" href="../downloads/goal-gambit-player-v1.1.0.apk" download="GOAL-GAMBIT-Player-v1.1.0.apk">Download Android App · v1.1.0</a><div class="status-grid"><div class="status-cell"><small>Android notification registration</small><strong id="companionRegistration">Checking…</strong></div><div class="status-cell" id="androidDeviceStatus" hidden><small>Registered Android app installs</small><strong id="androidDeviceCount">—</strong><div id="androidDeviceList" class="muted">Checking registered app versions…</div></div></div><p id="companionHelp" class="muted" role="status" aria-live="polite"></p></section>
+<section class="card"><h2>Recent Alerts</h2><p class="muted">A “Sent” label means the push service accepted the alert; it does not confirm that your phone displayed it.</p><div id="history">Loading notification history…</div></section>
 <section class="card"><a class="button secondary" href="match-hub.html">Match Hub</a><a class="button secondary" href="konami.html">eFootball dashboard</a></section>
 </main>
 <script>
@@ -29,11 +29,11 @@
     var deviceList=$("androidDeviceList");
     deviceList.replaceChildren();
     if(!status.serverReachable){deviceList.textContent="Registration details are temporarily unavailable.";}
-    else if(!androidDevices.length){deviceList.textContent="No Android Companion is registered to this account.";}
+    else if(!androidDevices.length){deviceList.textContent="No Android app install is registered to this account.";}
     else androidDevices.forEach(function(device){var line=document.createElement("div");line.textContent=(device.deviceName||"Android build version not reported")+(device.updatedAt?" · registered "+fmt(device.updatedAt):"");deviceList.appendChild(line);});
     $("companionHelp").textContent=status.serverReachable
-      ? (Number(status.activeAndroidDevices)>0?"Companion is registered. Keep Android notifications allowed for match alerts and room-code replies.":"Open the Android Companion and sign in to register this device for match alerts.")
-      : "Companion status is temporarily unavailable. Please try again shortly.";
+      ? (Number(status.activeAndroidDevices)>0?"Android app is registered. Keep notifications allowed for match alerts and room-code replies.":"No push registration is active. This player app build does not register Android push tokens yet.")
+      : "Android notification status is temporarily unavailable. Please try again shortly.";
     return status;
   }
   async function refreshHistory(){
@@ -42,7 +42,7 @@
     var list=r.data.notifications||[];
     if(!list.length){$("history").textContent="No match notifications yet.";return;}
     $("history").innerHTML=list.map(function(item){
-      var delivery=item.deliveryStatus==="accepted_by_push_service"?"Sent":item.deliveryStatus==="queued"?"Waiting to send":item.deliveryStatus==="failed"?"Not sent":"No Companion was registered when this alert was created";
+      var delivery=item.deliveryStatus==="accepted_by_push_service"?"Sent":item.deliveryStatus==="queued"?"Waiting to send":item.deliveryStatus==="failed"?"Not sent":"No Android app was registered when this alert was created";
       var clicked=item.clicked_at?" · Opened "+fmt(item.clicked_at):"";
       return "<div class='item'><strong>"+GG.escapeHTML(item.title)+"</strong><div>"+GG.escapeHTML(item.body)+"</div><small class='muted'>"+GG.escapeHTML(fmt(item.created_at))+" · "+GG.escapeHTML(delivery+clicked)+"</small></div>";
     }).join("");

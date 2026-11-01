@@ -276,12 +276,17 @@
         title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
         title.textContent = "Notifications required for eFootball";
         var explanation = document.createElement("p");
-        explanation.textContent = "eFootball matches require an active notification registration for match alerts and room-code replies. Enable notifications for this account, then check activation. Chess remains available for Both accounts.";
+        explanation.textContent = "eFootball matches require an active Android notification registration for match alerts and room-code replies. Download and install the GOAL$GAMBIT app, sign in to this account, allow notifications, then return here and check activation. This player app currently does not register Android push tokens, so activation may remain unavailable until that is added. Chess remains available for Both accounts.";
+        var download = document.createElement("a");
+        download.href = "../downloads/goal-gambit-player-v1.1.0.apk";
+        download.textContent = "Download GOAL$GAMBIT Android App · v1.1.0";
+        download.setAttribute("download", "GOAL-GAMBIT-Player-v1.1.0.apk");
+        download.style.cssText = "display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0 0 14px;padding:10px 14px;border-radius:8px;background:#e4bd43;color:#111;font-weight:700;text-decoration:none";
         var status = document.createElement("p");
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         status.style.cssText = "min-height:1.4em;margin:0 0 12px;color:#d0c9b5";
-        status.textContent = "If a notification device is already registered to your account, allow alerts there and check again.";
+        status.textContent = "The download is the current GOAL$GAMBIT Android player app. Android push-token registration is not yet included in this build; installing it alone will not activate eFootball alerts.";
         var actions = document.createElement("div");
         actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
         var check = document.createElement("button");
@@ -292,6 +297,9 @@
         signout.type = "button";
         signout.textContent = "Sign out";
         signout.style.cssText = "padding:10px 14px;border:1px solid #62562f;border-radius:8px;background:#181818;color:#eee";
+        actions.style.flexDirection = "column";
+        actions.style.alignItems = "stretch";
+        actions.appendChild(download);
         actions.appendChild(check);
         actions.appendChild(signout);
         card.appendChild(title);
@@ -303,7 +311,7 @@
 
         check.addEventListener("click", async function() {
             check.disabled = true;
-            status.textContent = "Checking Companion alerts…";
+            status.textContent = "Checking Android notification activation…";
             var result = await api("/api/push/status", { noRedirect: true });
             check.disabled = false;
             if (result.ok && Number(result.data.activeAndroidDevices || 0) > 0) {
@@ -313,7 +321,7 @@
             }
             status.textContent = result.ok && !result.data.androidConfigured
                 ? "Android alerts are temporarily unavailable. Please try again later."
-                : result.data.message || "No Android companion is registered for this account yet. Open the app and enable match notifications, then try again.";
+                : result.data.message || "No Android notification device is registered yet. The current player app does not register push tokens, so try again after an app update adds Android push registration.";
         });
         signout.addEventListener("click", logout);
     }
@@ -455,7 +463,7 @@
     }
 
     async function requestPushPermission() {
-        throw new Error("Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts.");
+        throw new Error("Browser notifications are turned off. Download the GOAL$GAMBIT Android app for match alerts.");
     }
 
     function pushServiceWorkerUrl() {
@@ -517,7 +525,7 @@
     }
 
     async function enablePushNotifications() {
-        throw new Error("Browser notifications are turned off. Use the GOAL$GAMBIT Android Companion for match alerts.");
+        throw new Error("Browser notifications are turned off. Download the GOAL$GAMBIT Android app for match alerts.");
     }
 
     async function disablePushNotifications(options) {

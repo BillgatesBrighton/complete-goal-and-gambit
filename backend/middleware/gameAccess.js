@@ -34,7 +34,7 @@ module.exports = function gameAccess(pool, needed) {
                 return res.status(403).json({
                     success: false,
                     code: "ANDROID_COMPANION_REQUIRED",
-                    message: "eFootball matches require an active notification registration for match alerts and room-code replies. Chess remains available for Both accounts."
+                    message: "eFootball matches require an active Android notification registration for match alerts and room-code replies. Install the GOAL$GAMBIT Android app and enable notifications for this account. Chess remains available for Both accounts."
                 });
             }
 
