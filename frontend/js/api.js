@@ -215,7 +215,7 @@
             '<h1 id="gg-welcome-title" style="margin:5px 0 4px;color:#f5d45a;font-size:clamp(24px,5vw,34px)">Welcome to GOAL$GAMBIT</h1>' +
             '<p style="margin:0 0 16px;color:#d5d0c2">Review these account and wallet reminders. Acknowledging this guide does not confirm app installation, notification permission, or wallet funding.</p>' +
             '<div style="display:grid;gap:12px">' +
-            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Android notifications</h2><p style="margin:0">The website no longer provides downloads for the Android Companion. Existing notification registrations and settings remain available under Notification Settings.</p></article>' +
+            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Match notifications</h2><p style="margin:0">Manage match alerts and review recent delivery activity under Notification Settings.</p></article>' +
             '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Wallet and competitions</h2><p style="margin:0 0 10px">Wait until deposits are confirmed and visible as available balance. Pending deposits and funds locked in another match are not available entry funds. Review the entry fee and prize rules, never pay an administrator personally, and only deposit what you can afford to lose.</p><a href="wallet.html" style="display:inline-block;padding:10px 14px;border:1px solid #dfb82f;border-radius:9px;color:#f0cb4c;font-weight:800;text-decoration:none">Open Wallet</a></article>' +
             '<p style="margin:0;color:#d5d0c2">Once setup is complete, follow the instructions in each match or competition and submit results honestly.</p>' +
             '<label style="display:flex;align-items:flex-start;gap:10px;padding:12px 0;color:#f5f1e4"><input id="gg-welcome-read" type="checkbox" style="width:20px;height:20px;flex:none;margin-top:2px">I have read this setup guide and understand that acknowledging it does not confirm app installation, notification permission, or wallet funding.</label>' +
@@ -274,14 +274,14 @@
         var title = document.createElement("h2");
         title.id = "gg-android-companion-title";
         title.style.cssText = "margin:0 0 8px;color:#e4bd43;font-size:21px";
-        title.textContent = "Android Companion required for eFootball";
+        title.textContent = "Notifications required for eFootball";
         var explanation = document.createElement("p");
-        explanation.textContent = "Install the Android notification companion, sign in with this account, and enable match alerts and room-code chat replies. Play Chess and eFootball on the website. eFootball matches and tournaments unlock after the app registers your phone. Chess remains available for Both accounts.";
+        explanation.textContent = "eFootball matches require an active notification registration for match alerts and room-code replies. Enable notifications for this account, then check activation. Chess remains available for Both accounts.";
         var status = document.createElement("p");
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         status.style.cssText = "min-height:1.4em;margin:0 0 12px;color:#d0c9b5";
-        status.textContent = "If an Android Companion is already registered to your account, enable notifications there and check again.";
+        status.textContent = "If a notification device is already registered to your account, allow alerts there and check again.";
         var actions = document.createElement("div");
         actions.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
         var check = document.createElement("button");
