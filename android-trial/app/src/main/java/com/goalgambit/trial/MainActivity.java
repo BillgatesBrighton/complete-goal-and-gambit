@@ -77,6 +77,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private LinearLayout root;
     private LinearLayout content;
     private LinearLayout navigation;
+    private LinearLayout dashboardNavigation;
     private ScrollView pageScroll;
     private TextView connectionStatus;
     private TextView pageStatus;
@@ -117,6 +118,15 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private LinearLayout chessHistoryList;
     private TextView chessRecordSummary;
     private LinearLayout chessScheduleList;
+    private LinearLayout chessMatchmakingPanel;
+    private LinearLayout efootballMatchmakingPanel;
+    private View chessTournamentSection;
+    private View chessRankedSection;
+    private View chessResultsSection;
+    private View chessScheduleSection;
+    private View efootballTournamentSection;
+    private View efootballMatchesSection;
+    private View efootballResultsSection;
     private LinearLayout notificationList;
     private ChessRealtimeClient chessSocket;
     private Spinner registrationGame;
@@ -193,6 +203,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         pageScroll.addView(content, new ScrollView.LayoutParams(-1, -2));
         root.addView(pageScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        dashboardNavigation = new LinearLayout(this);
+        dashboardNavigation.setOrientation(LinearLayout.VERTICAL);
+        dashboardNavigation.setPadding(0, dp(3), 0, dp(3));
+        dashboardNavigation.setVisibility(View.GONE);
+        root.addView(dashboardNavigation, margins(-1, -2, 0, 0, 0, dp(2)));
+
         navigation = new LinearLayout(this);
         navigation.setOrientation(LinearLayout.VERTICAL);
         navigation.setPadding(0, dp(5), 0, dp(2));
@@ -204,6 +220,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private void renderAuth() {
         currentScreen = "auth";
         navigation.setVisibility(View.GONE);
+        if (dashboardNavigation != null) dashboardNavigation.setVisibility(View.GONE);
         content.removeAllViews();
         addHeading(registering ? "Create your player account" : "Welcome back", "Sign in to the existing GOAL$GAMBIT service. This trial uses real account authentication.");
 
@@ -472,6 +489,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         else if ("leaderboard".equals(screen)) renderLeaderboard();
         else if ("notifications".equals(screen)) renderNotifications();
         else if ("support".equals(screen)) renderSupport();
+        buildDashboardNavigation();
     }
 
     private void renderHome() {
@@ -496,17 +514,15 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         Button account = secondaryButton("PROFILE & ACCOUNT SETTINGS");
         summary.addView(account, margins(-1, dp(42), 0, dp(8), 0, 0));
         account.setOnClickListener(v -> navigate("profile"));
+        Button playerServices = secondaryButton("LEADERBOARD · SUPPORT · SERVICES");
+        summary.addView(playerServices, margins(-1, dp(42), 0, dp(6), 0, 0));
+        playerServices.setOnClickListener(v -> navigate("more"));
         content.addView(summary, margins(-1, -2, 0, 0, 0, dp(10)));
 
         LinearLayout quick = card();
         quick.addView(text("YOUR GAMES", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
-        if (hasChessAccess()) addQuickAction(quick, "CHESS", "Ranked games, rapid, blitz, bullet and tournaments", "chess");
-        if (hasEfootballAccess()) {
-            addQuickAction(quick, "eFOOTBALL", "Ranked matches, leagues and tournaments", "efootball");
-            addQuickAction(quick, "LEAGUES & TOURNAMENTS", "Entries, fixtures, groups and standings", "leagues");
-        }
-        addQuickAction(quick, "WALLET", "Available funds, M-Pesa deposit and history", "wallet");
         addQuickAction(quick, "NOTIFICATIONS", "Account alerts, event reminders and announcements", "notifications");
+        addQuickAction(quick, "WALLET", "Available funds, M-Pesa deposit and history", "wallet");
         content.addView(quick, margins(-1, -2, 0, 0, 0, dp(10)));
 
         LinearLayout snapshot = new LinearLayout(this);
@@ -554,7 +570,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         chessSpeed = speed;
         chessTimeControl = timeControl;
         navigate("chess");
-        if (pageScroll != null) pageScroll.post(() -> pageScroll.smoothScrollTo(0, 0));
+        if (pageScroll != null) pageScroll.post(() -> {
+            if (chessMatchmakingPanel != null) pageScroll.smoothScrollTo(0, chessMatchmakingPanel.getTop());
+        });
         showMessage(speed.substring(0, 1).toUpperCase(Locale.ROOT) + speed.substring(1) + " selected. Choose a stake and find an opponent.", false);
     }
 
@@ -818,10 +836,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         currentScreen = "chess";
         content.removeAllViews();
         addHeading("Chess", "Choose a ranked clock and stake, challenge a Chess player, or resume a live game. The server validates every move and result.");
-        content.addView(text("MATCHMAKING SETTINGS", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessMatchmakingPanel = card();
+        chessMatchmakingPanel.addView(text("MATCHMAKING SETTINGS", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
         Spinner typeSpinner = optionSpinner(new String[] { "Ranked match · stake applies", "Casual match · no stake" });
         typeSpinner.setSelection("casual".equals(chessMatchType) ? 1 : 0);
-        content.addView(typeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
+        chessMatchmakingPanel.addView(typeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
         typeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
                 String selectedType = position == 1 ? "casual" : "ranked";
@@ -831,7 +850,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         });
         Spinner speedSpinner = optionSpinner(new String[] { "Rapid", "Blitz", "Bullet" });
         speedSpinner.setSelection("bullet".equals(chessSpeed) ? 2 : "blitz".equals(chessSpeed) ? 1 : 0);
-        content.addView(speedSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
+        chessMatchmakingPanel.addView(speedSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
         speedSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
                 String selected = position == 2 ? "bullet" : position == 1 ? "blitz" : "rapid";
@@ -843,7 +862,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         int selectedControl = Math.max(0, Arrays.asList(controls).indexOf(chessTimeControl));
         Spinner timeSpinner = optionSpinner(controls);
         timeSpinner.setSelection(selectedControl);
-        content.addView(timeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
+        chessMatchmakingPanel.addView(timeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
         timeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
                 if (position >= 0 && position < controls.length) chessTimeControl = controls[position];
@@ -854,23 +873,24 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         if ("ranked".equals(chessMatchType)) {
             stakeSpinner = optionSpinner(new String[] { "KSh 20 stake", "KSh 50 stake", "KSh 100 stake" });
             stakeSpinner.setSelection(chessStake == 100 ? 2 : chessStake == 50 ? 1 : 0);
-            content.addView(stakeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
+            chessMatchmakingPanel.addView(stakeSpinner, margins(-1, dp(48), 0, 0, 0, dp(7)));
         } else {
-            addNotice("Casual matches use the selected clock and do not lock or use wallet funds.", MUTED_GOLD);
+            addNoticeTo(chessMatchmakingPanel, "Casual matches use the selected clock and do not lock or use wallet funds.", MUTED_GOLD);
         }
         Button find = primaryButton("FIND A REAL OPPONENT");
-        content.addView(find, margins(-1, dp(54), 0, 0, 0, dp(7)));
+        chessMatchmakingPanel.addView(find, margins(-1, dp(54), 0, 0, 0, dp(7)));
         Spinner finalStakeSpinner = stakeSpinner;
         find.setOnClickListener(v -> startConfiguredChess(find, finalStakeSpinner));
         Button challenge = secondaryButton("CHALLENGE / SCHEDULE CHESS");
-        content.addView(challenge, margins(-1, dp(48), 0, 0, 0, dp(14)));
+        chessMatchmakingPanel.addView(challenge, margins(-1, dp(48), 0, 0, 0, dp(4)));
         challenge.setOnClickListener(v -> showDirectChessChallenge());
         content.addView(text("YOUR ACTIVE CHESS TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout tournamentEntries = new LinearLayout(this);
         tournamentEntries.setOrientation(LinearLayout.VERTICAL);
         content.addView(tournamentEntries, margins(-1, -2, 0, 0, 0, dp(9)));
         loadChessTournamentEntries(tournamentEntries);
-        content.addView(text("CHESS TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessTournamentSection = text("CHESS TOURNAMENTS", 13, GOLD, true);
+        content.addView(chessTournamentSection, margins(-1, -2, 0, 0, 0, dp(7)));
         addDashboardCard("⚡  RAPID TOURNAMENT", "Swiss format · fixed 10+5 clock · KSh 20, 50 or 100 entry", "VIEW RAPID TOURNAMENT", false, () -> {
             chessTournamentTimeControl = "10+5";
             navigate("chessTournament");
@@ -890,10 +910,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         Button tournaments = secondaryButton("STANDINGS, FIXTURES & ENTRY");
         content.addView(tournaments, margins(-1, dp(48), 0, 0, 0, dp(14)));
         tournaments.setOnClickListener(v -> navigate("chessTournament"));
-        content.addView(text("RANKED GAMES", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessRankedSection = text("RANKED GAMES", 13, GOLD, true);
+        content.addView(chessRankedSection, margins(-1, -2, 0, 0, 0, dp(7)));
         addDashboardCard("⚡  RAPID RANKED", "10:00 · 10+5 · 10+15 · 15+10\nKSh 20, 50 or 100 stake", "USE RAPID SETTINGS", false, () -> selectChessRankedPreset("rapid", "10+5"));
         addDashboardCard("🔥  BLITZ RANKED", "3:00 · 3+2 · 5:00\nKSh 20, 50 or 100 stake", "USE BLITZ SETTINGS", false, () -> selectChessRankedPreset("blitz", "3+2"));
         addDashboardCard("💨  BULLET RANKED", "1:00 · 1+1 · 2:00 · 2+1\nKSh 20, 50 or 100 stake", "USE BULLET SETTINGS", false, () -> selectChessRankedPreset("bullet", "1+1"));
+        content.addView(text("FIND AN OPPONENT", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        content.addView(chessMatchmakingPanel, margins(-1, -2, 0, 0, 0, dp(12)));
         pageStatus = text("Connecting to the chess service…", 12, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, 0, 0, dp(10)));
         Button refresh = secondaryButton("REFRESH CHESS MATCHES");
@@ -907,7 +930,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         activeMatchesList = new LinearLayout(this);
         activeMatchesList.setOrientation(LinearLayout.VERTICAL);
         content.addView(activeMatchesList, margins(-1, -2, 0, 0, 0, dp(16)));
-        content.addView(text("RECENT RESULTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessResultsSection = text("RECENT RESULTS", 13, GOLD, true);
+        content.addView(chessResultsSection, margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout record = card();
         record.addView(text("CHESS RECORD", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(4)));
         chessRecordSummary = text("Loading your record…", 12, TEXT, false);
@@ -922,7 +946,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         chessHistoryList.setOrientation(LinearLayout.VERTICAL);
         content.addView(chessHistoryList, margins(-1, -2, 0, 0, 0, dp(12)));
         loadChessHistory(chessHistoryList);
-        content.addView(text("UPCOMING GAMES · CHALLENGES & INVITATIONS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessScheduleSection = text("UPCOMING GAMES · CHALLENGES & INVITATIONS", 13, GOLD, true);
+        content.addView(chessScheduleSection, margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout scheduleList = new LinearLayout(this);
         scheduleList.setOrientation(LinearLayout.VERTICAL);
         chessScheduleList = scheduleList;
@@ -2068,14 +2093,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         items.setOrientation(LinearLayout.HORIZONTAL);
         List<String[]> tabList = new ArrayList<>();
         tabList.add(new String[] { "Home", "home" });
+        if (hasEfootballAccess()) tabList.add(new String[] { "eFootball", "efootball" });
         if (hasChessAccess()) tabList.add(new String[] { "Chess", "chess" });
-        if (hasEfootballAccess()) {
-            tabList.add(new String[] { "eFootball", "efootball" });
-            tabList.add(new String[] { "Leagues", "leagues" });
-        }
-        tabList.add(new String[] { "Wallet", "wallet" });
-        tabList.add(new String[] { "Alerts", "notifications" });
-        tabList.add(new String[] { "More", "more" });
         String[][] tabs = tabList.toArray(new String[0][]);
         for (String[] tab : tabs) {
             boolean active = isNavigationTabActive(tab[1]);
@@ -2106,6 +2125,80 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         }
         strip.addView(items);
         navigation.addView(strip, matchWrap());
+    }
+
+    private void buildDashboardNavigation() {
+        if (dashboardNavigation == null) return;
+        dashboardNavigation.removeAllViews();
+        boolean chess = "chess".equals(currentScreen);
+        boolean efootball = "efootball".equals(currentScreen);
+        if (!chess && !efootball) {
+            dashboardNavigation.setVisibility(View.GONE);
+            return;
+        }
+
+        String[][] tabs = chess
+            ? new String[][] {
+                { "PLAY", "chessPlay" }, { "TOURNAMENTS", "chessTournaments" }, { "RANKED", "chessRanked" },
+                { "MATCHES", "chessMatches" }, { "RESULTS", "chessResults" }, { "SCHEDULE", "chessSchedule" }
+            }
+            : new String[][] {
+                { "RANKED", "efootballRanked" }, { "LEAGUES", "efootballLeagues" }, { "TOURNAMENTS", "efootballTournaments" },
+                { "MATCHES", "efootballMatches" }, { "RESULTS", "efootballResults" }, { "WALLET", "efootballWallet" }
+            };
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setPadding(dp(3), dp(2), dp(3), dp(2));
+        bar.setBackground(round(PANEL, dp(8), Color.rgb(82, 67, 27), dp(1)));
+        HorizontalScrollView strip = new HorizontalScrollView(this);
+        strip.setHorizontalScrollBarEnabled(false);
+        LinearLayout items = new LinearLayout(this);
+        items.setOrientation(LinearLayout.HORIZONTAL);
+        for (String[] tab : tabs) {
+            Button button = new Button(this);
+            button.setText(tab[0]);
+            button.setTextSize(11);
+            button.setTextColor(GOLD_LIGHT);
+            button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            button.setAllCaps(false);
+            button.setGravity(Gravity.CENTER);
+            button.setMinHeight(dp(40));
+            button.setMinWidth(dp(tab[0].length() > 8 ? 96 : 72));
+            button.setPadding(dp(7), 0, dp(7), 0);
+            button.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(35, 255, 215, 90)),
+                round(Color.rgb(22, 21, 17), dp(6), Color.rgb(67, 57, 32), dp(1)), null));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(40));
+            params.setMargins(dp(3), 0, dp(3), 0);
+            items.addView(button, params);
+            button.setOnClickListener(v -> navigateDashboardTarget(tab[1]));
+        }
+        strip.addView(items);
+        bar.addView(strip, matchWrap());
+        dashboardNavigation.addView(bar, matchWrap());
+        dashboardNavigation.setVisibility(View.VISIBLE);
+    }
+
+    private void navigateDashboardTarget(String target) {
+        switch (target) {
+            case "chessPlay": scrollDashboardTo(chessMatchmakingPanel); break;
+            case "chessTournaments": scrollDashboardTo(chessTournamentSection); break;
+            case "chessRanked": scrollDashboardTo(chessRankedSection); break;
+            case "chessMatches": scrollDashboardTo(activeMatchesList); break;
+            case "chessResults": scrollDashboardTo(chessResultsSection); break;
+            case "chessSchedule": scrollDashboardTo(chessScheduleSection); break;
+            case "efootballRanked": scrollDashboardTo(efootballMatchmakingPanel); break;
+            case "efootballLeagues": navigate("leagues"); break;
+            case "efootballTournaments": scrollDashboardTo(efootballTournamentSection); break;
+            case "efootballMatches": scrollDashboardTo(efootballMatchesSection); break;
+            case "efootballResults": scrollDashboardTo(efootballResultsSection); break;
+            case "efootballWallet": navigate("wallet"); break;
+        }
+    }
+
+    private void scrollDashboardTo(View target) {
+        if (target == null || pageScroll == null) return;
+        pageScroll.post(() -> pageScroll.smoothScrollTo(0, Math.max(0, target.getTop())));
     }
 
     private boolean isNavigationTabActive(String tab) {
@@ -2402,17 +2495,14 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             availableBalance.setText(wallet == null ? "Available balance · temporarily unavailable" :
                 "KSh " + money(wallet.optDouble("availableBalance", wallet.optDouble("balance", 0))));
         });
-        addNotice("Ranked search uses KSh 20, 50, or 100 and is available during the server’s scheduled match window. The backend controls matching, fees, results and settlement.", MUTED_GOLD);
         LinearLayout quickActions = card();
         quickActions.addView(text("PLAY", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
         addQuickAction(quickActions, "RANKED", "Find an eligible eFootball opponent and play for stakes.", () -> {
-            if (pageScroll != null) pageScroll.smoothScrollTo(0, 0);
+            if (pageScroll != null && efootballMatchmakingPanel != null) pageScroll.smoothScrollTo(0, efootballMatchmakingPanel.getTop());
         });
         addQuickAction(quickActions, "LEAGUES", "View your available leagues and current standings.", () -> navigate("leagues"));
         addQuickAction(quickActions, "TOURNAMENTS", "Browse live competitions, entries and fixtures.", () -> navigate("leagues"));
-        content.addView(quickActions, margins(-1, -2, 0, 0, 0, dp(10)));
         pageStatus = text("Checking matchmaking availability…", 12, SUBTLE, false);
-        content.addView(pageStatus, margins(-1, -2, 0, 0, 0, dp(8)));
         request("GET", "/api/efootball/status", token, null, result -> {
             if (!"efootball".equals(currentScreen)) return;
             if (result.ok()) {
@@ -2426,15 +2516,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         TextView recordSummary = text("Loading your record…", 12, TEXT, false);
         record.addView(recordSummary);
         content.addView(record, margins(-1, -2, 0, 0, 0, dp(10)));
-        Spinner stake = optionSpinner(new String[] { "KSh 20 ranked stake", "KSh 50 ranked stake", "KSh 100 ranked stake" });
-        content.addView(stake, margins(-1, dp(48), 0, 0, 0, dp(8)));
-        Button search = primaryButton("FIND RANKED eFOOTBALL OPPONENT");
-        content.addView(search, margins(-1, dp(52), 0, 0, 0, dp(14)));
-        search.setOnClickListener(v -> startEfootballRankedSearch(search, stake.getSelectedItemPosition()));
-        Button refresh = secondaryButton("REFRESH MATCH HUB");
-        content.addView(refresh, margins(-1, dp(44), 0, 0, 0, dp(12)));
-        refresh.setOnClickListener(v -> renderEfootball());
-        content.addView(text("YOUR ACTIVE TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        content.addView(quickActions, margins(-1, -2, 0, 0, 0, dp(10)));
+        efootballTournamentSection = text("YOUR ACTIVE TOURNAMENTS", 13, GOLD, true);
+        content.addView(efootballTournamentSection, margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout tournaments = new LinearLayout(this);
         tournaments.setOrientation(LinearLayout.VERTICAL);
         content.addView(tournaments, margins(-1, -2, 0, 0, 0, dp(12)));
@@ -2444,11 +2528,26 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         prizeGuide.addView(text("16-PLAYER SEASON PRIZES", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
         prizeGuide.addView(text("KSh 20 entry · 1st 100 · 2nd 80 · 3rd 60\nKSh 50 entry · 1st 250 · 2nd 200 · 3rd 150\nKSh 100 entry · 1st 500 · 2nd 400 · 3rd 300\nKSh 200 entry · 1st 1,000 · 2nd 800 · 3rd 600\nSeason awards · 5× / 4× / 3× the entry stake", 12, TEXT, false));
         content.addView(prizeGuide, margins(-1, -2, 0, 0, 0, dp(12)));
-        content.addView(text("ACTIVE MATCHES", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        efootballMatchmakingPanel = card();
+        efootballMatchmakingPanel.addView(text("RANKED MATCHMAKING", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
+        addNoticeTo(efootballMatchmakingPanel, "Ranked search uses KSh 20, 50 or 100 and follows the server’s scheduled match window. The backend controls matching, fees, results and settlement.", MUTED_GOLD);
+        efootballMatchmakingPanel.addView(pageStatus, margins(-1, -2, 0, dp(5), 0, dp(8)));
+        Spinner stake = optionSpinner(new String[] { "KSh 20 ranked stake", "KSh 50 ranked stake", "KSh 100 ranked stake" });
+        efootballMatchmakingPanel.addView(stake, margins(-1, dp(48), 0, 0, 0, dp(8)));
+        Button search = primaryButton("FIND RANKED eFOOTBALL OPPONENT");
+        efootballMatchmakingPanel.addView(search, margins(-1, dp(52), 0, 0, 0, dp(7)));
+        search.setOnClickListener(v -> startEfootballRankedSearch(search, stake.getSelectedItemPosition()));
+        Button refresh = secondaryButton("REFRESH MATCH HUB");
+        efootballMatchmakingPanel.addView(refresh, margins(-1, dp(44), 0, 0, 0, 0));
+        refresh.setOnClickListener(v -> renderEfootball());
+        content.addView(efootballMatchmakingPanel, margins(-1, -2, 0, 0, 0, dp(12)));
+        efootballMatchesSection = text("ACTIVE MATCHES", 13, GOLD, true);
+        content.addView(efootballMatchesSection, margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout active = new LinearLayout(this);
         active.setOrientation(LinearLayout.VERTICAL);
         content.addView(active, margins(-1, -2, 0, 0, 0, dp(12)));
-        content.addView(text("RECENT MATCH HISTORY", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        efootballResultsSection = text("RECENT MATCH HISTORY", 13, GOLD, true);
+        content.addView(efootballResultsSection, margins(-1, -2, 0, 0, 0, dp(7)));
         Button clearHistory = secondaryButton("CLEAR MATCH HISTORY LIST");
         content.addView(clearHistory, margins(-1, dp(44), 0, 0, 0, dp(7)));
         clearHistory.setOnClickListener(v -> clearUserHistory("matches", () -> {
