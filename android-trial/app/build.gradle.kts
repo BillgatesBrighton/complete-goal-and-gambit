@@ -15,8 +15,8 @@ android {
         applicationId = "com.goalgambit.trial"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.0.6"
+        versionCode = 9
+        versionName = "1.0.7"
         buildConfigField("String", "API_BASE_URL", "\"" + configuredApiBase + "\"")
     }
 

@@ -88,6 +88,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private boolean moveBusy;
     private boolean socketAvailable;
     private long homeSnapshotGeneration;
+    private long homeLeaderboardRequestGeneration = -1;
+    private long homeEfootballRequestGeneration = -1;
     private long currentChessMatchId;
     private long selectedTournamentId;
     private String currentPlayerColor = "w";
@@ -114,6 +116,31 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private Button chessTournamentCancel;
     private Button chessTournamentForfeit;
     private LinearLayout activeMatchesList;
+    private LinearLayout homeActiveMatchesList;
+    private LinearLayout homeLeaderboardList;
+    private TextView homeProfileName;
+    private TextView homeProfileMeta;
+    private TextView homeProfileAvatar;
+    private TextView homeWalletBalance;
+    private TextView homeWalletMeta;
+    private TextView homeLeaderboardStatus;
+    private List<JSONObject> homeChessMatches = new ArrayList<>();
+    private JSONArray homeEfootballMatches = new JSONArray();
+    private boolean homeChessMatchesLoaded;
+    private boolean homeEfootballMatchesLoaded;
+    private String homeChessMatchError = "";
+    private String homeEfootballMatchError = "";
+    private final android.os.Handler homeDashboardHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable homeDashboardRefresh = new Runnable() {
+        @Override public void run() {
+            if (!"home".equals(currentScreen) || isFinishing()) return;
+            long generation = homeSnapshotGeneration;
+            refreshHomeLeaderboard(generation);
+            refreshHomeEfootballMatches(generation);
+            if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
+            homeDashboardHandler.postDelayed(this, 30_000L);
+        }
+    };
     private LinearLayout chessHistoryList;
     private TextView chessRecordSummary;
     private LinearLayout chessScheduleList;
@@ -149,9 +176,16 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
 
     @Override
     protected void onDestroy() {
+        homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
         if (chessSocket != null) chessSocket.close();
         requests.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    protected void onPause() {
+        homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
+        super.onPause();
     }
 
     @Override
@@ -159,6 +193,14 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         super.onResume();
         if (token != null && "notifications".equals(currentScreen) && notificationList != null) {
             loadNotifications(notificationList);
+        }
+        if (token != null && "home".equals(currentScreen)) {
+            long generation = homeSnapshotGeneration;
+            refreshHomeLeaderboard(generation);
+            refreshHomeEfootballMatches(generation);
+            if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
+            homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
+            homeDashboardHandler.postDelayed(homeDashboardRefresh, 30_000L);
         }
     }
 
@@ -463,6 +505,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             return;
         }
         currentScreen = screen;
+        if (connectionStatus != null) connectionStatus.setVisibility("home".equals(screen) ? View.GONE : View.VISIBLE);
+        if (!"home".equals(screen)) homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
         if ("home".equals(screen)) renderHome();
         else if ("chess".equals(screen)) renderChess();
         else if ("chessTournament".equals(screen)) renderChessTournament();
@@ -481,66 +525,99 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void renderHome() {
+        homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
+        final long generation = ++homeSnapshotGeneration;
         content.removeAllViews();
-        addHeading("Welcome back,", currentUser.optString("username", "player"));
-        TextView motto = text("GOAL$GAMBIT | Compete. Win. Earn.", 14, TEXT, true);
-        motto.setPadding(dp(14), dp(15), dp(14), dp(15));
-        motto.setBackground(round(PANEL, dp(8), Color.rgb(94, 75, 25), dp(1)));
-        content.addView(motto, margins(-1, -2, 0, dp(8), 0, dp(12)));
+        pageStatus = null;
+        homeProfileName = null;
+        homeProfileMeta = null;
+        homeProfileAvatar = null;
+        homeWalletBalance = null;
+        homeWalletMeta = null;
+        homeActiveMatchesList = null;
+        homeLeaderboardList = null;
+        homeLeaderboardStatus = null;
+        if (connectionStatus != null) connectionStatus.setVisibility(View.GONE);
+
+        LinearLayout profile = card();
+        profile.addView(text("PLAYER PROFILE", 11, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(9)));
+        LinearLayout identity = new LinearLayout(this);
+        identity.setGravity(Gravity.CENTER_VERTICAL);
+        identity.setOrientation(LinearLayout.HORIZONTAL);
+        homeProfileAvatar = text(profileInitial(), 20, BG, true);
+        homeProfileAvatar.setGravity(Gravity.CENTER);
+        homeProfileAvatar.setBackground(round(GOLD, dp(28), GOLD_LIGHT, dp(1)));
+        identity.addView(homeProfileAvatar, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        LinearLayout identityDetails = new LinearLayout(this);
+        identityDetails.setOrientation(LinearLayout.VERTICAL);
+        identityDetails.setPadding(dp(11), 0, 0, 0);
+        homeProfileName = text(currentUser.optString("username", "Player"), 22, GOLD_LIGHT, true);
+        try {
+            Typeface profileFont = Typeface.createFromAsset(getAssets(), "fonts/Pacifico-Regular.ttf");
+            homeProfileName.setTypeface(Typeface.create(profileFont, Typeface.BOLD));
+        } catch (RuntimeException ignored) {}
+        identityDetails.addView(homeProfileName);
+        homeProfileMeta = text(homeProfileSummary(), 11, SUBTLE, false);
+        identityDetails.addView(homeProfileMeta, margins(-1, -2, 0, dp(2), 0, 0));
+        identity.addView(identityDetails, new LinearLayout.LayoutParams(0, -2, 1f));
+        profile.addView(identity, matchWrap());
+        Button profileDetails = secondaryButton("VIEW PLAYER PROFILE");
+        profile.addView(profileDetails, margins(-1, dp(42), 0, dp(10), 0, 0));
+        profileDetails.setOnClickListener(v -> navigate("profile"));
+        content.addView(profile, margins(-1, -2, 0, 0, 0, dp(11)));
+        request("GET", "/api/me", token, null, result -> {
+            if (!isCurrentHomeSnapshot(generation)) return;
+            if (result.status == 401) { expireSession(); return; }
+            JSONObject user = result.ok() ? result.object.optJSONObject("user") : null;
+            if (user == null) return;
+            currentUser = user;
+            if (homeProfileName != null) homeProfileName.setText(user.optString("username", "Player"));
+            if (homeProfileMeta != null) homeProfileMeta.setText(homeProfileSummary());
+            if (homeProfileAvatar != null) homeProfileAvatar.setText(profileInitial());
+        });
+
         if (!pendingRegistrationMessage.isEmpty()) {
-            addNotice(pendingRegistrationMessage, MUTED_GOLD);
+            Toast.makeText(this, pendingRegistrationMessage, Toast.LENGTH_LONG).show();
             pendingRegistrationMessage = "";
         }
 
-        LinearLayout summary = card();
-        summary.addView(text("ACCOUNT SNAPSHOT", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
-        StringBuilder accountSummary = new StringBuilder("Game access  ").append(gameName(currentUser.optString("game", "")))
-            .append("\nAccount  Active")
-            .append("\nPhone  ").append(currentUser.optString("phone", "Not added"));
-        if (hasChessAccess()) accountSummary.insert(0, "Chess rating  " + currentUser.optInt("rating", 1200) + "\n");
-        summary.addView(text(accountSummary.toString(), 13, TEXT, false));
-        Button account = secondaryButton("PROFILE & ACCOUNT SETTINGS");
-        summary.addView(account, margins(-1, dp(42), 0, dp(8), 0, 0));
-        account.setOnClickListener(v -> navigate("profile"));
-        Button playerServices = secondaryButton("LEADERBOARD · SUPPORT · SERVICES");
-        summary.addView(playerServices, margins(-1, dp(42), 0, dp(6), 0, 0));
-        playerServices.setOnClickListener(v -> navigate("more"));
-        content.addView(summary, margins(-1, -2, 0, 0, 0, dp(10)));
+        addHomeWallet(generation);
+        content.addView(text("NEXT ACTIVE MATCHES", 13, GOLD, true), margins(-1, -2, 0, dp(4), 0, dp(7)));
+        homeActiveMatchesList = new LinearLayout(this);
+        homeActiveMatchesList.setOrientation(LinearLayout.VERTICAL);
+        content.addView(homeActiveMatchesList, margins(-1, -2, 0, 0, 0, dp(11)));
+        homeChessMatches = new ArrayList<>();
+        homeEfootballMatches = new JSONArray();
+        homeChessMatchesLoaded = !hasChessAccess();
+        homeEfootballMatchesLoaded = !hasEfootballAccess();
+        homeChessMatchError = "";
+        homeEfootballMatchError = "";
+        drawHomeActiveMatches(generation);
+        if (hasChessAccess() && chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
+        refreshHomeEfootballMatches(generation);
 
-        LinearLayout quick = card();
-        quick.addView(text("YOUR GAMES", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
-        addQuickAction(quick, "NOTIFICATIONS", "Account alerts, event reminders and announcements", "notifications");
-        addQuickAction(quick, "WALLET", "Available funds, M-Pesa deposit and history", "wallet");
-        content.addView(quick, margins(-1, -2, 0, 0, 0, dp(10)));
-
-        LinearLayout snapshot = new LinearLayout(this);
-        snapshot.setOrientation(LinearLayout.VERTICAL);
-        content.addView(snapshot, matchWrap());
-        loadHomeSnapshot(snapshot);
-        pageStatus = text("", 12, SUBTLE, false);
-        content.addView(pageStatus, margins(-1, -2, 0, dp(8), 0, 0));
-    }
-
-    private void addQuickAction(LinearLayout parent, String title, String description, String destination) {
-        addQuickAction(parent, title, description, () -> navigate(destination));
-    }
-
-    private void addQuickAction(LinearLayout parent, String title, String description, Runnable action) {
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(9), dp(9), dp(7), dp(9));
-        row.setBackground(round(Color.rgb(15, 15, 15), dp(7), Color.rgb(48, 48, 48), dp(1)));
-        LinearLayout info = new LinearLayout(this);
-        info.setOrientation(LinearLayout.VERTICAL);
-        info.addView(text(title, 13, TEXT, true));
-        info.addView(text(description, 10, SUBTLE, false), margins(-1, -2, 0, dp(2), 0, 0));
-        row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
-        row.addView(text("›", 24, GOLD, true), wrap());
-        parent.addView(row, margins(-1, -2, 0, 0, 0, dp(6)));
-        row.setClickable(true);
-        row.setFocusable(true);
-        row.setOnClickListener(v -> action.run());
+        LinearLayout leaderboard = card();
+        LinearLayout leaderboardHeading = new LinearLayout(this);
+        leaderboardHeading.setGravity(Gravity.CENTER_VERTICAL);
+        leaderboardHeading.setOrientation(LinearLayout.HORIZONTAL);
+        leaderboardHeading.addView(text("LIVE LEADERBOARD", 13, GOLD, true),
+            new LinearLayout.LayoutParams(0, -2, 1f));
+        leaderboardHeading.addView(text("LIVE", 10, BG, true), wrap());
+        TextView liveTag = (TextView) leaderboardHeading.getChildAt(1);
+        liveTag.setPadding(dp(7), dp(3), dp(7), dp(3));
+        liveTag.setBackground(round(GOLD, dp(10), 0, 0));
+        leaderboard.addView(leaderboardHeading, margins(-1, -2, 0, 0, 0, dp(4)));
+        homeLeaderboardStatus = text("Loading current player rankings…", 10, SUBTLE, false);
+        leaderboard.addView(homeLeaderboardStatus, margins(-1, -2, 0, 0, 0, dp(7)));
+        homeLeaderboardList = new LinearLayout(this);
+        homeLeaderboardList.setOrientation(LinearLayout.VERTICAL);
+        leaderboard.addView(homeLeaderboardList, matchWrap());
+        Button fullLeaderboard = secondaryButton("VIEW FULL LEADERBOARD");
+        leaderboard.addView(fullLeaderboard, margins(-1, dp(42), 0, dp(8), 0, 0));
+        fullLeaderboard.setOnClickListener(v -> navigate("leaderboard"));
+        content.addView(leaderboard, margins(-1, -2, 0, 0, 0, dp(8)));
+        refreshHomeLeaderboard(generation);
+        homeDashboardHandler.postDelayed(homeDashboardRefresh, 30_000L);
     }
 
     private void addDashboardCard(String title, String description, String actionLabel, boolean primary, Runnable action) {
@@ -561,137 +638,172 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         showMessage(speed.substring(0, 1).toUpperCase(Locale.ROOT) + speed.substring(1) + " selected.", false);
     }
 
-    private void loadHomeSnapshot(LinearLayout parent) {
-        final long generation = ++homeSnapshotGeneration;
-        parent.removeAllViews();
-        parent.addView(text("YOUR LIVE OVERVIEW", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
-        LinearLayout overview = card();
-        TextView summary = text("Loading your account activity…", 12, TEXT, false);
-        overview.addView(text("ACCOUNT ACTIVITY", 11, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
-        overview.addView(summary);
-        parent.addView(overview, margins(-1, -2, 0, 0, 0, dp(8)));
-
-        TextView walletSummary = text("Wallet balance · loading", 12, GOLD, true);
-        overview.addView(walletSummary, margins(-1, -2, 0, dp(7), 0, 0));
-        request("GET", "/api/wallet", token, null, result -> {
-            if (!isCurrentHomeSnapshot(generation)) return;
-            JSONObject data = result.ok() ? result.object.optJSONObject("wallet") : null;
-            walletSummary.setText(data == null ? "Wallet balance · temporarily unavailable" :
-                "Wallet balance · KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))));
-        });
-
-        if (hasChessAccess()) addHomeTournamentOverview(parent, generation, true);
-        if (hasEfootballAccess()) addHomeTournamentOverview(parent, generation, false);
-
-        final JSONArray[] chessHistory = { null };
-        final JSONArray[] footballMatches = { null };
-        final JSONArray[] announcements = { null };
-        final boolean[] chessHistoryLoaded = { false };
-        final boolean[] footballMatchesLoaded = { false };
-        final boolean[] announcementsLoaded = { false };
-        Runnable updateSummary = () -> {
-            if (!isCurrentHomeSnapshot(generation)) return;
-            StringBuilder details = new StringBuilder();
-            if (hasChessAccess()) {
-                details.append("Chess history · ").append(!chessHistoryLoaded[0] ? "Loading" :
-                    chessHistory[0] == null ? "Unavailable" : chessHistory[0].length() + " games");
-            }
-            if (hasEfootballAccess()) {
-                if (details.length() > 0) details.append('\n');
-                details.append("Active eFootball matches · ").append(!footballMatchesLoaded[0] ? "Loading" :
-                    footballMatches[0] == null ? "Unavailable" : footballMatches[0].length());
-            }
-            if (announcementsLoaded[0]) {
-                if (details.length() > 0) details.append('\n');
-                details.append("Announcements · ").append(announcements[0] == null ? "Unavailable" : announcements[0].length());
-            }
-            summary.setText(details.length() == 0 ? "Your account activity will appear here." : details.toString());
-        };
-
-        if (hasChessAccess()) {
-            if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
-            request("GET", "/api/chess/history/mine", token, null, result -> {
-                if (!isCurrentHomeSnapshot(generation)) return;
-                chessHistory[0] = result.ok() ? result.object.optJSONArray("games") : null;
-                chessHistoryLoaded[0] = true;
-                updateSummary.run();
-            });
-        }
-        if (hasEfootballAccess()) {
-            request("GET", "/api/efootball/matches/active", token, null, result -> {
-                if (!isCurrentHomeSnapshot(generation)) return;
-                footballMatches[0] = result.ok() ? result.object.optJSONArray("matches") : null;
-                footballMatchesLoaded[0] = true;
-                updateSummary.run();
-                if (footballMatches[0] != null && footballMatches[0].length() > 0) {
-                    JSONObject first = footballMatches[0].optJSONObject(0);
-                    if (first != null) {
-                        LinearLayout live = card();
-                        live.addView(text("CONTINUE YOUR eFOOTBALL MATCH", 11, GOLD, true));
-                        live.addView(text("Match #" + first.optLong("id", 0) + " · " + first.optString("status", "active") + " · vs " + first.optString("opponentUsername", "waiting"), 12, TEXT, false), margins(-1, -2, 0, dp(4), 0, dp(3)));
-                        Button open = primaryButton("OPEN MATCH HUB");
-                        live.addView(open, matchWrap());
-                        open.setOnClickListener(v -> navigate("efootball"));
-                        parent.addView(live, margins(-1, -2, 0, 0, 0, dp(8)));
-                    }
-                }
-            });
-        }
-        request("GET", "/api/chat/announcements", token, null, result -> {
-            if (!isCurrentHomeSnapshot(generation)) return;
-            announcements[0] = result.ok() ? result.object.optJSONArray("announcements") : null;
-            announcementsLoaded[0] = true;
-            updateSummary.run();
-        });
+    private String profileInitial() {
+        String username = currentUser.optString("username", "G").trim();
+        return username.isEmpty() ? "G" : username.substring(0, 1).toUpperCase(Locale.ROOT);
     }
 
-    private void addHomeTournamentOverview(LinearLayout parent, long generation, boolean chess) {
-        String title = chess ? "YOUR ACTIVE CHESS TOURNAMENTS" : "YOUR ACTIVE eFOOTBALL TOURNAMENTS";
-        String endpoint = chess ? "/api/chess/competitions/tournament/entries" : "/api/tournaments";
-        String destination = chess ? "chess" : "leagues";
-        LinearLayout section = card();
-        section.addView(text(title, 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
-        TextView entries = text("Loading your entries…", 12, SUBTLE, false);
-        section.addView(entries, margins(-1, -2, 0, 0, 0, dp(7)));
-        Button open = secondaryButton(chess ? "OPEN CHESS DASHBOARD" : "OPEN eFOOTBALL COMPETITIONS");
-        section.addView(open, margins(-1, dp(44), 0, 0, 0, 0));
-        open.setOnClickListener(v -> navigate(destination));
-        parent.addView(section, margins(-1, -2, 0, 0, 0, dp(8)));
-
-        request("GET", endpoint, token, null, result -> {
-            if (!isCurrentHomeSnapshot(generation)) return;
-            if (!result.ok()) {
-                entries.setText(result.message("Could not load tournament entries."));
-                return;
-            }
-            JSONArray source = result.object.optJSONArray(chess ? "entries" : "tournaments");
-            List<String> lines = new ArrayList<>();
-            if (source != null) for (int i = 0; i < source.length(); i++) {
-                JSONObject item = source.optJSONObject(i);
-                if (item == null) continue;
-                if (chess) {
-                    String matchStatus = item.optString("matchStatus", "");
-                    String state = "active".equals(matchStatus) ? "Match in progress" :
-                        "waiting".equals(matchStatus) ? "Waiting for opponent" :
-                        "settling".equals(matchStatus) ? "Result settling" : "Entry active";
-                    lines.add(item.optString("timeControl", "Chess") + " · KSh " +
-                        money(item.optDouble("stake", 0)) + " stake · " + state);
-                } else {
-                    String status = item.optString("status", "open").toLowerCase(Locale.ROOT);
-                    boolean active = item.optBoolean("joined") &&
-                        !"completed".equals(status) && !"cancelled".equals(status) && !"closed".equals(status);
-                    if (active) lines.add(item.optString("name", "eFootball tournament") + " · KSh " +
-                        money(item.optDouble("entry_fee", 0)) + " entry · " + status.replace('_', ' '));
-                }
-            }
-            entries.setText(lines.isEmpty()
-                ? (chess ? "No active Chess tournament selections this month." : "You have no active eFootball tournaments.")
-                : android.text.TextUtils.join("\n", lines));
-        });
+    private String homeProfileSummary() {
+        String summary = gameName(currentUser.optString("game", "")) + " player";
+        if (hasChessAccess()) summary += " · Chess rating " + currentUser.optInt("rating", 1200);
+        return summary;
     }
 
     private boolean isCurrentHomeSnapshot(long generation) {
         return generation == homeSnapshotGeneration && "home".equals(currentScreen);
+    }
+
+    private void addHomeWallet(long generation) {
+        content.addView(text("WALLET", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        LinearLayout wallet = card();
+        wallet.addView(text("AVAILABLE BALANCE", 10, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(4)));
+        homeWalletBalance = text("KSh —", 26, GOLD_LIGHT, true);
+        wallet.addView(homeWalletBalance, margins(-1, -2, 0, 0, 0, dp(3)));
+        homeWalletMeta = text("Loading wallet…", 10, SUBTLE, false);
+        wallet.addView(homeWalletMeta, margins(-1, -2, 0, 0, 0, dp(9)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button deposit = primaryButton("DEPOSIT");
+        Button withdraw = secondaryButton("WITHDRAW");
+        LinearLayout.LayoutParams actionWidth = new LinearLayout.LayoutParams(0, dp(43), 1f);
+        actionWidth.setMargins(0, 0, dp(5), 0);
+        actions.addView(deposit, actionWidth);
+        LinearLayout.LayoutParams withdrawWidth = new LinearLayout.LayoutParams(0, dp(43), 1f);
+        withdrawWidth.setMargins(dp(5), 0, 0, 0);
+        actions.addView(withdraw, withdrawWidth);
+        wallet.addView(actions, matchWrap());
+        Button details = secondaryButton("WALLET DETAILS & HISTORY");
+        wallet.addView(details, margins(-1, dp(40), 0, dp(6), 0, 0));
+        deposit.setOnClickListener(v -> showDepositForm());
+        withdraw.setOnClickListener(v -> showWithdrawalForm());
+        details.setOnClickListener(v -> navigate("wallet"));
+        content.addView(wallet, margins(-1, -2, 0, 0, 0, dp(12)));
+
+        request("GET", "/api/wallet", token, null, result -> {
+            if (!isCurrentHomeSnapshot(generation) || homeWalletBalance == null || homeWalletMeta == null) return;
+            JSONObject data = result.ok() ? result.object.optJSONObject("wallet") : null;
+            if (data == null) {
+                homeWalletBalance.setText("Unavailable");
+                homeWalletMeta.setText("Wallet details could not be loaded.");
+                return;
+            }
+            homeWalletBalance.setText("KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))));
+            homeWalletMeta.setText("Locked KSh " + money(data.optDouble("lockedBalance", 0)) +
+                " · Withdrawal reserve KSh " + money(data.optDouble("reservedWithdrawalBalance", 0)));
+        });
+    }
+
+    private void refreshHomeEfootballMatches(long generation) {
+        if (!hasEfootballAccess() || !isCurrentHomeSnapshot(generation) || homeEfootballRequestGeneration == generation) return;
+        homeEfootballRequestGeneration = generation;
+        request("GET", "/api/efootball/matches/active", token, null, result -> {
+            if (homeEfootballRequestGeneration == generation) homeEfootballRequestGeneration = -1;
+            if (!isCurrentHomeSnapshot(generation)) return;
+            homeEfootballMatchesLoaded = true;
+            homeEfootballMatches = result.ok() ? result.object.optJSONArray("matches") : null;
+            homeEfootballMatchError = result.ok() ? "" : "eFootball matches are temporarily unavailable.";
+            drawHomeActiveMatches(generation);
+        });
+    }
+
+    private void refreshHomeLeaderboard(long generation) {
+        if (!isCurrentHomeSnapshot(generation) || homeLeaderboardRequestGeneration == generation) return;
+        homeLeaderboardRequestGeneration = generation;
+        request("GET", "/api/leaderboard?limit=5", null, null, result -> {
+            if (homeLeaderboardRequestGeneration == generation) homeLeaderboardRequestGeneration = -1;
+            if (!isCurrentHomeSnapshot(generation) || homeLeaderboardList == null || homeLeaderboardStatus == null) return;
+            if (!result.ok()) {
+                homeLeaderboardStatus.setText("Unable to refresh right now · retrying automatically");
+                if (homeLeaderboardList.getChildCount() == 0) {
+                    homeLeaderboardList.addView(text("Rankings are temporarily unavailable.", 12, SUBTLE, false));
+                }
+                return;
+            }
+            homeLeaderboardList.removeAllViews();
+            if (result.array.length() == 0) {
+                homeLeaderboardList.addView(text("No ranked players yet.", 12, SUBTLE, false));
+            }
+            for (int i = 0; i < result.array.length(); i++) {
+                JSONObject player = result.array.optJSONObject(i);
+                if (player == null) continue;
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(10), dp(8), dp(10), dp(8));
+                row.setBackground(round(Color.rgb(13, 13, 13), dp(7), Color.rgb(48, 48, 48), dp(1)));
+                TextView rank = text(String.format(Locale.ROOT, "%02d", i + 1), 15, GOLD, true);
+                row.addView(rank, margins(dp(34), -2, 0, 0, dp(7), 0));
+                LinearLayout info = new LinearLayout(this);
+                info.setOrientation(LinearLayout.VERTICAL);
+                info.addView(text(player.optString("username", "Player"), 13, TEXT, true));
+                info.addView(text("Rating " + player.optInt("rating", 0) + " · " +
+                    player.optInt("wins", 0) + " wins · " + player.optInt("games", 0) + " games", 10, SUBTLE, false));
+                row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+                homeLeaderboardList.addView(row, margins(-1, -2, 0, 0, 0, dp(5)));
+            }
+            String refreshed = DateFormat.getTimeInstance(DateFormat.SHORT).format(new java.util.Date());
+            homeLeaderboardStatus.setText("LIVE · Updated " + refreshed + " · Refreshes every 30 seconds");
+        });
+    }
+
+    private void drawHomeActiveMatches(long generation) {
+        if (!isCurrentHomeSnapshot(generation) || homeActiveMatchesList == null) return;
+        homeActiveMatchesList.removeAllViews();
+        boolean loading = false;
+        boolean hasError = false;
+        int displayed = 0;
+
+        if (hasChessAccess()) {
+            if (!homeChessMatchesLoaded) loading = true;
+            else if (!homeChessMatchError.isEmpty()) {
+                homeActiveMatchesList.addView(text(homeChessMatchError, 11, SUBTLE, false), margins(-1, -2, 0, 0, 0, dp(5)));
+                hasError = true;
+            } else {
+                for (JSONObject match : homeChessMatches) {
+                    long id = match.optLong("matchId", 0);
+                    if (id <= 0) continue;
+                    LinearLayout item = card();
+                    item.addView(text("CHESS · MATCH #" + id, 12, GOLD, true));
+                    item.addView(text(match.optString("status", "active").toUpperCase(Locale.ROOT) + " · " +
+                        match.optString("timeControl", "Chess") + " · " + sideLabel(match.optString("activeColor", "w")) + " to move", 11, SUBTLE, false),
+                        margins(-1, -2, 0, dp(4), 0, dp(6)));
+                    Button open = primaryButton("OPEN CHESS MATCH");
+                    item.addView(open, matchWrap());
+                    open.setOnClickListener(v -> openChessMatch(id));
+                    homeActiveMatchesList.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                    displayed++;
+                }
+            }
+        }
+
+        if (hasEfootballAccess()) {
+            if (!homeEfootballMatchesLoaded) loading = true;
+            else if (!homeEfootballMatchError.isEmpty()) {
+                homeActiveMatchesList.addView(text(homeEfootballMatchError, 11, SUBTLE, false), margins(-1, -2, 0, 0, 0, dp(5)));
+                hasError = true;
+            } else if (homeEfootballMatches != null) {
+                for (int i = 0; i < homeEfootballMatches.length(); i++) {
+                    JSONObject match = homeEfootballMatches.optJSONObject(i);
+                    if (match == null) continue;
+                    LinearLayout item = card();
+                    item.addView(text("eFOOTBALL · MATCH #" + match.optLong("id", 0), 12, GOLD, true));
+                    item.addView(text(match.optString("status", "active").replace('_', ' ').toUpperCase(Locale.ROOT) +
+                        " · vs " + match.optString("opponentUsername", "Waiting for opponent") +
+                        " · KSh " + money(match.optDouble("stake_amount", match.optDouble("stakeAmount", 0))), 11, SUBTLE, false),
+                        margins(-1, -2, 0, dp(4), 0, dp(6)));
+                    Button open = primaryButton("OPEN eFOOTBALL MATCH HUB");
+                    item.addView(open, matchWrap());
+                    open.setOnClickListener(v -> openEfootballMatch(match));
+                    homeActiveMatchesList.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                    displayed++;
+                }
+            }
+        }
+
+        if (displayed == 0 && loading) {
+            homeActiveMatchesList.addView(text("Checking your active matches…", 12, SUBTLE, false));
+        } else if (displayed == 0 && !hasError) {
+            homeActiveMatchesList.addView(text("No active matches right now.", 12, SUBTLE, false));
+        }
     }
 
     private void addHomeAction(String title, String description, String destination) {
@@ -1467,6 +1579,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     public void onStatus(String status) {
         socketAvailable = status != null && status.startsWith("Connected");
         setConnection(status, socketAvailable);
+        if ("home".equals(currentScreen) && hasChessAccess() && !socketAvailable) {
+            homeChessMatchesLoaded = true;
+            homeChessMatchError = "Chess matches are temporarily unavailable.";
+            drawHomeActiveMatches(homeSnapshotGeneration);
+        }
         if (pageStatus != null && ("chess".equals(currentScreen) || "chessboard".equals(currentScreen))) {
             pageStatus.setText(status);
         }
@@ -1474,6 +1591,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
 
     @Override
     public void onMatches(List<JSONObject> matches) {
+        if ("home".equals(currentScreen) && homeActiveMatchesList != null) {
+            homeChessMatches = matches == null ? new ArrayList<>() : new ArrayList<>(matches);
+            homeChessMatchesLoaded = true;
+            homeChessMatchError = "";
+            drawHomeActiveMatches(homeSnapshotGeneration);
+            return;
+        }
         if (!"chess".equals(currentScreen) || activeMatchesList == null) return;
         activeMatchesList.removeAllViews();
         if (matches == null || matches.isEmpty()) {
