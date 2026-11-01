@@ -2,10 +2,12 @@ package com.goalgambit.trial;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.DatePickerDialog;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.TimePickerDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -41,13 +43,16 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -110,6 +115,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private Button chessTournamentForfeit;
     private LinearLayout activeMatchesList;
     private LinearLayout chessHistoryList;
+    private TextView chessRecordSummary;
     private LinearLayout chessScheduleList;
     private LinearLayout notificationList;
     private ChessRealtimeClient chessSocket;
@@ -483,7 +489,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         LinearLayout summary = card();
         summary.addView(text("ACCOUNT SNAPSHOT", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
         StringBuilder accountSummary = new StringBuilder("Game access  ").append(gameName(currentUser.optString("game", "")))
-            .append("\nAccount  Active");
+            .append("\nAccount  Active")
+            .append("\nPhone  ").append(currentUser.optString("phone", "Not added"));
         if (hasChessAccess()) accountSummary.insert(0, "Chess rating  " + currentUser.optInt("rating", 1200) + "\n");
         summary.addView(text(accountSummary.toString(), 13, TEXT, false));
         Button account = secondaryButton("PROFILE & ACCOUNT SETTINGS");
@@ -547,6 +554,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 "Wallet balance · KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))));
         });
 
+        if (hasChessAccess()) addHomeTournamentOverview(parent, generation, true);
+        if (hasEfootballAccess()) addHomeTournamentOverview(parent, generation, false);
+
         final JSONArray[] chessHistory = { null };
         final JSONArray[] footballMatches = { null };
         final JSONArray[] announcements = { null };
@@ -606,6 +616,51 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             announcements[0] = result.ok() ? result.object.optJSONArray("announcements") : null;
             announcementsLoaded[0] = true;
             updateSummary.run();
+        });
+    }
+
+    private void addHomeTournamentOverview(LinearLayout parent, long generation, boolean chess) {
+        String title = chess ? "YOUR ACTIVE CHESS TOURNAMENTS" : "YOUR ACTIVE eFOOTBALL TOURNAMENTS";
+        String endpoint = chess ? "/api/chess/competitions/tournament/entries" : "/api/tournaments";
+        String destination = chess ? "chess" : "leagues";
+        LinearLayout section = card();
+        section.addView(text(title, 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
+        TextView entries = text("Loading your entries…", 12, SUBTLE, false);
+        section.addView(entries, margins(-1, -2, 0, 0, 0, dp(7)));
+        Button open = secondaryButton(chess ? "OPEN CHESS DASHBOARD" : "OPEN eFOOTBALL COMPETITIONS");
+        section.addView(open, margins(-1, dp(44), 0, 0, 0, 0));
+        open.setOnClickListener(v -> navigate(destination));
+        parent.addView(section, margins(-1, -2, 0, 0, 0, dp(8)));
+
+        request("GET", endpoint, token, null, result -> {
+            if (!isCurrentHomeSnapshot(generation)) return;
+            if (!result.ok()) {
+                entries.setText(result.message("Could not load tournament entries."));
+                return;
+            }
+            JSONArray source = result.object.optJSONArray(chess ? "entries" : "tournaments");
+            List<String> lines = new ArrayList<>();
+            if (source != null) for (int i = 0; i < source.length(); i++) {
+                JSONObject item = source.optJSONObject(i);
+                if (item == null) continue;
+                if (chess) {
+                    String matchStatus = item.optString("matchStatus", "");
+                    String state = "active".equals(matchStatus) ? "Match in progress" :
+                        "waiting".equals(matchStatus) ? "Waiting for opponent" :
+                        "settling".equals(matchStatus) ? "Result settling" : "Entry active";
+                    lines.add(item.optString("timeControl", "Chess") + " · KSh " +
+                        money(item.optDouble("stake", 0)) + " stake · " + state);
+                } else {
+                    String status = item.optString("status", "open").toLowerCase(Locale.ROOT);
+                    boolean active = item.optBoolean("joined") &&
+                        !"completed".equals(status) && !"cancelled".equals(status) && !"closed".equals(status);
+                    if (active) lines.add(item.optString("name", "eFootball tournament") + " · KSh " +
+                        money(item.optDouble("entry_fee", 0)) + " entry · " + status.replace('_', ' '));
+                }
+            }
+            entries.setText(lines.isEmpty()
+                ? (chess ? "No active Chess tournament selections this month." : "You have no active eFootball tournaments.")
+                : android.text.TextUtils.join("\n", lines));
         });
     }
 
@@ -784,7 +839,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         content.addView(find, margins(-1, dp(54), 0, 0, 0, dp(7)));
         Spinner finalStakeSpinner = stakeSpinner;
         find.setOnClickListener(v -> startConfiguredChess(find, finalStakeSpinner));
-        Button challenge = secondaryButton("CHALLENGE A CHESS PLAYER");
+        Button challenge = secondaryButton("CHALLENGE / SCHEDULE CHESS");
         content.addView(challenge, margins(-1, dp(48), 0, 0, 0, dp(14)));
         challenge.setOnClickListener(v -> showDirectChessChallenge());
         content.addView(text("YOUR ACTIVE CHESS TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
@@ -810,11 +865,21 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         activeMatchesList.setOrientation(LinearLayout.VERTICAL);
         content.addView(activeMatchesList, margins(-1, -2, 0, 0, 0, dp(16)));
         content.addView(text("RECENT RESULTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        LinearLayout record = card();
+        record.addView(text("CHESS RECORD", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(4)));
+        chessRecordSummary = text("Loading your record…", 12, TEXT, false);
+        record.addView(chessRecordSummary);
+        content.addView(record, margins(-1, -2, 0, 0, 0, dp(7)));
+        Button clearHistory = secondaryButton("CLEAR MATCH HISTORY LIST");
+        content.addView(clearHistory, margins(-1, dp(44), 0, 0, 0, dp(7)));
+        clearHistory.setOnClickListener(v -> clearUserHistory("matches", () -> {
+            if ("chess".equals(currentScreen)) loadChessHistory(chessHistoryList);
+        }));
         chessHistoryList = new LinearLayout(this);
         chessHistoryList.setOrientation(LinearLayout.VERTICAL);
         content.addView(chessHistoryList, margins(-1, -2, 0, 0, 0, dp(12)));
         loadChessHistory(chessHistoryList);
-        content.addView(text("CHALLENGES & INVITATIONS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        content.addView(text("UPCOMING GAMES · CHALLENGES & INVITATIONS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout scheduleList = new LinearLayout(this);
         scheduleList.setOrientation(LinearLayout.VERTICAL);
         chessScheduleList = scheduleList;
@@ -1161,34 +1226,89 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private void showDirectChessChallenge() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
+        Spinner invitationType = optionSpinner(new String[] { "Challenge now · staked game", "Schedule a future match" });
+        form.addView(invitationType, margins(-1, dp(48), 0, 0, 0, dp(8)));
         EditText username = input("Opponent's Chess username", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         form.addView(username, margins(-1, dp(50), 0, 0, 0, dp(8)));
+        Calendar[] scheduledAt = { null };
+        TextView scheduledLabel = text("Choose a start time at least 10 minutes from now.", 12, SUBTLE, false);
+        Button chooseTime = secondaryButton("CHOOSE DATE & TIME");
+        form.addView(scheduledLabel, margins(-1, -2, 0, 0, 0, dp(5)));
+        form.addView(chooseTime, margins(-1, dp(44), 0, 0, 0, dp(8)));
+        scheduledLabel.setVisibility(View.GONE);
+        chooseTime.setVisibility(View.GONE);
         Spinner clock = optionSpinner(new String[] { "10+5 Rapid", "3+2 Blitz", "1+1 Bullet" });
         form.addView(clock, margins(-1, dp(48), 0, 0, 0, dp(8)));
         Spinner stake = optionSpinner(new String[] { "KSh 20 stake", "KSh 50 stake", "KSh 100 stake" });
         form.addView(stake, matchWrap());
-        new AlertDialog.Builder(this).setTitle("Direct Chess challenge")
-            .setMessage("Send a live challenge to a known GOAL$GAMBIT Chess player. The server reserves your stake now; the invited player must accept before a match starts.")
+        invitationType.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                boolean future = position == 1;
+                scheduledLabel.setVisibility(future ? View.VISIBLE : View.GONE);
+                chooseTime.setVisibility(future ? View.VISIBLE : View.GONE);
+                stake.setVisibility(future ? View.GONE : View.VISIBLE);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        chooseTime.setOnClickListener(v -> {
+            Calendar minimum = Calendar.getInstance(TimeZone.getTimeZone("Africa/Nairobi"));
+            minimum.add(Calendar.MINUTE, 10);
+            Calendar initial = scheduledAt[0] == null ? (Calendar) minimum.clone() : (Calendar) scheduledAt[0].clone();
+            new DatePickerDialog(this, (dateView, year, month, day) -> {
+                Calendar proposed = Calendar.getInstance(TimeZone.getTimeZone("Africa/Nairobi"));
+                proposed.clear();
+                proposed.set(year, month, day, initial.get(Calendar.HOUR_OF_DAY), initial.get(Calendar.MINUTE), 0);
+                new TimePickerDialog(this, (timeView, hour, minute) -> {
+                    proposed.set(Calendar.HOUR_OF_DAY, hour);
+                    proposed.set(Calendar.MINUTE, minute);
+                    if (proposed.getTimeInMillis() < Calendar.getInstance(TimeZone.getTimeZone("Africa/Nairobi")).getTimeInMillis() + 10L * 60L * 1000L) {
+                        showMessage("Choose a Chess start time at least 10 minutes from now.", true);
+                        return;
+                    }
+                    scheduledAt[0] = proposed;
+                    SimpleDateFormat display = new SimpleDateFormat("EEE, d MMM yyyy · HH:mm", Locale.getDefault());
+                    display.setTimeZone(TimeZone.getTimeZone("Africa/Nairobi"));
+                    scheduledLabel.setText("Starts · " + display.format(proposed.getTime()) + " · Nairobi time");
+                }, initial.get(Calendar.HOUR_OF_DAY), initial.get(Calendar.MINUTE), false).show();
+            }, initial.get(Calendar.YEAR), initial.get(Calendar.MONTH), initial.get(Calendar.DAY_OF_MONTH)) {
+                { getDatePicker().setMinDate(minimum.getTimeInMillis()); }
+            }.show();
+        });
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Chess invitation")
+            .setMessage("Challenge a Chess player now for a supported stake, or schedule a future game. The server validates the invitation and sends the reminders.")
             .setView(form)
             .setNegativeButton("CANCEL", null)
-            .setPositiveButton("SEND CHALLENGE", (dialog, which) -> {
+            .setPositiveButton("SEND INVITATION", null)
+            .create();
+        dialog.setOnShowListener(dialogState -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 String opponent = username.getText().toString().trim();
                 if (!opponent.matches("[A-Za-z0-9_]{3,30}")) { showMessage("Enter a valid Chess username.", true); return; }
-                int selectedStake = stake.getSelectedItemPosition() == 2 ? 100 : stake.getSelectedItemPosition() == 1 ? 50 : 20;
+                boolean future = invitationType.getSelectedItemPosition() == 1;
+                if (future && scheduledAt[0] == null) { showMessage("Choose the scheduled Chess match date and time.", true); return; }
                 String[] clocks = { "10+5", "3+2", "1+1" };
                 JSONObject body = new JSONObject();
                 try {
-                    body.put("type", "direct");
+                    body.put("type", future ? "scheduled" : "direct");
                     body.put("opponentUsername", opponent);
                     body.put("timeControl", clocks[Math.max(0, clock.getSelectedItemPosition())]);
-                    body.put("stakeAmount", selectedStake);
+                    if (future) {
+                        SimpleDateFormat iso = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US);
+                        iso.setTimeZone(TimeZone.getTimeZone("Africa/Nairobi"));
+                        body.put("scheduledAt", iso.format(scheduledAt[0].getTime()));
+                        body.put("timeZone", "Africa/Nairobi");
+                    } else {
+                        int selectedStake = stake.getSelectedItemPosition() == 2 ? 100 : stake.getSelectedItemPosition() == 1 ? 50 : 20;
+                        body.put("stakeAmount", selectedStake);
+                    }
                 } catch (Exception ignored) {}
                 request("POST", "/api/chess/schedules", token, body, result -> {
-                    if (!result.ok()) { if (pageStatus != null) pageStatus.setText(result.message("The challenge was not sent.")); return; }
-                    if (pageStatus != null) pageStatus.setText(result.message("Challenge sent. The server has reserved your stake."));
-                    renderChess();
+                    if (!result.ok()) { showMessage(result.message("The Chess invitation was not sent."), true); return; }
+                    showMessage(result.message(future ? "Future Chess match scheduled." : "Challenge sent. The server has reserved your stake."), false);
+                    if ("chess".equals(currentScreen)) renderChess();
                 });
-            }).show();
+                dialog.dismiss();
+        }));
+        dialog.show();
     }
 
     private void loadChessSchedules() {
@@ -1210,9 +1330,15 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 if (schedule == null) continue;
                 long id = schedule.optLong("id", 0);
                 LinearLayout panel = card();
-                panel.addView(text((schedule.optBoolean("isHost") ? "CHALLENGE TO · " : "CHALLENGE FROM · ") + schedule.optString("opponentUsername", "Player"), 13, GOLD, true));
-                panel.addView(text(schedule.optString("status", "pending").toUpperCase(Locale.ROOT) + " · " +
-                    schedule.optString("timeControl", "Chess") + " · KSh " + money(schedule.optDouble("stakeAmount", 0)) + " stake", 12, TEXT, false), margins(-1, -2, 0, dp(4), 0, dp(6)));
+                boolean scheduledMatch = !schedule.optBoolean("isDirectChallenge");
+                panel.addView(text((scheduledMatch ? "SCHEDULED MATCH " : "CHALLENGE ") +
+                    (schedule.optBoolean("isHost") ? "TO · " : "FROM · ") + schedule.optString("opponentUsername", "Player"), 13, GOLD, true));
+                String scheduleDetails = schedule.optString("status", "pending").toUpperCase(Locale.ROOT) + " · " +
+                    schedule.optString("timeControl", "Chess");
+                scheduleDetails += scheduledMatch
+                    ? " · " + formatTime(schedule.optString("scheduledAt", ""))
+                    : " · KSh " + money(schedule.optDouble("stakeAmount", 0)) + " stake";
+                panel.addView(text(scheduleDetails, 12, TEXT, false), margins(-1, -2, 0, dp(4), 0, dp(6)));
                 if (schedule.optBoolean("canRespond")) {
                     Button accept = primaryButton("ACCEPT CHALLENGE");
                     Button decline = secondaryButton("DECLINE");
@@ -1591,10 +1717,23 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             if (!"chess".equals(currentScreen) || list != chessHistoryList) return;
             list.removeAllViews();
             if (!result.ok()) {
+                if (chessRecordSummary != null) chessRecordSummary.setText("Chess record is temporarily unavailable.");
                 list.addView(text(result.message("History is unavailable."), 12, SUBTLE, false));
                 return;
             }
             JSONArray games = result.object.optJSONArray("games");
+            int played = 0, wins = 0, draws = 0, losses = 0;
+            if (games != null) for (int i = 0; i < games.length(); i++) {
+                JSONObject game = games.optJSONObject(i);
+                if (game == null) continue;
+                if (!"cancelled".equalsIgnoreCase(game.optString("status", ""))) played++;
+                String outcome = game.optString("result", "").toLowerCase(Locale.ROOT);
+                if ("win".equals(outcome) || "won".equals(outcome)) wins++;
+                else if ("draw".equals(outcome)) draws++;
+                else if ("loss".equals(outcome) || "lost".equals(outcome)) losses++;
+            }
+            if (chessRecordSummary != null) chessRecordSummary.setText(
+                "Games played  " + played + "\nWins  " + wins + " · Draws  " + draws + " · Losses  " + losses);
             if (games == null || games.length() == 0) {
                 list.addView(text("No completed chess games yet.", 12, SUBTLE, false));
                 return;
@@ -2204,6 +2343,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                     (schedule.optBoolean("isMatchmakingOpen") ? "Ranked matchmaking is open now." : schedule.optString("message", "New ranked searches are currently closed.")));
             } else pageStatus.setText(result.message("Could not check matchmaking status. You can still open an existing match."));
         });
+        LinearLayout record = card();
+        record.addView(text("eFOOTBALL RECORD", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(4)));
+        TextView recordSummary = text("Loading your record…", 12, TEXT, false);
+        record.addView(recordSummary);
+        content.addView(record, margins(-1, -2, 0, 0, 0, dp(10)));
         Spinner stake = optionSpinner(new String[] { "KSh 20 ranked stake", "KSh 50 ranked stake", "KSh 100 ranked stake" });
         content.addView(stake, margins(-1, dp(48), 0, 0, 0, dp(8)));
         Button search = primaryButton("FIND RANKED eFOOTBALL OPPONENT");
@@ -2212,15 +2356,61 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         Button refresh = secondaryButton("REFRESH MATCH HUB");
         content.addView(refresh, margins(-1, dp(44), 0, 0, 0, dp(12)));
         refresh.setOnClickListener(v -> renderEfootball());
+        content.addView(text("YOUR ACTIVE TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        LinearLayout tournaments = new LinearLayout(this);
+        tournaments.setOrientation(LinearLayout.VERTICAL);
+        content.addView(tournaments, margins(-1, -2, 0, 0, 0, dp(12)));
+        loadActiveEfootballTournaments(tournaments);
         content.addView(text("ACTIVE MATCHES", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
         LinearLayout active = new LinearLayout(this);
         active.setOrientation(LinearLayout.VERTICAL);
         content.addView(active, margins(-1, -2, 0, 0, 0, dp(12)));
         content.addView(text("RECENT MATCH HISTORY", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        Button clearHistory = secondaryButton("CLEAR MATCH HISTORY LIST");
+        content.addView(clearHistory, margins(-1, dp(44), 0, 0, 0, dp(7)));
+        clearHistory.setOnClickListener(v -> clearUserHistory("matches", () -> {
+            if ("efootball".equals(currentScreen)) renderEfootball();
+        }));
         LinearLayout history = new LinearLayout(this);
         history.setOrientation(LinearLayout.VERTICAL);
         content.addView(history, matchWrap());
-        loadEfootballMatches(active, history);
+        loadEfootballMatches(active, history, recordSummary);
+    }
+
+    private void loadActiveEfootballTournaments(LinearLayout list) {
+        list.removeAllViews();
+        list.addView(text("Loading your tournament entries…", 12, SUBTLE, false));
+        request("GET", "/api/tournaments", token, null, result -> {
+            if (!"efootball".equals(currentScreen)) return;
+            list.removeAllViews();
+            JSONArray tournaments = result.ok() ? result.object.optJSONArray("tournaments") : null;
+            if (tournaments == null) {
+                list.addView(text(result.message("Could not load tournament entries."), 12, SUBTLE, false));
+                return;
+            }
+            int shown = 0;
+            for (int i = 0; i < tournaments.length(); i++) {
+                JSONObject tournament = tournaments.optJSONObject(i);
+                if (tournament == null || !tournament.optBoolean("joined")) continue;
+                String status = tournament.optString("status", "open").toLowerCase(Locale.ROOT);
+                if ("completed".equals(status) || "cancelled".equals(status) || "closed".equals(status)) continue;
+                LinearLayout item = card();
+                item.addView(text(tournament.optString("name", "eFootball tournament"), 14, GOLD, true));
+                item.addView(text(tournament.optString("tier", "eFootball") + " · KSh " +
+                    money(tournament.optDouble("entry_fee", 0)) + " entry · " + status.replace('_', ' '), 11, SUBTLE, false),
+                    margins(-1, -2, 0, dp(3), 0, dp(5)));
+                Button open = secondaryButton("OPEN TOURNAMENT");
+                item.addView(open, margins(-1, dp(42), 0, 0, 0, 0));
+                long id = tournament.optLong("id", 0);
+                open.setOnClickListener(v -> openTournament(id));
+                list.addView(item, margins(-1, -2, 0, 0, 0, dp(7)));
+                shown++;
+            }
+            if (shown == 0) list.addView(text("You have no active eFootball tournaments.", 12, SUBTLE, false));
+            Button browse = secondaryButton("BROWSE LEAGUES & TOURNAMENTS");
+            list.addView(browse, margins(-1, dp(44), 0, dp(5), 0, 0));
+            browse.setOnClickListener(v -> navigate("leagues"));
+        });
     }
 
     private void startEfootballRankedSearch(Button button, int selectedIndex) {
@@ -2243,7 +2433,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             }).show();
     }
 
-    private void loadEfootballMatches(LinearLayout active, LinearLayout history) {
+    private void loadEfootballMatches(LinearLayout active, LinearLayout history, TextView recordSummary) {
         active.removeAllViews();
         history.removeAllViews();
         request("GET", "/api/efootball/matches/active", token, null, result -> {
@@ -2272,9 +2462,30 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             if (!"efootball".equals(currentScreen)) return;
             JSONArray games = result.object.optJSONArray("matches");
             if (!result.ok() || games == null || games.length() == 0) {
+                if (recordSummary != null) recordSummary.setText(result.ok()
+                    ? "Games played  0\nWins  0 · Draws  0 · Losses  0"
+                    : "Your eFootball record is temporarily unavailable.");
                 history.addView(text(result.ok() ? "No completed eFootball matches yet." : result.message("Match history could not be loaded."), 12, SUBTLE, false));
                 return;
             }
+            int played = 0, wins = 0, draws = 0, losses = 0;
+            for (int i = 0; i < games.length(); i++) {
+                JSONObject game = games.optJSONObject(i);
+                if (game == null) continue;
+                String status = game.optString("status", "").toLowerCase(Locale.ROOT);
+                if (!"cancelled".equals(status)) played++;
+                if (!"completed".equals(status)) continue;
+                boolean creator = game.optBoolean("youAreCreator");
+                String ownKey = creator ? "creator_score" : "opponent_score";
+                String rivalKey = creator ? "opponent_score" : "creator_score";
+                if (!game.has(ownKey) || !game.has(rivalKey) || game.isNull(ownKey) || game.isNull(rivalKey)) continue;
+                int own = game.optInt(ownKey, 0), rival = game.optInt(rivalKey, 0);
+                if (own > rival) wins++;
+                else if (own < rival) losses++;
+                else draws++;
+            }
+            if (recordSummary != null) recordSummary.setText(
+                "Games played  " + played + "\nWins  " + wins + " · Draws  " + draws + " · Losses  " + losses);
             for (int i = 0; i < Math.min(games.length(), 20); i++) {
                 JSONObject game = games.optJSONObject(i);
                 if (game == null) continue;
@@ -2687,6 +2898,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             deposit.setOnClickListener(v -> showDepositForm());
             withdraw.setOnClickListener(v -> showWithdrawalForm());
             walletBox.addView(text("RECENT TRANSACTIONS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+            Button clearTransactions = secondaryButton("CLEAR TRANSACTION HISTORY LIST");
+            walletBox.addView(clearTransactions, margins(-1, dp(44), 0, 0, 0, dp(7)));
+            clearTransactions.setOnClickListener(v -> clearUserHistory("transactions", () -> {
+                if ("wallet".equals(currentScreen)) renderWallet();
+            }));
             request("GET", "/api/wallet/transactions?limit=30", token, null, txResult -> {
                 if (!"wallet".equals(currentScreen)) return;
                 if (!txResult.ok()) { addNoticeTo(walletBox, txResult.message("Could not load transaction history."), SUBTLE); return; }
@@ -2705,6 +2921,28 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 }
             });
         });
+    }
+
+    private void clearUserHistory(String historyType, Runnable afterClear) {
+        boolean transactions = "transactions".equals(historyType);
+        String label = transactions ? "transaction history" : "match history";
+        new AlertDialog.Builder(this)
+            .setTitle("Clear " + label + " list?")
+            .setMessage("This removes the items from your list. Your wallet, payment, match and settlement records remain securely stored.")
+            .setNegativeButton("KEEP HISTORY", null)
+            .setPositiveButton("CLEAR LIST", (dialog, which) -> {
+                JSONObject body = new JSONObject();
+                try { body.put("historyType", historyType); } catch (Exception ignored) {}
+                request("POST", "/api/history/clear", token, body, result -> {
+                    if (!result.ok()) {
+                        showMessage(result.message("Could not clear " + label + "."), true);
+                        return;
+                    }
+                    showMessage(result.message(label + " cleared from your list."), false);
+                    if (afterClear != null) afterClear.run();
+                });
+            })
+            .show();
     }
 
     private void showDepositForm() {
