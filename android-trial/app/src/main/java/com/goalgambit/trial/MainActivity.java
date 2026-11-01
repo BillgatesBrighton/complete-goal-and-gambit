@@ -79,6 +79,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private boolean requestBusy;
     private boolean moveBusy;
     private boolean socketAvailable;
+    private long homeSnapshotGeneration;
     private long currentChessMatchId;
     private long selectedTournamentId;
     private String currentPlayerColor = "w";
@@ -89,9 +90,21 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private String chessSpeed = "rapid";
     private String chessTimeControl = "10:00";
     private int chessStake = 20;
+    private String chessTournamentTimeControl = "10+5";
+    private int chessTournamentStake = 20;
+    private long chessTournamentMatchId;
+    private long chessTournamentGeneration;
+    private boolean chessTournamentActionBusy;
     private ChessBoardView chessBoard;
     private TextView chessClockInfo;
     private TextView chessMatchStatus;
+    private TextView chessTournamentStatus;
+    private TextView chessTournamentEntryStatus;
+    private LinearLayout chessTournamentStandings;
+    private LinearLayout chessTournamentFixtures;
+    private Button chessTournamentJoin;
+    private Button chessTournamentCancel;
+    private Button chessTournamentForfeit;
     private LinearLayout activeMatchesList;
     private LinearLayout chessHistoryList;
     private LinearLayout chessScheduleList;
@@ -347,7 +360,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         preparePlayerNotifications();
         if (chessSocket != null) chessSocket.close();
         chessSocket = new ChessRealtimeClient(this);
-        chessSocket.connect(token);
+        chessSocket.connect(token, hasChessAccess());
         boolean openNotifications = getIntent() != null && getIntent().getBooleanExtra(OPEN_NOTIFICATIONS_EXTRA, false);
         if (openNotifications) getIntent().removeExtra(OPEN_NOTIFICATIONS_EXTRA);
         navigate(openNotifications ? "notifications" : "home");
@@ -426,10 +439,20 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void navigate(String screen) {
+        if (("chess".equals(screen) || "chessTournament".equals(screen)) && !hasChessAccess()) {
+            showMessage("This account is not registered for Chess.", true);
+            return;
+        }
+        if (("efootball".equals(screen) || "efootballMatch".equals(screen) ||
+            "leagues".equals(screen) || "tournament".equals(screen)) && !hasEfootballAccess()) {
+            showMessage("This account is not registered for eFootball.", true);
+            return;
+        }
         currentScreen = screen;
         if (navigation != null && token != null) buildNavigation();
         if ("home".equals(screen)) renderHome();
         else if ("chess".equals(screen)) renderChess();
+        else if ("chessTournament".equals(screen)) renderChessTournament();
         else if ("efootball".equals(screen)) renderEfootball();
         else if ("efootballMatch".equals(screen)) renderEfootballMatch();
         else if ("leagues".equals(screen)) renderLeagues();
@@ -445,7 +468,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private void renderHome() {
         content.removeAllViews();
         addHeading("Welcome back,", currentUser.optString("username", "player"));
-        TextView motto = text("YOUR GOAL$GAMBIT PLAYER HUB\nChess, eFootball, competitions, wallet and support — connected to your account.", 14, TEXT, true);
+        TextView motto = text("GOAL$GAMBIT | Compete. Win. Earn.", 14, TEXT, true);
         motto.setPadding(dp(14), dp(15), dp(14), dp(15));
         motto.setBackground(round(PANEL, dp(8), Color.rgb(94, 75, 25), dp(1)));
         content.addView(motto, margins(-1, -2, 0, dp(8), 0, dp(12)));
@@ -456,17 +479,22 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
 
         LinearLayout summary = card();
         summary.addView(text("ACCOUNT SNAPSHOT", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
-        summary.addView(text("Chess rating  " + currentUser.optInt("rating", 1200) + "\nGame access  " + gameName(currentUser.optString("game", "")) + "\nAccount  Active", 13, TEXT, false));
+        StringBuilder accountSummary = new StringBuilder("Game access  ").append(gameName(currentUser.optString("game", "")))
+            .append("\nAccount  Active");
+        if (hasChessAccess()) accountSummary.insert(0, "Chess rating  " + currentUser.optInt("rating", 1200) + "\n");
+        summary.addView(text(accountSummary.toString(), 13, TEXT, false));
         Button account = secondaryButton("PROFILE & ACCOUNT SETTINGS");
         summary.addView(account, margins(-1, dp(42), 0, dp(8), 0, 0));
         account.setOnClickListener(v -> navigate("profile"));
         content.addView(summary, margins(-1, -2, 0, 0, 0, dp(10)));
 
         LinearLayout quick = card();
-        quick.addView(text("QUICK ACCESS", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
-        addQuickAction(quick, "CHESS LOBBY", "Ranked, casual, active games and history", "chess");
-        addQuickAction(quick, "eFOOTBALL MATCH HUB", "Room codes, ready check and score reports", "efootball");
-        addQuickAction(quick, "LEAGUES & TOURNAMENTS", "Entries, fixtures, groups and standings", "leagues");
+        quick.addView(text("YOUR GAMES", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        if (hasChessAccess()) addQuickAction(quick, "CHESS", "Ranked games, rapid, blitz, bullet and tournaments", "chess");
+        if (hasEfootballAccess()) {
+            addQuickAction(quick, "eFOOTBALL", "Ranked matches, leagues and tournaments", "efootball");
+            addQuickAction(quick, "LEAGUES & TOURNAMENTS", "Entries, fixtures, groups and standings", "leagues");
+        }
         addQuickAction(quick, "WALLET", "Available funds, M-Pesa deposit and history", "wallet");
         addQuickAction(quick, "NOTIFICATIONS", "Account alerts, event reminders and announcements", "notifications");
         content.addView(quick, margins(-1, -2, 0, 0, 0, dp(10)));
@@ -477,7 +505,6 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         loadHomeSnapshot(snapshot);
         pageStatus = text("", 12, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, dp(8), 0, 0));
-        refreshIdentity();
     }
 
     private void addQuickAction(LinearLayout parent, String title, String description, String destination) {
@@ -499,46 +526,88 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void loadHomeSnapshot(LinearLayout parent) {
+        final long generation = ++homeSnapshotGeneration;
         parent.removeAllViews();
         parent.addView(text("YOUR LIVE OVERVIEW", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
-        final JSONObject[] wallet = { null };
-        final JSONArray[] chessHistory = { null };
-        final JSONArray[] football = { null };
-        final JSONArray[] notices = { null };
-        final int[] pending = { 4 };
-        Runnable settled = () -> {
-            if (--pending[0] != 0 || !"home".equals(currentScreen)) return;
-            LinearLayout overview = card();
-            overview.addView(text("ACCOUNT ACTIVITY", 11, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
-            overview.addView(text("Chess history entries  " + (chessHistory[0] == null ? "—" : chessHistory[0].length()) +
-                "\nActive eFootball matches  " + (football == null || football[0] == null ? "—" : football[0].length()) +
-                "\nUnread announcements  " + (notices == null || notices[0] == null ? "—" : notices[0].length()), 12, TEXT, false));
-            if (wallet[0] != null) {
-                JSONObject data = wallet[0].optJSONObject("wallet");
-                if (data != null) overview.addView(text("Available wallet balance  KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))), 12, GOLD, true), margins(-1, -2, 0, dp(7), 0, 0));
-            }
-            parent.addView(overview, margins(-1, -2, 0, 0, 0, dp(8)));
-            if (football[0] != null && football[0].length() > 0) {
-                JSONObject first = football[0].optJSONObject(0);
-                if (first != null) {
-                    LinearLayout live = card();
-                    live.addView(text("CONTINUE YOUR eFOOTBALL MATCH", 11, GOLD, true));
-                    live.addView(text("Match #" + first.optLong("id", 0) + " · " + first.optString("status", "active") + " · vs " + first.optString("opponentUsername", "waiting"), 12, TEXT, false), margins(-1, -2, 0, dp(4), 0, dp(3)));
-                    Button open = primaryButton("OPEN MATCH HUB");
-                    live.addView(open, matchWrap());
-                    open.setOnClickListener(v -> navigate("efootball"));
-                    parent.addView(live, margins(-1, -2, 0, 0, 0, dp(8)));
-                }
-            }
-        };
-        request("GET", "/api/wallet", token, null, result -> { if (result.ok()) wallet[0] = result.object; settled.run(); });
-        request("GET", "/api/efootball/matches/active", token, null, result -> { if (result.ok()) football[0] = result.object.optJSONArray("matches"); settled.run(); });
-        request("GET", "/api/chat/announcements", token, null, result -> { if (result.ok()) notices[0] = result.object.optJSONArray("announcements"); settled.run(); });
-        if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
-        request("GET", "/api/chess/history/mine", token, null, result -> {
-            if (result.ok()) chessHistory[0] = result.object.optJSONArray("games");
-            settled.run();
+        LinearLayout overview = card();
+        TextView summary = text("Loading your account activity…", 12, TEXT, false);
+        overview.addView(text("ACCOUNT ACTIVITY", 11, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
+        overview.addView(summary);
+        parent.addView(overview, margins(-1, -2, 0, 0, 0, dp(8)));
+
+        TextView walletSummary = text("Wallet balance · loading", 12, GOLD, true);
+        overview.addView(walletSummary, margins(-1, -2, 0, dp(7), 0, 0));
+        request("GET", "/api/wallet", token, null, result -> {
+            if (!isCurrentHomeSnapshot(generation)) return;
+            JSONObject data = result.ok() ? result.object.optJSONObject("wallet") : null;
+            walletSummary.setText(data == null ? "Wallet balance · temporarily unavailable" :
+                "Wallet balance · KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))));
         });
+
+        final JSONArray[] chessHistory = { null };
+        final JSONArray[] footballMatches = { null };
+        final JSONArray[] announcements = { null };
+        final boolean[] chessHistoryLoaded = { false };
+        final boolean[] footballMatchesLoaded = { false };
+        final boolean[] announcementsLoaded = { false };
+        Runnable updateSummary = () -> {
+            if (!isCurrentHomeSnapshot(generation)) return;
+            StringBuilder details = new StringBuilder();
+            if (hasChessAccess()) {
+                details.append("Chess history · ").append(!chessHistoryLoaded[0] ? "Loading" :
+                    chessHistory[0] == null ? "Unavailable" : chessHistory[0].length() + " games");
+            }
+            if (hasEfootballAccess()) {
+                if (details.length() > 0) details.append('\n');
+                details.append("Active eFootball matches · ").append(!footballMatchesLoaded[0] ? "Loading" :
+                    footballMatches[0] == null ? "Unavailable" : footballMatches[0].length());
+            }
+            if (announcementsLoaded[0]) {
+                if (details.length() > 0) details.append('\n');
+                details.append("Announcements · ").append(announcements[0] == null ? "Unavailable" : announcements[0].length());
+            }
+            summary.setText(details.length() == 0 ? "Your account activity will appear here." : details.toString());
+        };
+
+        if (hasChessAccess()) {
+            if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
+            request("GET", "/api/chess/history/mine", token, null, result -> {
+                if (!isCurrentHomeSnapshot(generation)) return;
+                chessHistory[0] = result.ok() ? result.object.optJSONArray("games") : null;
+                chessHistoryLoaded[0] = true;
+                updateSummary.run();
+            });
+        }
+        if (hasEfootballAccess()) {
+            request("GET", "/api/efootball/matches/active", token, null, result -> {
+                if (!isCurrentHomeSnapshot(generation)) return;
+                footballMatches[0] = result.ok() ? result.object.optJSONArray("matches") : null;
+                footballMatchesLoaded[0] = true;
+                updateSummary.run();
+                if (footballMatches[0] != null && footballMatches[0].length() > 0) {
+                    JSONObject first = footballMatches[0].optJSONObject(0);
+                    if (first != null) {
+                        LinearLayout live = card();
+                        live.addView(text("CONTINUE YOUR eFOOTBALL MATCH", 11, GOLD, true));
+                        live.addView(text("Match #" + first.optLong("id", 0) + " · " + first.optString("status", "active") + " · vs " + first.optString("opponentUsername", "waiting"), 12, TEXT, false), margins(-1, -2, 0, dp(4), 0, dp(3)));
+                        Button open = primaryButton("OPEN MATCH HUB");
+                        live.addView(open, matchWrap());
+                        open.setOnClickListener(v -> navigate("efootball"));
+                        parent.addView(live, margins(-1, -2, 0, 0, 0, dp(8)));
+                    }
+                }
+            });
+        }
+        request("GET", "/api/chat/announcements", token, null, result -> {
+            if (!isCurrentHomeSnapshot(generation)) return;
+            announcements[0] = result.ok() ? result.object.optJSONArray("announcements") : null;
+            announcementsLoaded[0] = true;
+            updateSummary.run();
+        });
+    }
+
+    private boolean isCurrentHomeSnapshot(long generation) {
+        return generation == homeSnapshotGeneration && "home".equals(currentScreen);
     }
 
     private void addHomeAction(String title, String description, String destination) {
@@ -549,22 +618,6 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         panel.addView(text(description, 12, SUBTLE, false), margins(-1, -2, 0, dp(4), 0, 0));
         content.addView(panel, margins(-1, -2, 0, 0, 0, dp(9)));
         panel.setOnClickListener(v -> navigate(destination));
-    }
-
-    private void refreshIdentity() {
-        request("GET", "/api/me", token, null, result -> {
-            if (!"home".equals(currentScreen)) return;
-            if (result.status == 401) {
-                expireSession();
-                return;
-            }
-            if (!result.ok()) {
-                pageStatus.setText(result.message("Your profile could not be refreshed."));
-                return;
-            }
-            currentUser = result.object.optJSONObject("user") == null ? currentUser : result.object.optJSONObject("user");
-            setConnection("Connected to GOAL$GAMBIT", true);
-        });
     }
 
     private void renderMore() {
@@ -731,6 +784,15 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         Button challenge = secondaryButton("CHALLENGE A CHESS PLAYER");
         content.addView(challenge, margins(-1, dp(48), 0, 0, 0, dp(14)));
         challenge.setOnClickListener(v -> showDirectChessChallenge());
+        content.addView(text("YOUR ACTIVE CHESS TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        LinearLayout tournamentEntries = new LinearLayout(this);
+        tournamentEntries.setOrientation(LinearLayout.VERTICAL);
+        content.addView(tournamentEntries, margins(-1, -2, 0, 0, 0, dp(9)));
+        loadChessTournamentEntries(tournamentEntries);
+        content.addView(text("CHESS TOURNAMENTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        Button tournaments = secondaryButton("STANDINGS, FIXTURES & ENTRY");
+        content.addView(tournaments, margins(-1, dp(48), 0, 0, 0, dp(14)));
+        tournaments.setOnClickListener(v -> navigate("chessTournament"));
         pageStatus = text("Connecting to the chess service…", 12, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, 0, 0, dp(10)));
         Button refresh = secondaryButton("REFRESH CHESS MATCHES");
@@ -756,6 +818,282 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         content.addView(scheduleList, matchWrap());
         loadChessSchedules(scheduleList);
         if (chessSocket != null) chessSocket.refreshMatches();
+    }
+
+    private void renderChessTournament() {
+        content.removeAllViews();
+        addHeading("Chess tournament standings", "Choose a fixed clock and stake to view this month’s standings and fixtures.");
+        addNotice("Swiss tournament clocks · Rapid 10+5 · Blitz 3+2 · Bullet 1+1. The backend validates every match and result.", MUTED_GOLD);
+        LinearLayout prizes = card();
+        prizes.addView(text("CHESS TOURNAMENT SEASON PRIZES", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
+        prizes.addView(text("KSh 20 entry · 1st 100 · 2nd 80 · 3rd 60\nKSh 50 entry · 1st 250 · 2nd 200 · 3rd 150\nKSh 100 entry · 1st 500 · 2nd 400 · 3rd 300", 12, TEXT, false));
+        content.addView(prizes, margins(-1, -2, 0, 0, 0, dp(12)));
+
+        content.addView(text("TIME CONTROL", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
+        Spinner clock = optionSpinner(new String[] { "Rapid · 10+5", "Blitz · 3+2", "Bullet · 1+1" });
+        clock.setSelection("3+2".equals(chessTournamentTimeControl) ? 1 : "1+1".equals(chessTournamentTimeControl) ? 2 : 0);
+        content.addView(clock, margins(-1, dp(48), 0, 0, 0, dp(8)));
+
+        content.addView(text("ENTRY STAKE", 12, GOLD, true), margins(-1, -2, 0, 0, 0, dp(5)));
+        Spinner stake = optionSpinner(new String[] { "KSh 20", "KSh 50", "KSh 100" });
+        stake.setSelection(chessTournamentStake == 100 ? 2 : chessTournamentStake == 50 ? 1 : 0);
+        content.addView(stake, margins(-1, dp(48), 0, 0, 0, dp(8)));
+
+        chessTournamentStatus = text("Loading this month’s tournament…", 12, SUBTLE, false);
+        content.addView(chessTournamentStatus, margins(-1, -2, 0, 0, 0, dp(8)));
+        chessTournamentEntryStatus = text("Checking your entry…", 12, TEXT, false);
+        content.addView(chessTournamentEntryStatus, margins(-1, -2, 0, 0, 0, dp(8)));
+
+        chessTournamentJoin = primaryButton("JOIN NEXT TOURNAMENT MATCH");
+        content.addView(chessTournamentJoin, margins(-1, dp(50), 0, 0, 0, dp(7)));
+        chessTournamentJoin.setOnClickListener(v -> startChessTournamentMatch());
+        chessTournamentCancel = secondaryButton("CANCEL ENTRY & REFUND SEARCH STAKE");
+        content.addView(chessTournamentCancel, margins(-1, dp(46), 0, 0, 0, dp(7)));
+        chessTournamentCancel.setVisibility(View.GONE);
+        chessTournamentCancel.setOnClickListener(v -> submitChessTournamentEntryAction("cancel"));
+        chessTournamentForfeit = secondaryButton("FORFEIT TOURNAMENT ENTRY");
+        content.addView(chessTournamentForfeit, margins(-1, dp(46), 0, 0, 0, dp(12)));
+        chessTournamentForfeit.setVisibility(View.GONE);
+        chessTournamentForfeit.setOnClickListener(v -> submitChessTournamentEntryAction("forfeit"));
+
+        Button refresh = secondaryButton("REFRESH STANDINGS & FIXTURES");
+        content.addView(refresh, margins(-1, dp(44), 0, 0, 0, dp(12)));
+        refresh.setOnClickListener(v -> refreshChessTournamentData());
+
+        content.addView(text("MONTHLY STANDINGS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessTournamentStandings = new LinearLayout(this);
+        chessTournamentStandings.setOrientation(LinearLayout.VERTICAL);
+        content.addView(chessTournamentStandings, margins(-1, -2, 0, 0, 0, dp(12)));
+        content.addView(text("RECENT FIXTURES & RESULTS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+        chessTournamentFixtures = new LinearLayout(this);
+        chessTournamentFixtures.setOrientation(LinearLayout.VERTICAL);
+        content.addView(chessTournamentFixtures, matchWrap());
+
+        clock.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                String selected = position == 1 ? "3+2" : position == 2 ? "1+1" : "10+5";
+                if (!selected.equals(chessTournamentTimeControl)) {
+                    chessTournamentTimeControl = selected;
+                    refreshChessTournamentData();
+                }
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        stake.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                int selected = position == 2 ? 100 : position == 1 ? 50 : 20;
+                if (selected != chessTournamentStake) {
+                    chessTournamentStake = selected;
+                    refreshChessTournamentData();
+                }
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        refreshChessTournamentData();
+    }
+
+    private void loadChessTournamentEntries(LinearLayout list) {
+        list.removeAllViews();
+        list.addView(text("Loading your current tournament entries…", 12, SUBTLE, false));
+        request("GET", "/api/chess/competitions/tournament/entries", token, null, result -> {
+            if (!"chess".equals(currentScreen)) return;
+            list.removeAllViews();
+            JSONArray entries = result.ok() ? result.object.optJSONArray("entries") : null;
+            if (entries == null || entries.length() == 0) {
+                list.addView(text(result.ok() ? "No active Chess tournament selections this month." :
+                    result.message("Your Chess tournaments could not be loaded."), 12, SUBTLE, false));
+                return;
+            }
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry == null) continue;
+                String timeControl = entry.optString("timeControl", "10+5");
+                int stake = entry.optInt("stake", 20);
+                long matchId = entry.optLong("matchId", 0);
+                LinearLayout panel = card();
+                panel.addView(text(timeControl + " tournament · KSh " + stake, 14, GOLD, true));
+                panel.addView(text("Your entry is active" + (entry.optString("matchStatus", "").isEmpty() ? "" :
+                    " · " + entry.optString("matchStatus").replace('_', ' ')), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, dp(5)));
+                Button open = secondaryButton(matchId > 0 ? "RESUME TOURNAMENT MATCH" : "OPEN TOURNAMENT TABLE");
+                panel.addView(open, matchWrap());
+                open.setOnClickListener(v -> {
+                    if (matchId > 0) openChessMatch(matchId);
+                    else {
+                        chessTournamentTimeControl = timeControl;
+                        chessTournamentStake = stake;
+                        navigate("chessTournament");
+                    }
+                });
+                list.addView(panel, margins(-1, -2, 0, 0, 0, dp(6)));
+            }
+        });
+    }
+
+    private void refreshChessTournamentData() {
+        if (!"chessTournament".equals(currentScreen) || chessTournamentStatus == null) return;
+        final long generation = ++chessTournamentGeneration;
+        final String timeControl = chessTournamentTimeControl;
+        final int stake = chessTournamentStake;
+        chessTournamentMatchId = 0;
+        chessTournamentStatus.setText("Loading this month’s standings and fixtures…");
+        chessTournamentEntryStatus.setText("Checking your entry…");
+        chessTournamentJoin.setEnabled(false);
+        String query = "?timeControl=" + Uri.encode(timeControl) + "&stake=" + stake;
+
+        request("GET", "/api/chess/competitions/tournament" + query, token, null, result -> {
+            if (!isCurrentChessTournamentRequest(generation)) return;
+            if (!result.ok()) {
+                chessTournamentStatus.setText(result.message("Chess tournament tables are temporarily unavailable."));
+                chessTournamentStandings.removeAllViews();
+                chessTournamentFixtures.removeAllViews();
+                chessTournamentStandings.addView(text("Standings could not be loaded. Try Refresh.", 12, SUBTLE, false));
+                return;
+            }
+            chessTournamentStatus.setText("Updated " + DateFormat.getTimeInstance(DateFormat.SHORT).format(new java.util.Date()));
+            drawChessTournamentTables(result.object);
+        });
+
+        request("GET", "/api/chess/competitions/tournament/entry" + query, token, null, result -> {
+            if (!isCurrentChessTournamentRequest(generation)) return;
+            if (!result.ok()) {
+                chessTournamentEntryStatus.setText(result.message("Could not load your entry status."));
+                chessTournamentJoin.setEnabled(true);
+                chessTournamentCancel.setVisibility(View.GONE);
+                chessTournamentForfeit.setVisibility(View.GONE);
+                return;
+            }
+            boolean forfeited = result.object.optBoolean("forfeited", false);
+            boolean joined = result.object.optBoolean("joined", false);
+            chessTournamentMatchId = result.object.optLong("activeMatchId", 0);
+            if (chessTournamentMatchId <= 0) chessTournamentMatchId = result.object.optLong("waitingMatchId", 0);
+            chessTournamentEntryStatus.setText(forfeited
+                ? "You forfeited this clock and stake for the current month. This entry cannot be rejoined."
+                : chessTournamentMatchId > 0
+                    ? "Your tournament match is waiting or active. Resume it to continue."
+                    : joined ? "You are entered. Your match stake is locked only when you join a game."
+                        : "You have not joined this clock and stake yet.");
+            chessTournamentJoin.setText(chessTournamentMatchId > 0 ? "RESUME TOURNAMENT MATCH" : "JOIN NEXT TOURNAMENT MATCH · KSh " + stake);
+            chessTournamentJoin.setEnabled(!forfeited);
+            chessTournamentCancel.setVisibility(result.object.optBoolean("canCancel") ? View.VISIBLE : View.GONE);
+            chessTournamentForfeit.setVisibility(result.object.optBoolean("canForfeit") ? View.VISIBLE : View.GONE);
+            chessTournamentCancel.setEnabled(!chessTournamentActionBusy);
+            chessTournamentForfeit.setEnabled(!chessTournamentActionBusy);
+        });
+    }
+
+    private boolean isCurrentChessTournamentRequest(long generation) {
+        return generation == chessTournamentGeneration && "chessTournament".equals(currentScreen) &&
+            chessTournamentStatus != null && !isFinishing();
+    }
+
+    private void drawChessTournamentTables(JSONObject data) {
+        JSONArray standings = data.optJSONArray("standings");
+        chessTournamentStandings.removeAllViews();
+        if (standings == null || standings.length() == 0) {
+            chessTournamentStandings.addView(text("No players have joined this clock and stake yet.", 12, SUBTLE, false));
+        } else {
+            String currentName = currentUser.optString("username", "");
+            for (int i = 0; i < standings.length(); i++) {
+                JSONObject player = standings.optJSONObject(i);
+                if (player == null) continue;
+                LinearLayout row = card();
+                String name = player.optString("username", "Player");
+                row.addView(text((i + 1) + ".  " + name + (name.equalsIgnoreCase(currentName) ? "  · YOU" : ""), 14, GOLD, true));
+                row.addView(text("Rating " + player.optInt("rating", 1200) + " · Played " + player.optInt("played", 0) +
+                    " · Wins " + player.optInt("wins", 0) + " · Draws " + player.optInt("draws", 0) +
+                    " · Losses " + player.optInt("losses", 0) + " · Points " + player.optInt("points", 0), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
+                chessTournamentStandings.addView(row, margins(-1, -2, 0, 0, 0, dp(6)));
+            }
+        }
+
+        JSONArray fixtures = data.optJSONArray("fixtures");
+        chessTournamentFixtures.removeAllViews();
+        if (fixtures == null || fixtures.length() == 0) {
+            chessTournamentFixtures.addView(text("No tournament fixtures for this clock and stake this month.", 12, SUBTLE, false));
+            return;
+        }
+        for (int i = 0; i < Math.min(fixtures.length(), 20); i++) {
+            JSONObject fixture = fixtures.optJSONObject(i);
+            if (fixture == null) continue;
+            String status = fixture.optString("status", "scheduled").replace('_', ' ');
+            String result = fixture.optString("result", "");
+            if ("completed".equalsIgnoreCase(fixture.optString("status", ""))) {
+                if ("draw".equals(result)) result = "½ – ½";
+                else if ("white_win".equals(result)) result = "1 – 0";
+                else if ("black_win".equals(result)) result = "0 – 1";
+                else result = "Completed";
+            }
+            LinearLayout row = card();
+            row.addView(text(fixture.optString("white_player", "Player") + "  vs  " + fixture.optString("black_player", "Finding opponent"), 13, TEXT, true));
+            row.addView(text(status + (result.isEmpty() ? "" : " · " + result) + " · " + formatTime(fixture.optString("finished_at", fixture.optString("created_at", ""))), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
+            chessTournamentFixtures.addView(row, margins(-1, -2, 0, 0, 0, dp(6)));
+        }
+    }
+
+    private void startChessTournamentMatch() {
+        if (!"chessTournament".equals(currentScreen)) return;
+        if (chessTournamentMatchId > 0) {
+            openChessMatch(chessTournamentMatchId);
+            return;
+        }
+        if (requestBusy) return;
+        int stake = chessTournamentStake;
+        String timeControl = chessTournamentTimeControl;
+        String speed = "3+2".equals(timeControl) ? "blitz" : "1+1".equals(timeControl) ? "bullet" : "rapid";
+        new AlertDialog.Builder(this).setTitle("Join Chess tournament?")
+            .setMessage(speed.toUpperCase(Locale.ROOT) + " · " + timeControl + " fixed\nEntry stake · KSh " + stake +
+                "\n\nThe backend will reserve the stake when you join a tournament match. Tournament results and standings are verified by GOAL$GAMBIT.")
+            .setNegativeButton("NOT NOW", null).setPositiveButton("JOIN NEXT MATCH", (dialog, which) -> {
+                requestBusy = true;
+                chessTournamentJoin.setEnabled(false);
+                chessTournamentStatus.setText("Joining the tournament queue…");
+                JSONObject body = new JSONObject();
+                try {
+                    body.put("matchType", "tournament");
+                    body.put("speed", speed);
+                    body.put("timeControl", timeControl);
+                    body.put("stake", stake);
+                } catch (Exception ignored) {}
+                request("POST", "/api/chess/create", token, body, result -> {
+                    requestBusy = false;
+                    if (!result.ok()) {
+                        showMessage(result.message("Could not join the Chess tournament."), true);
+                        if ("chessTournament".equals(currentScreen)) refreshChessTournamentData();
+                        return;
+                    }
+                    JSONObject match = result.object.optJSONObject("match");
+                    long matchId = match == null ? 0 : match.optLong("matchId", match.optLong("id", 0));
+                    if (matchId <= 0) {
+                        showMessage("The server returned no tournament match. Refresh your entry status.", true);
+                        refreshChessTournamentData();
+                        return;
+                    }
+                    openChessMatch(matchId);
+                });
+            }).show();
+    }
+
+    private void submitChessTournamentEntryAction(String action) {
+        if (chessTournamentActionBusy) return;
+        boolean cancel = "cancel".equals(action);
+        String message = cancel
+            ? "Cancel this entry before your first tournament match? Any locked search stake will be refunded if the backend confirms eligibility."
+            : "Forfeit this tournament after your completed match? Your locked tournament stake will not be refunded.";
+        new AlertDialog.Builder(this).setTitle(cancel ? "Cancel tournament entry?" : "Forfeit tournament?")
+            .setMessage(message).setNegativeButton("KEEP ENTRY", null).setPositiveButton(cancel ? "CANCEL ENTRY" : "FORFEIT", (dialog, which) -> {
+                chessTournamentActionBusy = true;
+                chessTournamentCancel.setEnabled(false);
+                chessTournamentForfeit.setEnabled(false);
+                JSONObject body = new JSONObject();
+                try { body.put("timeControl", chessTournamentTimeControl); body.put("stake", chessTournamentStake); }
+                catch (Exception ignored) {}
+                request("POST", "/api/chess/competitions/tournament/entry/" + action, token, body, result -> {
+                    chessTournamentActionBusy = false;
+                    if (!result.ok()) showMessage(result.message("Tournament entry could not be updated."), true);
+                    else showMessage(result.message(cancel ? "Tournament entry cancelled." : "Tournament forfeited."), false);
+                    if ("chessTournament".equals(currentScreen)) refreshChessTournamentData();
+                });
+            }).show();
     }
 
     private String[] chessControlOptions(String type, String speed) {
@@ -1543,7 +1881,17 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         strip.setHorizontalScrollBarEnabled(false);
         LinearLayout items = new LinearLayout(this);
         items.setOrientation(LinearLayout.HORIZONTAL);
-        String[][] tabs = { {"HOME", "home"}, {"CHESS", "chess"}, {"eFOOTBALL", "efootball"}, {"LEAGUES", "leagues"}, {"WALLET", "wallet"}, {"ALERTS", "notifications"}, {"MORE", "more"} };
+        List<String[]> tabList = new ArrayList<>();
+        tabList.add(new String[] { "HOME", "home" });
+        if (hasChessAccess()) tabList.add(new String[] { "CHESS", "chess" });
+        if (hasEfootballAccess()) {
+            tabList.add(new String[] { "eFOOTBALL", "efootball" });
+            tabList.add(new String[] { "LEAGUES", "leagues" });
+        }
+        tabList.add(new String[] { "WALLET", "wallet" });
+        tabList.add(new String[] { "ALERTS", "notifications" });
+        tabList.add(new String[] { "MORE", "more" });
+        String[][] tabs = tabList.toArray(new String[0][]);
         for (String[] tab : tabs) {
             Button button = new Button(this);
             button.setText(tab[0]);
@@ -1740,6 +2088,16 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         return "Player";
     }
 
+    private boolean hasChessAccess() {
+        String game = currentUser.optString("game", "").trim();
+        return "chess".equalsIgnoreCase(game) || "both".equalsIgnoreCase(game);
+    }
+
+    private boolean hasEfootballAccess() {
+        String game = currentUser.optString("game", "").trim();
+        return "konami".equalsIgnoreCase(game) || "both".equalsIgnoreCase(game);
+    }
+
     private static String sideLabel(String side) { return "b".equalsIgnoreCase(side) ? "Black" : "White"; }
 
     private static String money(double amount) { return String.format(Locale.US, "%.2f", amount); }
@@ -1780,6 +2138,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             if (chessSocket != null) chessSocket.setMatch(0);
             currentChessMatchId = 0;
             chessBoard = null;
+            navigate("chess");
+        } else if ("chessTournament".equals(currentScreen)) {
             navigate("chess");
         } else if ("efootballMatch".equals(currentScreen)) {
             navigate("efootball");

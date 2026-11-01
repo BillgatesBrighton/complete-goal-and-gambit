@@ -27,13 +27,19 @@ final class ChessRealtimeClient {
     private Socket socket;
     private long currentMatchId;
     private boolean joined;
+    private volatile boolean chessEnabled = true;
 
     ChessRealtimeClient(Listener listener) {
         this.listener = listener;
     }
 
     void connect(String token) {
+        connect(token, true);
+    }
+
+    void connect(String token, boolean enableChess) {
         closeSocket();
+        chessEnabled = enableChess;
         if (token == null || token.isEmpty()) return;
         try {
             IO.Options options = new IO.Options();
@@ -52,16 +58,23 @@ final class ChessRealtimeClient {
             Socket active = socket;
             active.on(Socket.EVENT_CONNECT, args -> {
                 joined = false;
-                emitStatus("Connected · syncing chess matches");
-                active.emit("chess:engine:ready", new JSONObject());
-                if (currentMatchId > 0) joinCurrentMatch(active);
+                if (chessEnabled) {
+                    emitStatus("Connected · syncing chess matches");
+                    active.emit("chess:engine:ready", new JSONObject());
+                    if (currentMatchId > 0) joinCurrentMatch(active);
+                } else {
+                    emitStatus("Connected · player alerts are live");
+                }
             });
             active.on(Socket.EVENT_DISCONNECT, args -> {
                 joined = false;
                 emitStatus("Connection interrupted · reconnecting");
             });
-            active.on(Socket.EVENT_CONNECT_ERROR, args -> emitStatus("Chess connection unavailable · retrying"));
+            active.on(Socket.EVENT_CONNECT_ERROR, args -> emitStatus(chessEnabled
+                ? "Chess connection unavailable · retrying"
+                : "Secure connection unavailable · retrying"));
             active.on("chess:engine:matches", args -> {
+                if (!chessEnabled) return;
                 JSONObject payload = firstObject(args);
                 if (payload == null || !payload.optBoolean("success", false)) return;
                 JSONArray array = payload.optJSONArray("matches");
@@ -76,12 +89,14 @@ final class ChessRealtimeClient {
                 emitStatus("Connected · chess updates are live");
             });
             active.on("chess:engine:match_available", args -> {
+                if (!chessEnabled) return;
                 JSONObject payload = firstObject(args);
                 if (payload != null && listener != null) {
                     main.post(() -> listener.onMatchEvent(payload, "match_available"));
                 }
             });
             active.on("chess:joined", args -> {
+                if (!chessEnabled) return;
                 JSONObject payload = firstObject(args);
                 if (payload != null && payload.optBoolean("success", false)) {
                     joined = true;
@@ -89,14 +104,14 @@ final class ChessRealtimeClient {
                     emitMatchEvent(payload, "joined");
                 }
             });
-            active.on("chess:match_ready", args -> emitMatchEvent(firstObject(args), "match_ready"));
-            active.on("chess:player_connected", args -> emitMatchEvent(firstObject(args), "player_connected"));
-            active.on("chess:connection_ready", args -> emitMatchEvent(firstObject(args), "connection_ready"));
-            active.on("chess:move", args -> emitMatchEvent(firstObject(args), "move"));
-            active.on("chess:paused", args -> emitMatchEvent(firstObject(args), "paused"));
-            active.on("chess:resumed", args -> emitMatchEvent(firstObject(args), "resumed"));
-            active.on("chess:game_over", args -> emitMatchEvent(firstObject(args), "game_over"));
-            active.on("chess:draw_offer", args -> emitMatchEvent(firstObject(args), "draw_offer"));
+            active.on("chess:match_ready", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "match_ready"); });
+            active.on("chess:player_connected", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "player_connected"); });
+            active.on("chess:connection_ready", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "connection_ready"); });
+            active.on("chess:move", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "move"); });
+            active.on("chess:paused", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "paused"); });
+            active.on("chess:resumed", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "resumed"); });
+            active.on("chess:game_over", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "game_over"); });
+            active.on("chess:draw_offer", args -> { if (chessEnabled) emitMatchEvent(firstObject(args), "draw_offer"); });
             active.on("efootball:notification", args -> {
                 JSONObject payload = firstObject(args);
                 if (payload != null && listener != null) {
@@ -104,6 +119,7 @@ final class ChessRealtimeClient {
                 }
             });
             active.on("chess:error", args -> {
+                if (!chessEnabled) return;
                 JSONObject payload = firstObject(args);
                 if (payload != null) emitStatus(payload.optString("message", "Chess connection error."));
             });
@@ -114,13 +130,14 @@ final class ChessRealtimeClient {
     }
 
     void setMatch(long matchId) {
+        if (!chessEnabled) return;
         currentMatchId = matchId > 0 ? matchId : 0;
         joined = false;
         if (socket != null && socket.connected() && currentMatchId > 0) joinCurrentMatch(socket);
     }
 
     void refreshMatches() {
-        if (socket != null && socket.connected()) socket.emit("chess:engine:ready", new JSONObject());
+        if (chessEnabled && socket != null && socket.connected()) socket.emit("chess:engine:ready", new JSONObject());
     }
 
     boolean isConnected() {
