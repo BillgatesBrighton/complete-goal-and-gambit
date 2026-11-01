@@ -9,10 +9,12 @@ import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
@@ -53,11 +55,12 @@ import java.util.function.Consumer;
 
 public final class MainActivity extends Activity implements ChessRealtimeClient.Listener {
     private static final int BG = Color.rgb(8, 8, 8);
-    private static final int PANEL = Color.rgb(22, 22, 22);
-    private static final int GOLD = Color.rgb(239, 198, 55);
-    private static final int MUTED_GOLD = Color.rgb(195, 168, 88);
-    private static final int TEXT = Color.rgb(244, 242, 236);
-    private static final int SUBTLE = Color.rgb(179, 179, 179);
+    private static final int PANEL = Color.rgb(16, 16, 16);
+    private static final int GOLD = Color.rgb(244, 189, 32);
+    private static final int GOLD_LIGHT = Color.rgb(255, 215, 90);
+    private static final int MUTED_GOLD = Color.rgb(201, 184, 111);
+    private static final int TEXT = Color.WHITE;
+    private static final int SUBTLE = Color.rgb(153, 153, 153);
     private static final String TERMS_URL = "https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/terms.html";
     private static final String ALERT_CHANNEL_ID = "gg_player_alerts";
     private static final int NOTIFICATION_PERMISSION_REQUEST = 501;
@@ -1882,33 +1885,53 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         LinearLayout items = new LinearLayout(this);
         items.setOrientation(LinearLayout.HORIZONTAL);
         List<String[]> tabList = new ArrayList<>();
-        tabList.add(new String[] { "HOME", "home" });
-        if (hasChessAccess()) tabList.add(new String[] { "CHESS", "chess" });
+        tabList.add(new String[] { "Home", "home" });
+        if (hasChessAccess()) tabList.add(new String[] { "Chess", "chess" });
         if (hasEfootballAccess()) {
-            tabList.add(new String[] { "eFOOTBALL", "efootball" });
-            tabList.add(new String[] { "LEAGUES", "leagues" });
+            tabList.add(new String[] { "eFootball", "efootball" });
+            tabList.add(new String[] { "Leagues", "leagues" });
         }
-        tabList.add(new String[] { "WALLET", "wallet" });
-        tabList.add(new String[] { "ALERTS", "notifications" });
-        tabList.add(new String[] { "MORE", "more" });
+        tabList.add(new String[] { "Wallet", "wallet" });
+        tabList.add(new String[] { "Alerts", "notifications" });
+        tabList.add(new String[] { "More", "more" });
         String[][] tabs = tabList.toArray(new String[0][]);
         for (String[] tab : tabs) {
+            boolean active = isNavigationTabActive(tab[1]);
+            LinearLayout tabItem = new LinearLayout(this);
+            tabItem.setOrientation(LinearLayout.VERTICAL);
+            tabItem.setGravity(Gravity.CENTER_HORIZONTAL);
             Button button = new Button(this);
             button.setText(tab[0]);
-            button.setTextSize(10);
-            button.setTextColor(currentScreen.equals(tab[1]) ? BG : TEXT);
+            button.setTextSize(13);
+            button.setTextColor(active ? TEXT : Color.rgb(167, 167, 167));
+            button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             button.setAllCaps(false);
             button.setMinHeight(dp(42));
-            button.setMinWidth(dp(74));
-            button.setPadding(dp(8), 0, dp(8), 0);
-            button.setBackground(round(currentScreen.equals(tab[1]) ? GOLD : PANEL, dp(8), Color.rgb(62, 55, 36), dp(1)));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(42));
-            lp.setMargins(dp(3), dp(2), dp(3), dp(2));
-            items.addView(button, lp);
+            button.setMinWidth(dp(64));
+            button.setPadding(dp(9), 0, dp(9), 0);
+            button.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.argb(24, 255, 255, 255)),
+                round(Color.TRANSPARENT, dp(4), 0, 0), null));
+            tabItem.addView(button, new LinearLayout.LayoutParams(-2, dp(42)));
+            View activeMark = new View(this);
+            activeMark.setBackgroundColor(active ? GOLD : Color.TRANSPARENT);
+            int markerWidth = dp(Math.max(48, tab[0].length() * 7));
+            tabItem.addView(activeMark, new LinearLayout.LayoutParams(markerWidth, dp(2)));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(44));
+            lp.setMargins(dp(3), dp(1), dp(3), dp(1));
+            items.addView(tabItem, lp);
             button.setOnClickListener(v -> navigate(tab[1]));
         }
         strip.addView(items);
         navigation.addView(strip, matchWrap());
+    }
+
+    private boolean isNavigationTabActive(String tab) {
+        if ("chess".equals(tab)) return "chess".equals(currentScreen) || "chessTournament".equals(currentScreen);
+        if ("efootball".equals(tab)) return "efootball".equals(currentScreen) || "efootballMatch".equals(currentScreen);
+        if ("leagues".equals(tab)) return "leagues".equals(currentScreen) || "tournament".equals(currentScreen);
+        if ("more".equals(tab)) return "more".equals(currentScreen) || "profile".equals(currentScreen) || "leaderboard".equals(currentScreen) || "support".equals(currentScreen);
+        return tab.equals(currentScreen);
     }
 
     private void request(String method, String path, String bearer, JSONObject body, Consumer<ApiClient.Result> callback) {
@@ -2004,8 +2027,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private LinearLayout card() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(13), dp(12), dp(13), dp(12));
-        panel.setBackground(round(PANEL, dp(9), Color.rgb(47, 47, 47), dp(1)));
+        panel.setPadding(dp(16), dp(15), dp(16), dp(15));
+        GradientDrawable surface = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[] { Color.rgb(21, 21, 21), Color.rgb(13, 13, 13) });
+        surface.setCornerRadius(dp(16));
+        surface.setStroke(dp(1), Color.rgb(38, 38, 38));
+        panel.setBackground(surface);
         return panel;
     }
 
@@ -2037,19 +2065,26 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         return view;
     }
 
-    private Button primaryButton(String label) { return styleButton(label, GOLD, BG, Color.rgb(196, 157, 30)); }
-    private Button secondaryButton(String label) { return styleButton(label, Color.rgb(18, 18, 18), GOLD, Color.rgb(131, 106, 36)); }
+    private Button primaryButton(String label) {
+        return styleButton(label, GOLD, BG, 0, GOLD_LIGHT);
+    }
 
-    private Button styleButton(String label, int fill, int foreground, int stroke) {
+    private Button secondaryButton(String label) {
+        return styleButton(label, Color.rgb(13, 13, 13), TEXT, Color.rgb(153, 153, 153), Color.rgb(75, 75, 75));
+    }
+
+    private Button styleButton(String label, int fill, int foreground, int stroke, int ripple) {
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(foreground);
-        button.setTextSize(12);
+        button.setTextSize(13);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setAllCaps(false);
-        button.setMinHeight(dp(44));
-        button.setPadding(dp(10), dp(4), dp(10), dp(4));
-        button.setBackground(round(fill, dp(8), stroke, dp(1)));
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(20), dp(12), dp(20), dp(12));
+        GradientDrawable shape = round(fill, dp(8), stroke, stroke > 0 ? dp(1) : 0);
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(ripple), shape, null));
+        if (stroke == 0) button.setElevation(dp(2));
         return button;
     }
 
