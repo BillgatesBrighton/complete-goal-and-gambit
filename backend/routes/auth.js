@@ -912,11 +912,7 @@ module.exports = function(pool, authenticateToken, io, options) {
 
     // Signed-in users can update their username and/or password after
     // re-entering the current password. A version bump invalidates old JWTs.
-    router.patch(
-        "/account",
-        authenticateToken,
-        accountChangeLimiter,
-        async function(req, res) {
+    const updateAccount = async function(req, res) {
             const body = req.body || {};
             const currentPassword = typeof body.currentPassword === "string"
                 ? body.currentPassword
@@ -1013,8 +1009,12 @@ module.exports = function(pool, authenticateToken, io, options) {
                 console.error("Account update error:", error && error.message);
                 return res.status(500).json({ success: false, message: "Could not update account. Please try again." });
             }
-        }
-    );
+        };
+
+    router.patch("/account", authenticateToken, accountChangeLimiter, updateAccount);
+    // Keep the same authenticated account-update behavior available to native
+    // clients whose networking stack does not support the PATCH verb.
+    router.post("/account", authenticateToken, accountChangeLimiter, updateAccount);
 
     return router;
 

@@ -19,6 +19,7 @@ final class ChessRealtimeClient {
         void onStatus(String status);
         void onMatches(List<JSONObject> matches);
         void onMatchEvent(JSONObject state, String event);
+        void onPlayerNotification(JSONObject notification);
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -96,6 +97,12 @@ final class ChessRealtimeClient {
             active.on("chess:resumed", args -> emitMatchEvent(firstObject(args), "resumed"));
             active.on("chess:game_over", args -> emitMatchEvent(firstObject(args), "game_over"));
             active.on("chess:draw_offer", args -> emitMatchEvent(firstObject(args), "draw_offer"));
+            active.on("efootball:notification", args -> {
+                JSONObject payload = firstObject(args);
+                if (payload != null && listener != null) {
+                    main.post(() -> listener.onPlayerNotification(payload));
+                }
+            });
             active.on("chess:error", args -> {
                 JSONObject payload = firstObject(args);
                 if (payload != null) emitStatus(payload.optString("message", "Chess connection error."));

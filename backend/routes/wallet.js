@@ -28,6 +28,7 @@ const routerFactory = function(
     const router = express.Router();
     const depositLimit = financialRateLimit("player-test-deposit", { windowMs: 15 * 60 * 1000, max: 5 });
     const withdrawalLimit = financialRateLimit("player-withdrawal", { windowMs: 15 * 60 * 1000, max: 5 });
+    const withdrawalQuoteLimit = financialRateLimit("player-withdrawal-quote", { windowMs: 15 * 60 * 1000, max: 20 });
 
     router.get(
         "/c2b-instructions",
@@ -109,6 +110,53 @@ const routerFactory = function(
             amount.toFixed(2)
         );
     }
+
+    // A read-only quote lets player clients show the server's current fee and
+    // payout before the user confirms a manual withdrawal. The actual
+    // withdrawal route still recalculates, locks and reserves funds atomically.
+    router.post("/withdraw/quote", authenticateToken, withdrawalQuoteLimit, async function(req, res) {
+        const amount = parseMoney(req.body && req.body.amount);
+        const phone = normalizeMpesaPhone(req.body && req.body.phone);
+        if (amount === null || !Number.isSafeInteger(amount) || amount < 1 || amount > MAX_AMOUNT) {
+            return res.status(400).json({ success: false, message: "Enter a whole KSh amount from 1 to 1,000,000." });
+        }
+        if (!phone) return res.status(400).json({ success: false, message: "Valid Kenyan M-Pesa number is required." });
+        const fee = Math.round(amount * withdrawalFeeRate(amount));
+        const payout = amount - fee;
+        if (payout < 1) return res.status(400).json({ success: false, message: "Withdrawal amount is too small after the processing fee." });
+        try {
+            const userId = Number(req.user.userId);
+            const walletResult = await pool.query(
+                "SELECT balance,withdrawal_reserved_balance FROM wallets WHERE user_id=$1",
+                [userId]
+            );
+            if (!walletResult.rows.length) return res.status(404).json({ success: false, message: "Wallet not found." });
+            const pending = await pool.query(
+                "SELECT 1 FROM manual_withdrawal_requests WHERE user_id=$1 AND status='pending' LIMIT 1",
+                [userId]
+            );
+            const availableBalance = Number(walletResult.rows[0].balance || 0);
+            const eligible = availableBalance >= amount && pending.rows.length === 0;
+            return res.json({
+                success: true,
+                quote: {
+                    amount,
+                    fee,
+                    feeRate: withdrawalFeeRate(amount),
+                    payout,
+                    availableBalance,
+                    eligible,
+                    reason: pending.rows.length
+                        ? "You already have a withdrawal request awaiting admin payment."
+                        : availableBalance < amount
+                            ? "Insufficient available balance."
+                            : null
+                }
+            });
+        } catch (_) {
+            return res.status(503).json({ success: false, message: "Could not prepare a withdrawal quote. Try again." });
+        }
+    });
 
 
     // ==================================================
