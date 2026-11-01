@@ -145,7 +145,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private TextView chessRecordSummary;
     private LinearLayout chessScheduleList;
     private Button chessFindOpponentButton;
-    private Button efootballFindOpponentButton;
+    private int efootballRankedStake = 20;
     private View chessTournamentSection;
     private View chessRankedSection;
     private View efootballTournamentSection;
@@ -499,7 +499,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             showMessage("This account is not registered for Chess.", true);
             return;
         }
-        if (("efootball".equals(screen) || "efootballMatch".equals(screen) ||
+        if (("efootball".equals(screen) || "efootballRanked".equals(screen) || "efootballMatch".equals(screen) ||
             "leagues".equals(screen) || "efootballTournaments".equals(screen) || "tournament".equals(screen)) && !hasEfootballAccess()) {
             showMessage("This account is not registered for eFootball.", true);
             return;
@@ -512,6 +512,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         else if ("chessRanked".equals(screen)) renderChessRanked();
         else if ("chessTournament".equals(screen)) renderChessTournament();
         else if ("efootball".equals(screen)) renderEfootball();
+        else if ("efootballRanked".equals(screen)) renderEfootballRanked();
         else if ("efootballMatch".equals(screen)) renderEfootballMatch();
         else if ("leagues".equals(screen)) renderLeagues();
         else if ("efootballTournaments".equals(screen)) renderEfootballTournaments();
@@ -641,7 +642,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         chessMatchType = "ranked";
         chessSpeed = speed;
         chessTimeControl = timeControl;
-        showMessage(speed.substring(0, 1).toUpperCase(Locale.ROOT) + speed.substring(1) + " selected.", false);
+        if (chessFindOpponentButton != null) showChessMatchmakingOptions(chessFindOpponentButton);
     }
 
     private String profileInitial() {
@@ -1033,9 +1034,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         currentScreen = "chessRanked";
         content.removeAllViews();
         addHeading("Ranked Chess", "Choose your clock and entry stake. GOAL$GAMBIT finds an eligible real opponent.");
-        addDashboardCard("⚡  RAPID RANKED", "10:00 · 10+5 · 10+15 · 15+10\nKSh 20, 50 or 100 stake", "SELECT RAPID", false, () -> selectChessRankedPreset("rapid", "10+5"));
-        addDashboardCard("🔥  BLITZ RANKED", "3:00 · 3+2 · 5:00\nKSh 20, 50 or 100 stake", "SELECT BLITZ", false, () -> selectChessRankedPreset("blitz", "3+2"));
-        addDashboardCard("💨  BULLET RANKED", "1:00 · 1+1 · 2:00 · 2+1\nKSh 20, 50 or 100 stake", "SELECT BULLET", false, () -> selectChessRankedPreset("bullet", "1+1"));
+        addDashboardCard("⚡  RAPID RANKED", "10:00 · 10+5 · 10+15 · 15+10\nKSh 20, 50 or 100 stake", "CONTINUE RAPID", false, () -> selectChessRankedPreset("rapid", "10+5"));
+        addDashboardCard("🔥  BLITZ RANKED", "3:00 · 3+2 · 5:00\nKSh 20, 50 or 100 stake", "CONTINUE BLITZ", false, () -> selectChessRankedPreset("blitz", "3+2"));
+        addDashboardCard("💨  BULLET RANKED", "1:00 · 1+1 · 2:00 · 2+1\nKSh 20, 50 or 100 stake", "CONTINUE BULLET", false, () -> selectChessRankedPreset("bullet", "1+1"));
         chessFindOpponentButton = primaryButton("FIND OPPONENT");
         content.addView(chessFindOpponentButton, margins(-1, dp(52), 0, 0, 0, dp(13)));
         chessFindOpponentButton.setOnClickListener(v -> showChessMatchmakingOptions(chessFindOpponentButton));
@@ -2281,7 +2282,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             tabList.add(new String[] { "Dashboard", "efootball" });
             tabList.add(new String[] { "Tournaments", "efootballTournaments" });
             tabList.add(new String[] { "Leagues", "efootballLeagues" });
-            tabList.add(new String[] { "Ranked Matches", "efootballRanked" });
+            tabList.add(new String[] { "Ranked", "efootballRanked" });
         } else {
             if (hasEfootballAccess()) tabList.add(new String[] { "eFootball", "efootball" });
             if (hasChessAccess()) tabList.add(new String[] { "Chess", "chess" });
@@ -2295,16 +2296,23 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             Button button = new Button(this);
             button.setText(tab[0]);
             button.setTextSize(11);
-            button.setTextColor(active ? TEXT : Color.rgb(167, 167, 167));
+            button.setTextColor(active ? BG : TEXT);
             button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             button.setAllCaps(false);
+            button.setSingleLine(true);
             button.setMinHeight(dp(42));
             button.setMinWidth(0);
-            button.setPadding(dp(2), 0, dp(2), 0);
+            button.setPadding(dp(4), 0, dp(4), 0);
+            int fill = active ? GOLD : Color.rgb(24, 24, 24);
+            int stroke = active ? GOLD_LIGHT : Color.rgb(78, 78, 78);
             button.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(24, 255, 255, 255)),
-                round(Color.TRANSPARENT, dp(4), 0, 0), null));
-            int buttonWidth = "home".equals(tab[1]) ? 58 : tab[0].length() > 8 ? 90 : 78;
+                ColorStateList.valueOf(active ? GOLD_LIGHT : Color.rgb(65, 65, 65)),
+                round(fill, dp(8), stroke, dp(1)), null));
+            int availableWidth = Math.round(getResources().getDisplayMetrics().widthPixels /
+                getResources().getDisplayMetrics().density) - dp(12);
+            float density = getResources().getDisplayMetrics().density;
+            int labelWidth = Math.round(button.getPaint().measureText(tab[0]) / density) + 12;
+            int buttonWidth = Math.max(labelWidth, Math.max(58, availableWidth / tabs.length - 4));
             tabItem.addView(button, new LinearLayout.LayoutParams(dp(buttonWidth), dp(42)));
             View activeMark = new View(this);
             activeMark.setBackgroundColor(active ? GOLD : Color.TRANSPARENT);
@@ -2323,13 +2331,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         switch (target) {
             case "chessRanked": navigate("chessRanked"); break;
             case "chessTournaments": navigate("chessTournament"); break;
-            case "efootballRanked":
-                if ("efootball".equals(currentScreen)) scrollDashboardTo(efootballFindOpponentButton);
-                else {
-                    navigate("efootball");
-                    if (pageScroll != null) pageScroll.post(() -> scrollDashboardTo(efootballFindOpponentButton));
-                }
-                break;
+            case "efootballRanked": navigate("efootballRanked"); break;
             case "efootballLeagues": navigate("leagues"); break;
             case "efootballTournaments": navigate("efootballTournaments"); break;
             default: navigate(target); break;
@@ -2342,7 +2344,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private boolean isEfootballDashboardScreen() {
-        return "efootball".equals(currentScreen) || "leagues".equals(currentScreen) ||
+        return "efootball".equals(currentScreen) || "efootballRanked".equals(currentScreen) || "leagues".equals(currentScreen) ||
             "efootballTournaments".equals(currentScreen) || "tournament".equals(currentScreen);
     }
 
@@ -2356,6 +2358,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         if ("chessRanked".equals(tab)) return "chessRanked".equals(currentScreen);
         if ("chessTournaments".equals(tab)) return "chessTournament".equals(currentScreen);
         if ("efootball".equals(tab)) return "efootball".equals(currentScreen) || "efootballMatch".equals(currentScreen);
+        if ("efootballRanked".equals(tab)) return "efootballRanked".equals(currentScreen);
         if ("efootballLeagues".equals(tab)) return "leagues".equals(currentScreen);
         if ("efootballTournaments".equals(tab)) return "efootballTournaments".equals(currentScreen) || "tournament".equals(currentScreen);
         if ("more".equals(tab)) return "more".equals(currentScreen) || "profile".equals(currentScreen) || "leaderboard".equals(currentScreen) || "support".equals(currentScreen);
@@ -2602,9 +2605,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             currentChessMatchId = 0;
             chessBoard = null;
             navigate("chess");
-        } else if ("chessTournament".equals(currentScreen)) {
+        } else if ("chessRanked".equals(currentScreen) || "chessTournament".equals(currentScreen)) {
             navigate("chess");
-        } else if ("efootballMatch".equals(currentScreen)) {
+        } else if ("efootballRanked".equals(currentScreen) || "efootballMatch".equals(currentScreen)) {
             navigate("efootball");
         } else if ("tournament".equals(currentScreen)) {
             navigate("efootballTournaments");
@@ -2665,7 +2668,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         destinations.addView(tournament, margins(-1, dp(48), 0, 0, 0, dp(7)));
         destinations.addView(league, margins(-1, dp(48), 0, 0, 0, dp(12)));
         content.addView(destinations, matchWrap());
-        ranked.setOnClickListener(v -> showEfootballStakeOptions(ranked));
+        ranked.setOnClickListener(v -> navigate("efootballRanked"));
         tournament.setOnClickListener(v -> navigate("efootballTournaments"));
         league.setOnClickListener(v -> navigate("leagues"));
 
@@ -2692,13 +2695,65 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         return section;
     }
 
-    private void showEfootballStakeOptions(Button findButton) {
-        String[] stakeOptions = { "Ranked · KSh 20", "Ranked · KSh 50", "Ranked · KSh 100" };
-        new AlertDialog.Builder(this)
-            .setTitle("Find an eFootball opponent")
-            .setItems(stakeOptions, (dialog, which) -> startEfootballRankedSearch(findButton, which))
-            .setNegativeButton("CANCEL", null)
-            .show();
+    private void renderEfootballRanked() {
+        content.removeAllViews();
+        addHeading("Ranked eFootball", "Choose your entry stake, then find an eligible opponent.");
+
+        LinearLayout wallet = card();
+        wallet.addView(text("AVAILABLE BALANCE", 10, MUTED_GOLD, true), margins(-1, -2, 0, 0, 0, dp(4)));
+        TextView balance = text("KSh —", 23, GOLD_LIGHT, true);
+        wallet.addView(balance, matchWrap());
+        Button walletDetails = secondaryButton("WALLET DETAILS");
+        wallet.addView(walletDetails, margins(-1, dp(40), 0, dp(8), 0, 0));
+        walletDetails.setOnClickListener(v -> navigate("wallet"));
+        content.addView(wallet, margins(-1, -2, 0, 0, 0, dp(14)));
+        request("GET", "/api/wallet", token, null, result -> {
+            if (!"efootballRanked".equals(currentScreen)) return;
+            JSONObject data = result.ok() ? result.object.optJSONObject("wallet") : null;
+            if (data != null) balance.setText("KSh " + money(data.optDouble("availableBalance", data.optDouble("balance", 0))));
+            else balance.setText("Balance unavailable");
+        });
+
+        content.addView(text("CHOOSE YOUR STAKE", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
+        LinearLayout choices = new LinearLayout(this);
+        choices.setOrientation(LinearLayout.HORIZONTAL);
+        int[] amounts = { 20, 50, 100 };
+        Button[] stakeButtons = new Button[amounts.length];
+        for (int i = 0; i < amounts.length; i++) {
+            final int amount = amounts[i];
+            Button option = secondaryButton("KSh " + amount);
+            stakeButtons[i] = option;
+            LinearLayout.LayoutParams optionParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
+            optionParams.setMargins(i == 0 ? 0 : dp(4), 0, i == amounts.length - 1 ? 0 : dp(4), 0);
+            choices.addView(option, optionParams);
+            option.setOnClickListener(v -> {
+                efootballRankedStake = amount;
+                updateEfootballRankedStakeButtons(stakeButtons, amounts);
+            });
+        }
+        content.addView(choices, margins(-1, -2, 0, 0, 0, dp(12)));
+        updateEfootballRankedStakeButtons(stakeButtons, amounts);
+
+        addNotice("Your selected stake is locked from your available wallet balance when matchmaking starts. Keep a clear final-score screenshot ready for match submission.", MUTED_GOLD);
+        pageStatus = text("Choose a stake and find an opponent.", 12, SUBTLE, false);
+        content.addView(pageStatus, margins(-1, -2, 0, 0, 0, dp(7)));
+        Button findOpponent = primaryButton("FIND OPPONENT");
+        content.addView(findOpponent, margins(-1, dp(52), 0, 0, 0, dp(12)));
+        findOpponent.setOnClickListener(v -> startEfootballRankedSearch(findOpponent, efootballRankedStake));
+    }
+
+    private void updateEfootballRankedStakeButtons(Button[] buttons, int[] amounts) {
+        for (int i = 0; i < buttons.length; i++) {
+            boolean selected = amounts[i] == efootballRankedStake;
+            int fill = selected ? GOLD : Color.rgb(20, 20, 20);
+            int foreground = selected ? BG : TEXT;
+            int stroke = selected ? GOLD_LIGHT : Color.rgb(82, 82, 82);
+            buttons[i].setTextColor(foreground);
+            buttons[i].setBackground(new RippleDrawable(
+                ColorStateList.valueOf(selected ? GOLD_LIGHT : Color.rgb(75, 75, 75)),
+                round(fill, dp(8), stroke, dp(1)), null));
+            buttons[i].setElevation(selected ? dp(2) : 0);
+        }
     }
 
     private void loadActiveEfootballTournaments(LinearLayout list) {
@@ -2737,8 +2792,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         });
     }
 
-    private void startEfootballRankedSearch(Button button, int selectedIndex) {
-        int stakeAmount = selectedIndex == 2 ? 100 : selectedIndex == 1 ? 50 : 20;
+    private void startEfootballRankedSearch(Button button, int stakeAmount) {
         new AlertDialog.Builder(this).setTitle("Enter ranked eFootball?")
             .setMessage("KSh " + stakeAmount + " will be locked from your available wallet balance by the server. GOAL$GAMBIT will match you with an eligible player; winnings and refunds follow the server’s settlement rules. Continue?")
             .setNegativeButton("CANCEL", null).setPositiveButton("FIND OPPONENT", (dialog, which) -> {
