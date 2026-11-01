@@ -36,6 +36,8 @@ import android.widget.LinearLayout;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -141,6 +143,14 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             homeDashboardHandler.postDelayed(this, 30_000L);
         }
     };
+    private final android.os.Handler chessTournamentRefreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable chessTournamentAutoRefresh = new Runnable() {
+        @Override public void run() {
+            if (!"chessTournament".equals(currentScreen) || isFinishing()) return;
+            refreshChessTournamentData();
+            chessTournamentRefreshHandler.postDelayed(this, 10_000L);
+        }
+    };
     private LinearLayout chessHistoryList;
     private TextView chessRecordSummary;
     private LinearLayout chessScheduleList;
@@ -177,6 +187,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     @Override
     protected void onDestroy() {
         homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
+        chessTournamentRefreshHandler.removeCallbacks(chessTournamentAutoRefresh);
         if (chessSocket != null) chessSocket.close();
         requests.shutdownNow();
         super.onDestroy();
@@ -185,6 +196,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     @Override
     protected void onPause() {
         homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
+        chessTournamentRefreshHandler.removeCallbacks(chessTournamentAutoRefresh);
         super.onPause();
     }
 
@@ -201,6 +213,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             if (chessSocket != null && chessSocket.isConnected()) chessSocket.refreshMatches();
             homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
             homeDashboardHandler.postDelayed(homeDashboardRefresh, 30_000L);
+        }
+        if (token != null && "chessTournament".equals(currentScreen)) {
+            refreshChessTournamentData();
+            chessTournamentRefreshHandler.removeCallbacks(chessTournamentAutoRefresh);
+            chessTournamentRefreshHandler.postDelayed(chessTournamentAutoRefresh, 10_000L);
         }
     }
 
@@ -495,6 +512,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void navigate(String screen) {
+        chessTournamentRefreshHandler.removeCallbacks(chessTournamentAutoRefresh);
         if (("chess".equals(screen) || "chessRanked".equals(screen) || "chessTournament".equals(screen)) && !hasChessAccess()) {
             showMessage("This account is not registered for Chess.", true);
             return;
@@ -523,6 +541,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         else if ("leaderboard".equals(screen)) renderLeaderboard();
         else if ("notifications".equals(screen)) renderNotifications();
         else if ("support".equals(screen)) renderSupport();
+        if ("chessTournament".equals(screen)) chessTournamentRefreshHandler.postDelayed(chessTournamentAutoRefresh, 10_000L);
         if (navigation != null && token != null) buildNavigation();
     }
 
@@ -1222,27 +1241,33 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private void drawChessTournamentTables(JSONObject data) {
         JSONArray standings = data.optJSONArray("standings");
         chessTournamentStandings.removeAllViews();
+        int[] standingsWidths = { 36, 144, 64, 42, 42, 42, 42, 56 };
+        TableLayout standingsTable = addScrollableTable(chessTournamentStandings,
+            new String[] { "#", "PLAYER", "RATING", "P", "W", "D", "L", "PTS" }, standingsWidths);
         if (standings == null || standings.length() == 0) {
-            chessTournamentStandings.addView(text("No players have joined this clock and stake yet.", 12, SUBTLE, false));
+            addNoticeTo(chessTournamentStandings, "No players have joined this clock and stake yet.", SUBTLE);
         } else {
             String currentName = currentUser.optString("username", "");
             for (int i = 0; i < standings.length(); i++) {
                 JSONObject player = standings.optJSONObject(i);
                 if (player == null) continue;
-                LinearLayout row = card();
                 String name = player.optString("username", "Player");
-                row.addView(text((i + 1) + ".  " + name + (name.equalsIgnoreCase(currentName) ? "  · YOU" : ""), 14, GOLD, true));
-                row.addView(text("Rating " + player.optInt("rating", 1200) + " · Played " + player.optInt("played", 0) +
-                    " · Wins " + player.optInt("wins", 0) + " · Draws " + player.optInt("draws", 0) +
-                    " · Losses " + player.optInt("losses", 0) + " · Points " + player.optInt("points", 0), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
-                chessTournamentStandings.addView(row, margins(-1, -2, 0, 0, 0, dp(6)));
+                addDataTableRow(standingsTable, new String[] {
+                    String.valueOf(i + 1), name + (name.equalsIgnoreCase(currentName) ? " · YOU" : ""),
+                    String.valueOf(player.optInt("rating", 1200)), String.valueOf(player.optInt("played", 0)),
+                    String.valueOf(player.optInt("wins", 0)), String.valueOf(player.optInt("draws", 0)),
+                    String.valueOf(player.optInt("losses", 0)), String.valueOf(player.optInt("points", 0))
+                }, standingsWidths, name.equalsIgnoreCase(currentName));
             }
         }
 
         JSONArray fixtures = data.optJSONArray("fixtures");
         chessTournamentFixtures.removeAllViews();
+        int[] fixtureWidths = { 132, 132, 82, 100 };
+        TableLayout fixtureTable = addScrollableTable(chessTournamentFixtures,
+            new String[] { "WHITE", "BLACK", "RESULT", "STATUS" }, fixtureWidths);
         if (fixtures == null || fixtures.length() == 0) {
-            chessTournamentFixtures.addView(text("No tournament fixtures for this clock and stake this month.", 12, SUBTLE, false));
+            addNoticeTo(chessTournamentFixtures, "No tournament fixtures for this clock and stake this month.", SUBTLE);
             return;
         }
         for (int i = 0; i < Math.min(fixtures.length(), 20); i++) {
@@ -1256,10 +1281,10 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 else if ("black_win".equals(result)) result = "0 – 1";
                 else result = "Completed";
             }
-            LinearLayout row = card();
-            row.addView(text(fixture.optString("white_player", "Player") + "  vs  " + fixture.optString("black_player", "Finding opponent"), 13, TEXT, true));
-            row.addView(text(status + (result.isEmpty() ? "" : " · " + result) + " · " + formatTime(fixture.optString("finished_at", fixture.optString("created_at", ""))), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
-            chessTournamentFixtures.addView(row, margins(-1, -2, 0, 0, 0, dp(6)));
+            addDataTableRow(fixtureTable, new String[] {
+                fixture.optString("white_player", "Player"), fixture.optString("black_player", "Finding opponent"),
+                result.isEmpty() ? "—" : result, status
+            }, fixtureWidths, false);
         }
     }
 
@@ -2007,6 +2032,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         addHeading("League details", "Server-published division table, player fixtures and entry status.");
         pageStatus = text("Loading league information…", 13, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, dp(10), 0, 0));
+        Button refreshTables = secondaryButton("REFRESH LEAGUE TABLE & FIXTURES");
+        content.addView(refreshTables, margins(-1, dp(42), 0, 0, 0, dp(8)));
+        refreshTables.setOnClickListener(v -> loadLeague(leagueId));
         LinearLayout details = new LinearLayout(this);
         details.setOrientation(LinearLayout.VERTICAL);
         content.addView(details, matchWrap());
@@ -2024,16 +2052,23 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 details.addView(panel, margins(-1, -2, 0, 0, 0, dp(12)));
             }
             details.addView(text("STANDINGS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(7)));
+            int[] standingsWidths = { 36, 140, 42, 42, 42, 42, 52, 56 };
+            TableLayout standingsTable = addScrollableTable(details,
+                new String[] { "#", "PLAYER", "P", "W", "D", "L", "GD", "PTS" }, standingsWidths);
             if (standings == null || standings.length() == 0) {
                 addNoticeTo(details, "No standings are available yet.", SUBTLE);
             } else {
                 for (int i = 0; i < standings.length(); i++) {
                     JSONObject row = standings.optJSONObject(i);
                     if (row == null) continue;
-                    LinearLayout item = card();
-                    item.addView(text((i + 1) + ". " + row.optString("username", "Player"), 14, TEXT, true));
-                    item.addView(text("Points " + row.optInt("points", 0) + " · Wins " + row.optInt("wins", 0) + " · GD " + row.optInt("goal_difference", 0), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
-                    details.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                    String name = row.optString("username", "Player");
+                    boolean isCurrentPlayer = row.optLong("user_id", -1) == currentUser.optLong("id", -2);
+                    addDataTableRow(standingsTable, new String[] {
+                        String.valueOf(i + 1), name, String.valueOf(row.optInt("played", 0)),
+                        String.valueOf(row.optInt("wins", 0)), String.valueOf(row.optInt("draws", 0)),
+                        String.valueOf(row.optInt("losses", 0)), String.valueOf(row.optInt("goal_difference", 0)),
+                        String.valueOf(row.optInt("points", 0))
+                    }, standingsWidths, isCurrentPlayer);
                 }
             }
             details.addView(text("YOUR FIXTURES", 13, GOLD, true), margins(-1, -2, 0, dp(10), 0, dp(7)));
@@ -2072,6 +2107,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 } else {
                     addNoticeTo(details, "You are not a member of this league. Entry is required before fixtures can be played.", SUBTLE);
                 }
+                int[] fixtureWidths = { 116, 126, 74, 126, 102, 84 };
+                TableLayout fixturesTable = addScrollableTable(details,
+                    new String[] { "ROUND", "HOME", "SCORE", "AWAY", "STATUS", "ACTION" }, fixtureWidths);
                 if (fixtures == null || fixtures.length() == 0) {
                     addNoticeTo(details, "No fixtures are available.", SUBTLE);
                     return;
@@ -2079,18 +2117,19 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
                 for (int i = 0; i < fixtures.length(); i++) {
                     JSONObject fixture = fixtures.optJSONObject(i);
                     if (fixture == null) continue;
-                    LinearLayout item = card();
-                    item.addView(text(fixture.optString("home", "Home") + "  vs  " + fixture.optString("away", "Waiting"), 13, TEXT, true));
-                    item.addView(text(fixture.optString("round_name", "Fixture") + " · " + fixture.optString("status", "scheduled"), 11, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
-                    if (fixture.optBoolean("mine") && fixture.optLong("away_id", 0) > 0 && membership.optBoolean("isMember") &&
-                        ("scheduled".equals(fixture.optString("status")) || "playing".equals(fixture.optString("status")) || "waiting".equals(fixture.optString("status")))) {
-                        Button play = primaryButton("OPEN / START THIS FIXTURE");
-                        item.addView(play, margins(-1, dp(42), 0, dp(4), 0, 0));
-                        String leagueName = league == null ? leagueId : league.optString("name", leagueId);
-                        long fixtureId = fixture.optLong("fixture_id", 0);
-                        play.setOnClickListener(v -> startCompetitionMatch("league-" + leagueName.toLowerCase(Locale.ROOT), leagueName, fixtureId, 0, play));
-                    }
-                    details.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                    String homeScore = fixture.isNull("home_score") ? "—" : String.valueOf(fixture.optInt("home_score", 0));
+                    String awayScore = fixture.isNull("away_score") ? "—" : String.valueOf(fixture.optInt("away_score", 0));
+                    String leagueName = league == null ? leagueId : league.optString("name", leagueId);
+                    long fixtureId = fixture.optLong("fixture_id", 0);
+                    String status = fixture.optString("status", "scheduled");
+                    boolean canPlay = fixture.optBoolean("mine") && fixture.optLong("away_id", 0) > 0 && membership.optBoolean("isMember") &&
+                        ("scheduled".equals(status) || "playing".equals(status) || "waiting".equals(status));
+                    TableRow tableRow = addDataTableRow(fixturesTable, new String[] {
+                        fixture.optString("round_name", "Fixture"), fixture.optString("home", "Home"),
+                        homeScore + "–" + awayScore, fixture.optString("away", "Waiting"), status.replace('_', ' ')
+                    }, new int[] { fixtureWidths[0], fixtureWidths[1], fixtureWidths[2], fixtureWidths[3], fixtureWidths[4] }, false);
+                    addTableActionCell(tableRow, "PLAY", canPlay ? play ->
+                        startCompetitionMatch("league-" + leagueName.toLowerCase(Locale.ROOT), leagueName, fixtureId, 0, play) : null);
                 }
             });
             pageStatus.setText("Live league data loaded from GOAL$GAMBIT.");
@@ -2453,6 +2492,60 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         notice.setPadding(dp(12), dp(10), dp(12), dp(10));
         notice.setBackground(round(PANEL, dp(6), color, dp(1)));
         parent.addView(notice, margins(-1, -2, 0, 0, 0, dp(10)));
+    }
+
+    private TableLayout addScrollableTable(LinearLayout parent, String[] headers, int[] columnWidths) {
+        HorizontalScrollView horizontal = new HorizontalScrollView(this);
+        horizontal.setHorizontalScrollBarEnabled(true);
+        horizontal.setFillViewport(false);
+        TableLayout table = new TableLayout(this);
+        table.setStretchAllColumns(false);
+        table.setShrinkAllColumns(false);
+        TableRow header = new TableRow(this);
+        header.setBackgroundColor(Color.rgb(38, 32, 16));
+        for (int i = 0; i < headers.length; i++) {
+            TextView cell = text(headers[i], 10, MUTED_GOLD, true);
+            cell.setMinWidth(dp(columnWidths[i]));
+            cell.setPadding(dp(8), dp(10), dp(8), dp(10));
+            header.addView(cell, new TableRow.LayoutParams(-2, -2));
+        }
+        table.addView(header, new TableLayout.LayoutParams(-2, -2));
+        horizontal.addView(table, new HorizontalScrollView.LayoutParams(-2, -2));
+        parent.addView(text("Swipe sideways to view all columns", 9, SUBTLE, false), margins(-1, -2, 0, 0, 0, dp(3)));
+        parent.addView(horizontal, matchWrap());
+        return table;
+    }
+
+    private TableRow addDataTableRow(TableLayout table, String[] values, int[] columnWidths, boolean highlight) {
+        TableRow row = new TableRow(this);
+        int rowIndex = table.getChildCount();
+        row.setBackgroundColor(highlight ? Color.rgb(45, 37, 17) :
+            (rowIndex % 2 == 0 ? Color.rgb(20, 20, 20) : Color.rgb(13, 13, 13)));
+        for (int i = 0; i < values.length; i++) {
+            TextView cell = text(values[i], 11, highlight ? GOLD_LIGHT : TEXT, false);
+            cell.setMinWidth(dp(columnWidths[i]));
+            cell.setPadding(dp(8), dp(9), dp(8), dp(9));
+            row.addView(cell, new TableRow.LayoutParams(-2, -2));
+        }
+        table.addView(row, new TableLayout.LayoutParams(-2, -2));
+        return row;
+    }
+
+    private void addTableActionCell(TableRow row, String label, Consumer<Button> action) {
+        if (action == null) {
+            TextView dash = text("—", 11, SUBTLE, false);
+            dash.setMinWidth(dp(84));
+            dash.setPadding(dp(8), dp(9), dp(8), dp(9));
+            row.addView(dash, new TableRow.LayoutParams(-2, -2));
+            return;
+        }
+        Button button = primaryButton(label);
+        button.setTextSize(10);
+        button.setMinWidth(dp(84));
+        button.setMinHeight(dp(38));
+        button.setPadding(dp(6), dp(3), dp(6), dp(3));
+        row.addView(button, new TableRow.LayoutParams(-2, dp(44)));
+        button.setOnClickListener(v -> action.accept(button));
     }
 
     private LinearLayout card() {
@@ -3168,6 +3261,9 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         addHeading("Tournament", "Official group tables, round dates and fixtures.");
         pageStatus = text("Loading tournament details…", 12, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, dp(8), 0, dp(8)));
+        Button refreshTables = secondaryButton("REFRESH GROUP TABLES & FIXTURES");
+        content.addView(refreshTables, margins(-1, dp(42), 0, 0, 0, dp(8)));
+        refreshTables.setOnClickListener(v -> renderTournamentDetail());
         LinearLayout sections = new LinearLayout(this); sections.setOrientation(LinearLayout.VERTICAL);
         content.addView(sections, matchWrap());
         long tournamentId = selectedTournamentId;
@@ -3198,26 +3294,39 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             }
             pageStatus.setText("Tournament data is synchronized from the server.");
             sections.addView(text("GROUP STANDINGS", 13, GOLD, true), margins(-1, -2, 0, 0, 0, dp(6)));
+            int[] standingsWidths = { 72, 140, 42, 42, 42, 42, 52, 56 };
+            TableLayout standingsTable = addScrollableTable(sections,
+                new String[] { "GROUP", "PLAYER", "P", "W", "D", "L", "GD", "PTS" }, standingsWidths);
             if (standings == null || standings.length() == 0) addNoticeTo(sections, "Groups will appear when the server assigns tournament entries.", SUBTLE);
             else for (int i = 0; i < standings.length(); i++) {
                 JSONObject row = standings.optJSONObject(i); if (row == null) continue;
-                LinearLayout item = card();
-                item.addView(text("GROUP " + row.optString("group_code", "—") + " · " + row.optString("username", "Player"), 13, TEXT, true));
-                item.addView(text("P " + row.optInt("played", 0) + " · W " + row.optInt("wins", 0) + " · D " + row.optInt("draws", 0) + " · L " + row.optInt("losses", 0) + " · Pts " + row.optInt("points", 0) + " · GD " + row.optInt("goal_difference", 0), 10, SUBTLE, false));
-                sections.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                String name = row.optString("username", "Player");
+                boolean isCurrentPlayer = name.equalsIgnoreCase(currentUser.optString("username", ""));
+                addDataTableRow(standingsTable, new String[] {
+                    row.optString("group_code", "—"), name, String.valueOf(row.optInt("played", 0)),
+                    String.valueOf(row.optInt("wins", 0)), String.valueOf(row.optInt("draws", 0)),
+                    String.valueOf(row.optInt("losses", 0)), String.valueOf(row.optInt("goal_difference", 0)),
+                    String.valueOf(row.optInt("points", 0))
+                }, standingsWidths, isCurrentPlayer);
             }
             sections.addView(text("TOURNAMENT FIXTURES", 13, GOLD, true), margins(-1, -2, 0, dp(10), 0, dp(6)));
+            int[] fixtureWidths = { 116, 126, 72, 126, 96, 84 };
+            TableLayout fixturesTable = addScrollableTable(sections,
+                new String[] { "ROUND", "HOME", "SCORE", "AWAY", "STATUS", "ACTION" }, fixtureWidths);
             if (fixtures == null || fixtures.length() == 0) addNoticeTo(sections, "No fixtures have been released yet.", SUBTLE);
             else for (int i = 0; i < fixtures.length(); i++) {
                 JSONObject fixture = fixtures.optJSONObject(i); if (fixture == null) continue;
-                LinearLayout item = card();
-                item.addView(text(fixture.optString("home", "Home") + "  vs  " + fixture.optString("away", "Waiting"), 12, TEXT, true));
-                item.addView(text(fixture.optString("round_name", "Fixture") + " · " + fixture.optString("status", "scheduled"), 10, SUBTLE, false), margins(-1, -2, 0, dp(3), 0, 0));
-                if (fixture.optBoolean("mine") && fixture.optLong("away_id", 0) > 0 && ("scheduled".equals(fixture.optString("status")) || "playing".equals(fixture.optString("status")) || "waiting".equals(fixture.optString("status")))) {
-                    Button open = primaryButton("OPEN / START FIXTURE"); item.addView(open, margins(-1, dp(40), 0, dp(3), 0, 0));
-                    open.setOnClickListener(v -> startCompetitionMatch("tournament", "", 0, tournamentId, open));
-                }
-                sections.addView(item, margins(-1, -2, 0, 0, 0, dp(6)));
+                String status = fixture.optString("status", "scheduled");
+                String homeScore = fixture.isNull("home_score") ? "—" : String.valueOf(fixture.optInt("home_score", 0));
+                String awayScore = fixture.isNull("away_score") ? "—" : String.valueOf(fixture.optInt("away_score", 0));
+                boolean canPlay = fixture.optBoolean("mine") && fixture.optLong("away_id", 0) > 0 &&
+                    ("scheduled".equals(status) || "playing".equals(status) || "waiting".equals(status));
+                TableRow tableRow = addDataTableRow(fixturesTable, new String[] {
+                    fixture.optString("round_name", "Fixture"), fixture.optString("home", "Home"),
+                    homeScore + "–" + awayScore, fixture.optString("away", "Waiting"), status.replace('_', ' ')
+                }, new int[] { fixtureWidths[0], fixtureWidths[1], fixtureWidths[2], fixtureWidths[3], fixtureWidths[4] }, false);
+                addTableActionCell(tableRow, "PLAY", canPlay ? play ->
+                    startCompetitionMatch("tournament", "", 0, tournamentId, play) : null);
             }
         });
     }
