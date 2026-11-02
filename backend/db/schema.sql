@@ -1135,8 +1135,8 @@ CREATE INDEX IF NOT EXISTS idx_complaint_evidence_match
 
 CREATE TABLE IF NOT EXISTS efootball_result_corrections (
     id BIGSERIAL PRIMARY KEY,
-    match_id BIGINT NOT NULL REFERENCES efootball_matches(id) ON DELETE RESTRICT,
-    complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE RESTRICT,
+    match_id BIGINT REFERENCES efootball_matches(id) ON DELETE SET NULL,
+    complaint_id BIGINT REFERENCES complaints(id) ON DELETE SET NULL,
     admin_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     old_creator_score INTEGER,
     old_opponent_score INTEGER,
@@ -1148,6 +1148,19 @@ CREATE TABLE IF NOT EXISTS efootball_result_corrections (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(complaint_id)
 );
+-- Keep correction audit rows while allowing the related player account,
+-- match, or complaint to be removed. Older databases may still have the
+-- original NOT NULL / RESTRICT constraints, so migrate them in place.
+ALTER TABLE efootball_result_corrections ALTER COLUMN match_id DROP NOT NULL;
+ALTER TABLE efootball_result_corrections ALTER COLUMN complaint_id DROP NOT NULL;
+ALTER TABLE efootball_result_corrections DROP CONSTRAINT IF EXISTS efootball_result_corrections_match_id_fkey;
+ALTER TABLE efootball_result_corrections DROP CONSTRAINT IF EXISTS efootball_result_corrections_complaint_id_fkey;
+ALTER TABLE efootball_result_corrections
+    ADD CONSTRAINT efootball_result_corrections_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES efootball_matches(id) ON DELETE SET NULL;
+ALTER TABLE efootball_result_corrections
+    ADD CONSTRAINT efootball_result_corrections_complaint_id_fkey
+    FOREIGN KEY (complaint_id) REFERENCES complaints(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_efootball_result_corrections_match
     ON efootball_result_corrections(match_id, created_at DESC);
 
