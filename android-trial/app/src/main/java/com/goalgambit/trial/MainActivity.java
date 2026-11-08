@@ -25,6 +25,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.autofill.AutofillManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -77,6 +78,10 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private final Set<String> legalDestinations = new HashSet<>();
     private final Set<String> shownNotificationKeys = new HashSet<>();
     private LinearLayout root;
+    private FrameLayout sceneHost;
+    private AuthExperienceView authExperience;
+    private View appBrandHeader;
+    private View appSubtitle;
     private LinearLayout content;
     private LinearLayout navigation;
     private ScrollView pageScroll;
@@ -242,10 +247,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         playerBadge.setBackground(round(GOLD, dp(12), 0, 0));
         header.addView(playerBadge, wrap());
         root.addView(header, matchWrap());
+        appBrandHeader = header;
 
         TextView subtitle = text("COMPETE · PLAY · FOLLOW YOUR GAMES", 10, SUBTLE, true);
         subtitle.setLetterSpacing(0.08f);
         root.addView(subtitle, margins(-1, -2, 0, dp(2), 0, dp(10)));
+        appSubtitle = subtitle;
         connectionStatus = text("Connecting securely…", 12, SUBTLE, false);
         root.addView(connectionStatus, margins(-1, -2, 0, 0, 0, dp(10)));
 
@@ -262,23 +269,46 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         navigation.setPadding(0, dp(5), 0, dp(2));
         navigation.setVisibility(View.GONE);
         root.addView(navigation, matchWrap());
-        setContentView(root);
+        sceneHost = new FrameLayout(this);
+        sceneHost.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        authExperience = new AuthExperienceView(this);
+        authExperience.setVisibility(View.GONE);
+        sceneHost.addView(authExperience, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(sceneHost);
     }
 
     private void renderAuth() {
         currentScreen = "auth";
         navigation.setVisibility(View.GONE);
+        root.setBackgroundColor(Color.TRANSPARENT);
+        appBrandHeader.setVisibility(View.GONE);
+        appSubtitle.setVisibility(View.GONE);
+        connectionStatus.setVisibility(View.GONE);
+        authExperience.setVisibility(View.VISIBLE);
+        authExperience.clearTargets();
+        authExperience.setMode(registering ? AuthExperienceView.Mode.REGISTRATION : AuthExperienceView.Mode.LOGIN);
         content.removeAllViews();
-        addHeading(registering ? "Create your player account" : "Welcome back", "Sign in to the existing GOAL$GAMBIT service. This trial uses real account authentication.");
+        View spacer = new View(this);
+        int heroSpace = Math.max(dp(220), Math.min(dp(300), (int) (getResources().getDisplayMetrics().heightPixels * .32f)));
+        content.addView(spacer, new LinearLayout.LayoutParams(1, heroSpace));
+        addHeading(registering ? "Join the arena" : "Welcome back", registering ? "Create your GOAL$GAMBIT player account." : "Sign in to continue to your games.");
 
         EditText username = input("Username", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        username.setAutofillHints(View.AUTOFILL_HINT_USERNAME);
+        username.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        authExperience.watch(username, "Username");
         content.addView(username, margins(-1, dp(52), 0, dp(14), 0, 0));
         EditText phone = null;
         EditText email = null;
+        EditText confirmPassword = null;
         if (registering) {
             phone = input("Phone number", InputType.TYPE_CLASS_PHONE);
+            phone.setAutofillHints(View.AUTOFILL_HINT_PHONE);
+            authExperience.watch(phone, "Phone number");
             content.addView(phone, margins(-1, dp(52), 0, dp(10), 0, 0));
             email = input("Email address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+            email.setAutofillHints(View.AUTOFILL_HINT_EMAIL_ADDRESS);
+            authExperience.watch(email, "Email address");
             content.addView(email, margins(-1, dp(52), 0, dp(10), 0, 0));
 
             TextView gameLabel = text("GAME ACCESS", 12, MUTED_GOLD, true);
@@ -289,10 +319,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             gameAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             registrationGame.setAdapter(gameAdapter);
             registrationGame.setBackground(round(Color.rgb(36, 36, 36), dp(7), Color.rgb(74, 67, 48), dp(1)));
+            authExperience.watch(registrationGame, "Game access");
             content.addView(registrationGame, margins(-1, dp(50), 0, 0, 0, dp(10)));
 
             registrationRating = input("Chess rating (100–3000)", InputType.TYPE_CLASS_NUMBER);
             registrationRating.setText("1200");
+            authExperience.watch(registrationRating, "Chess rating");
             content.addView(registrationRating, margins(-1, dp(52), 0, 0, 0, dp(8)));
         } else {
             registrationGame = null;
@@ -300,10 +332,23 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         }
 
         EditText password = input("Password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        content.addView(password, margins(-1, dp(52), 0, registering ? 0 : dp(10), 0, 0));
+        password.setAutofillHints(View.AUTOFILL_HINT_PASSWORD);
+        password.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        authExperience.watch(password, "Password");
+        content.addView(passwordVisibilityRow(password), margins(-1, dp(52), 0, dp(8), 0, 0));
         if (registering) {
+            confirmPassword = input("Confirm password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            confirmPassword.setAutofillHints(View.AUTOFILL_HINT_PASSWORD);
+            confirmPassword.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+            authExperience.watch(confirmPassword, "Confirm password");
+            content.addView(passwordVisibilityRow(confirmPassword), margins(-1, dp(52), 0, dp(8), 0, 0));
             TextView emailNotice = text("A verified email address is required. GOAL$GAMBIT will send the verification email using its existing account flow.", 12, SUBTLE, false);
             content.addView(emailNotice, margins(-1, -2, 0, dp(10), 0, 0));
+            CheckBox savePassword = new CheckBox(this);
+            savePassword.setText("Offer to save password with Android password manager");
+            savePassword.setTextColor(TEXT);
+            savePassword.setButtonTintList(android.content.res.ColorStateList.valueOf(GOLD));
+            content.addView(savePassword, margins(-1, -2, 0, dp(8), 0, 0));
             CheckBox terms = new CheckBox(this);
             terms.setText("I have read and agree to the GOAL$GAMBIT terms");
             terms.setTextColor(TEXT);
@@ -314,29 +359,81 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             readTerms.setOnClickListener(v -> openUrl(TERMS_URL));
 
             Button create = primaryButton("CREATE PLAYER ACCOUNT");
+            authExperience.watch(create, "Create Account");
             content.addView(create, margins(-1, dp(54), 0, 0, 0, dp(8)));
             EditText finalPhone = phone;
             EditText finalEmail = email;
-            create.setOnClickListener(v -> submitRegistration(username, finalPhone, finalEmail, password, terms, create));
+            EditText finalConfirmPassword = confirmPassword;
+            create.setOnClickListener(v -> {
+                authExperience.focusOn(create, "Create Account");
+                submitRegistration(username, finalPhone, finalEmail, password, finalConfirmPassword, terms, savePassword, create);
+            });
         } else {
+            CheckBox savePassword = new CheckBox(this);
+            savePassword.setText("Save password with Android password manager");
+            savePassword.setTextColor(TEXT);
+            savePassword.setButtonTintList(android.content.res.ColorStateList.valueOf(GOLD));
+            content.addView(savePassword, margins(-1, -2, 0, dp(3), 0, 0));
+            Button forgot = secondaryButton("FORGOT PASSWORD?");
+            forgot.setOnClickListener(v -> openUrl("https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/password-recovery.html"));
+            content.addView(forgot, margins(-1, dp(42), 0, 0, 0, dp(5)));
             Button signIn = primaryButton("SIGN IN");
             content.addView(signIn, margins(-1, dp(54), 0, dp(12), 0, dp(8)));
-            signIn.setOnClickListener(v -> submitLogin(username, password, signIn));
+            signIn.setOnClickListener(v -> submitLogin(username, password, savePassword, signIn));
         }
 
         Button switchMode = secondaryButton(registering ? "I ALREADY HAVE AN ACCOUNT" : "CREATE A NEW ACCOUNT");
         content.addView(switchMode, margins(-1, dp(48), 0, 0, 0, dp(14)));
         switchMode.setOnClickListener(v -> {
-            registering = !registering;
-            renderAuth();
+            if (!registering) {
+                authExperience.startRegistrationJourney(() -> {
+                    registering = true;
+                    renderAuth();
+                    authExperience.revealRegistration();
+                });
+            } else {
+                registering = false;
+                renderAuth();
+            }
         });
-        TextView privacy = text("Your session token is encrypted with Android Keystore. The trial app has no administrator tools.", 11, SUBTLE, false);
+        TextView privacy = text("Your session is protected by Android Keystore. Password saving uses your Android password manager.", 11, SUBTLE, false);
         content.addView(privacy, margins(-1, -2, 0, dp(8), 0, dp(4)));
         pageStatus = text("", 13, SUBTLE, false);
         content.addView(pageStatus, margins(-1, -2, 0, dp(8), 0, 0));
+        if (!registering) authExperience.setMode(AuthExperienceView.Mode.LOGIN);
     }
 
-    private void submitLogin(EditText username, EditText password, Button button) {
+    private LinearLayout passwordVisibilityRow(EditText field) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(field, new LinearLayout.LayoutParams(0, -1, 1f));
+        Button toggle = secondaryButton("SHOW");
+        toggle.setTextSize(10);
+        toggle.setMinWidth(dp(62));
+        toggle.setOnClickListener(v -> {
+            boolean reveal = (field.getInputType() & InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
+            int type = InputType.TYPE_CLASS_TEXT | (reveal ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD : InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            int selection = field.getSelectionStart();
+            field.setInputType(type);
+            field.setSelection(Math.max(0, Math.min(selection, field.length())));
+            toggle.setText(reveal ? "HIDE" : "SHOW");
+        });
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(68), -1);
+        buttonParams.setMargins(dp(7), 0, 0, 0);
+        row.addView(toggle, buttonParams);
+        return row;
+    }
+
+    private void savePasswordWithAndroid(EditText username, EditText password, boolean requested) {
+        if (!requested || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            AutofillManager manager = getSystemService(AutofillManager.class);
+            if (manager != null && manager.isEnabled()) manager.commit();
+        } catch (RuntimeException ignored) {}
+    }
+
+    private void submitLogin(EditText username, EditText password, CheckBox savePassword, Button button) {
         String name = username.getText().toString().trim();
         String pass = password.getText().toString();
         if (name.isEmpty() || pass.isEmpty()) {
@@ -345,6 +442,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         }
         button.setEnabled(false);
         showMessage("Signing in securely…", false);
+        pageScroll.animate().alpha(0f).setDuration(220).start();
+        authExperience.startLoginJourney();
         JSONObject body = new JSONObject();
         try { body.put("username", name); body.put("password", pass); }
         catch (Exception ignored) {}
@@ -352,30 +451,53 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             button.setEnabled(true);
             String receivedToken = result.object.optString("token", "");
             if (!result.ok() || receivedToken.isEmpty()) {
-                showMessage(result.message("Sign in failed. Check your details and try again."), true);
+                authExperience.returnToLogin(() -> {
+                    pageScroll.setAlpha(1f);
+                    showMessage(result.message("Sign in failed. Check your details and try again."), true);
+                });
                 return;
             }
             if (!SessionStore.save(this, receivedToken)) {
-                showMessage("The secure session could not be saved on this device.", true);
+                authExperience.returnToLogin(() -> {
+                    pageScroll.setAlpha(1f);
+                    showMessage("The secure session could not be saved on this device.", true);
+                });
                 return;
             }
+            savePasswordWithAndroid(username, password, savePassword.isChecked());
             token = receivedToken;
             currentUser = result.object.optJSONObject("user") == null ? new JSONObject() : result.object.optJSONObject("user");
             pendingRegistrationMessage = "";
-            enterPlayerApp();
+            authExperience.completeLoginJourney(this::enterPlayerApp);
         });
     }
 
     private void submitRegistration(EditText username, EditText phone, EditText email,
-                                    EditText password, CheckBox terms, Button button) {
+                                    EditText password, EditText confirmPassword, CheckBox terms,
+                                    CheckBox savePassword, Button button) {
         String name = username.getText().toString().trim();
         String phoneValue = phone.getText().toString().trim();
         String emailValue = email.getText().toString().trim();
         String passwordValue = password.getText().toString();
+        String confirmValue = confirmPassword.getText().toString();
         String gameLabel = String.valueOf(registrationGame.getSelectedItem());
         String game = "Chess".equals(gameLabel) ? "chess" : "eFootball".equals(gameLabel) ? "konami" : "both";
         if (!terms.isChecked()) {
             showMessage("Please read and accept the terms before creating an account.", true);
+            return;
+        }
+        if (name.length() < 3 || phoneValue.isEmpty() || !emailValue.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$")) {
+            showMessage("Enter a username, phone number and valid email address.", true);
+            return;
+        }
+        if (passwordValue.length() < 8) {
+            showMessage("Use a password with at least 8 characters.", true);
+            password.requestFocus();
+            return;
+        }
+        if (!passwordValue.equals(confirmValue)) {
+            showMessage("The passwords do not match. Please check both fields.", true);
+            confirmPassword.requestFocus();
             return;
         }
         JSONObject body = new JSONObject();
@@ -389,24 +511,29 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         } catch (Exception ignored) {}
         button.setEnabled(false);
         showMessage("Creating your account through GOAL$GAMBIT…", false);
+        pageScroll.animate().alpha(0f).setDuration(220).start();
         request("POST", "/api/auth/register", null, body, result -> {
             button.setEnabled(true);
             String receivedToken = result.object.optString("token", "");
             if (!result.ok() || receivedToken.isEmpty()) {
+                pageScroll.setAlpha(1f);
                 showMessage(result.message("Account creation failed. Please try again."), true);
                 return;
             }
             if (!SessionStore.save(this, receivedToken)) {
+                pageScroll.setAlpha(1f);
                 showMessage("Account created, but this device could not save the secure session. Sign in to continue.", true);
                 registering = false;
                 renderAuth();
                 return;
             }
+            savePasswordWithAndroid(username, password, savePassword.isChecked());
             token = receivedToken;
             currentUser = result.object.optJSONObject("user") == null ? new JSONObject() : result.object.optJSONObject("user");
             pendingRegistrationMessage = result.object.optBoolean("emailVerificationSent", false)
                 ? "Account created. Check your email for the verification link."
                 : "Account created. Email verification delivery needs attention; use Account settings on the website to request another link.";
+            authExperience.setPendingRegistrationReveal(true);
             enterPlayerApp();
         });
     }
@@ -428,8 +555,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
 
     private void enterPlayerApp() {
         registering = false;
+        root.setBackgroundColor(BG);
+        appBrandHeader.setVisibility(View.VISIBLE);
+        appSubtitle.setVisibility(View.VISIBLE);
+        connectionStatus.setVisibility(View.VISIBLE);
         navigation.setVisibility(View.VISIBLE);
         setConnection("Connected to GOAL$GAMBIT", true);
+        pageScroll.setAlpha(1f);
         preparePlayerNotifications();
         if (chessSocket != null) chessSocket.close();
         chessSocket = new ChessRealtimeClient(this);
@@ -437,6 +569,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         boolean openNotifications = getIntent() != null && getIntent().getBooleanExtra(OPEN_NOTIFICATIONS_EXTRA, false);
         if (openNotifications) getIntent().removeExtra(OPEN_NOTIFICATIONS_EXTRA);
         navigate(openNotifications ? "notifications" : "home");
+        if (authExperience.takePendingRegistrationReveal()) {
+            authExperience.setVisibility(View.VISIBLE);
+            authExperience.revealHome();
+        } else {
+            authExperience.setVisibility(View.GONE);
+        }
     }
 
     @Override
