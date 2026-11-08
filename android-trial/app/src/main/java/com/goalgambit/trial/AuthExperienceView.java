@@ -1,50 +1,34 @@
 package com.goalgambit.trial;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.content.Context;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.LinearGradient;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
-import android.graphics.RadialGradient;
-import android.graphics.RectF;
-import android.graphics.Shader;
-import android.graphics.drawable.Drawable;
+import android.graphics.Rect;
+import android.opengl.Matrix;
 import android.os.SystemClock;
+import android.util.Log;
+import android.view.Choreographer;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewTreeObserver;
-import android.view.animation.AccelerateDecelerateInterpolator;
-import android.view.animation.DecelerateInterpolator;
 
+import com.google.android.filament.Engine;
+import com.google.android.filament.Filament;
+import com.google.android.filament.EntityManager;
+import com.google.android.filament.LightManager;
+import com.google.android.filament.TransformManager;
+import com.google.android.filament.android.UiHelper;
+import com.google.android.filament.utils.ModelViewer;
+import com.google.android.filament.utils.Utils;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Lightweight, bundled Canvas artwork and transitions for player authentication. */
-final class AuthExperienceView extends View {
-    enum Mode { LOGIN, REGISTRATION, DROP_KING, REVEAL_REGISTRATION, LOGIN_JOURNEY, REVEAL_HOME }
-
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
-    private final Paint clearPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Drawable logo;
-    private final List<Target> targets = new ArrayList<>();
-    private Mode mode = Mode.LOGIN;
-    private long modeStarted = SystemClock.uptimeMillis();
-    private float journeyProgress;
-    private float revealProgress;
-    private boolean pendingRegistrationReveal;
-    private boolean reducedMotion;
-    private float targetX;
-    private float targetY;
-    private float desiredTargetX;
-    private float desiredTargetY;
-    private String targetLabel = "Username";
-    private Runnable transitionComplete;
-    private ValueAnimator activeAnimator;
+/** Filament-powered, locally bundled 3D authentication scene and transitions. */
+final class AuthExperienceView extends TextureView implements Choreographer.FrameCallback {
+    private static final String TAG = "GGAuth3D";
+    enum Mode { LOGIN, REGISTRATION, OPENING, DROP_KING, REVEAL_REGISTRATION, LOGIN_JOURNEY, LOGIN_RETURN, LOGIN_COMPLETE, REVEAL_HOME }
 
     private static final class Target {
         final View view;
@@ -52,431 +36,413 @@ final class AuthExperienceView extends View {
         Target(View view, String label) { this.view = view; this.label = label; }
     }
 
+    private final List<Target> targets = new ArrayList<>();
+    private ModelViewer viewer;
+    private View revealTarget;
+    private Mode mode = Mode.LOGIN;
+    private long stageStartMs;
+    private long lastFrameNs;
+    private float progress;
+    private float journeyStartProgress;
+    private float focusWorldX;
+    private float focusWorldY;
+    private float torchX = .67f;
+    private float torchY = -1.66f;
+    private float torchRotation;
+    private boolean running;
+    private boolean sceneReady;
+    private boolean pendingRegistrationReveal;
+    private Runnable transitionDone;
+    private int kingEntity;
+    private int torchEntity;
+    private int ballEntity;
+    private int logoEntity;
+    private float worldHalfHeight = 2.9f;
+    private float worldHalfWidth = 1.3f;
+
+    static { Utils.init(); }
+
     AuthExperienceView(Context context) {
         super(context);
-        setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        setOpaque(false);
         setClickable(false);
+        setFocusable(false);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-        Drawable appLogo = null;
-        try { appLogo = context.getDrawable(R.mipmap.ic_launcher); }
-        catch (RuntimeException ignored) {}
-        if (appLogo == null) throw new IllegalStateException("The GOAL$GAMBIT Player App logo could not be loaded.");
-        logo = appLogo.mutate();
+        setAlpha(1f);
+    }
+
+    private void initializeScene(int width, int height) {
+        destroyViewer();
         try {
-            reducedMotion = android.provider.Settings.Global.getFloat(
-                context.getContentResolver(), android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f;
-        } catch (RuntimeException ignored) { reducedMotion = false; }
-        clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+            Filament.init();
+            viewer = new ModelViewer(this, Engine.create(), new UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK), null);
+            addFillLights();
+            viewer.setCameraFocalLength(28f);
+            viewer.setCameraNear(.05f);
+            viewer.setCameraFar(80f);
+            viewer.getCamera().lookAt(0.0, 0.0, 7.2, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+            updateCamera(width, height);
+            byte[] glb = readAsset("models/auth_world.glb");
+            ByteBuffer model = ByteBuffer.allocateDirect(glb.length);
+            model.put(glb).flip();
+            viewer.loadModelGlb(model);
+            viewer.getView().setPostProcessingEnabled(true);
+            sceneReady = true;
+            cacheSceneEntities();
+            Log.i(TAG, "Loaded bundled Filament GLB scene (" + glb.length + " bytes)");
+            scheduleFrames();
+        } catch (Throwable error) {
+            sceneReady = false;
+            Log.e(TAG, "Could not initialize the bundled 3D authentication scene", error);
+            // Keep the native auth form usable and make the renderer issue visible in logs.
+            if (transitionDone != null) {
+                Runnable callback = transitionDone;
+                transitionDone = null;
+                post(callback);
+            }
+        }
+    }
+
+    private void addFillLights() {
+        Engine engine=viewer.getEngine();
+        addDirectional(engine,.70f,.48f,.25f,32000f,-.32f,-.22f,-1f);
+        addDirectional(engine,.42f,.53f,.76f,21000f,.58f,-.08f,-1f);
+    }
+
+    private void addDirectional(Engine engine,float r,float g,float b,float lux,float dx,float dy,float dz) {
+        int entity=EntityManager.get().create();
+        new LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .color(r,g,b).intensity(lux).direction(dx,dy,dz).castShadows(false)
+            .build(engine,entity);
+        viewer.getScene().addEntity(entity);
+    }
+
+    private byte[] readAsset(String path) throws Exception {
+        try (InputStream input = getContext().getAssets().open(path);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[16 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private void updateCamera(int width, int height) {
+        if (viewer == null || width <= 0 || height <= 0) return;
+        float aspect = width / (float) height;
+        worldHalfHeight = 2.9f;
+        worldHalfWidth = worldHalfHeight * aspect;
+        viewer.getCamera().lookAt(0.0, 0.0, 7.2, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+    }
+
+    private void cacheSceneEntities() {
+        if (viewer == null || viewer.getAsset() == null) return;
+        kingEntity = viewer.getAsset().getFirstEntityByName("KingPivot");
+        torchEntity = viewer.getAsset().getFirstEntityByName("FlashlightRoot");
+        ballEntity = viewer.getAsset().getFirstEntityByName("MatchBallRoot");
+        logoEntity = viewer.getAsset().getFirstEntityByName("Goal Gambit three-dimensional crest");
+        setObject(kingEntity, 0f, 1.17f, -.10f, 0f, .58f);
+        setObject(torchEntity, .67f, -1.66f, .20f, 0f, 1f);
+        setObject(ballEntity, -.82f, -1.57f, .45f, 0f, 1f);
+    }
+
+    void setRevealTarget(View target) { revealTarget = target; }
+    void setPendingRegistrationReveal(boolean pending) { pendingRegistrationReveal = pending; }
+    boolean takePendingRegistrationReveal() {
+        boolean pending=pendingRegistrationReveal;
+        pendingRegistrationReveal=false;
+        return pending;
     }
 
     void setMode(Mode next) {
         if (next == Mode.LOGIN || next == Mode.REGISTRATION) {
             mode = next;
-            modeStarted = SystemClock.uptimeMillis();
-            journeyProgress = 0f;
+            stageStartMs = SystemClock.uptimeMillis();
+            if (next == Mode.LOGIN) {
+                setObject(torchEntity, .67f, -1.66f, .20f, 0f, 1f);
+                setObject(kingEntity, 0f, 1.17f, -.10f, 0f, .58f);
+            } else {
+                setObject(kingEntity, .92f, -.95f, .0f, 0f, .58f);
+                torchX = .70f; torchY = -.74f; torchRotation = 0f;
+                setObject(torchEntity, torchX, torchY, .42f, torchRotation, 1f);
+            }
         }
-        invalidate();
+        scheduleFrames();
     }
 
     void watch(View view, String label) {
         if (view == null) return;
         targets.add(new Target(view, label));
         view.setOnFocusChangeListener((focused, hasFocus) -> {
-            if (hasFocus) {
-                targetLabel = label;
-                updateTarget(focused);
-                invalidate();
-            }
+            if (hasFocus) updateFocus(focused);
         });
     }
 
-    void clearTargets() { targets.clear(); targetX = 0; targetY = 0; desiredTargetX = 0; desiredTargetY = 0; targetLabel = "Username"; }
+    void clearTargets() { targets.clear(); focusWorldX = 0f; focusWorldY = 0f; }
 
     void focusOn(View view, String label) {
-        if (view == null) return;
-        targetLabel = label;
-        updateTarget(view);
-        invalidate();
+        if (view != null) updateFocus(view);
     }
 
-    void setPendingRegistrationReveal(boolean pending) { pendingRegistrationReveal = pending; }
-    boolean takePendingRegistrationReveal() {
-        boolean pending = pendingRegistrationReveal;
-        pendingRegistrationReveal = false;
-        return pending;
+    private void updateFocus(View view) {
+        int[] position = new int[2];
+        view.getLocationOnScreen(position);
+        int[] scenePosition = new int[2];
+        getLocationOnScreen(scenePosition);
+        float px = position[0] - scenePosition[0] + view.getWidth() * .5f;
+        float py = position[1] - scenePosition[1] + view.getHeight() * .5f;
+        focusWorldX = (px / Math.max(1f, getWidth()) - .5f) * worldHalfWidth * 2f;
+        focusWorldY = (.5f - py / Math.max(1f, getHeight())) * worldHalfHeight * 2f;
+        scheduleFrames();
     }
 
     void startRegistrationJourney(Runnable revealPage) {
         mode = Mode.DROP_KING;
-        modeStarted = SystemClock.uptimeMillis();
-        invalidate();
-        animateFloat(0f, 1f, reducedMotion ? 1 : 1150, value -> {
-            journeyProgress = value;
-            invalidate();
-        }, () -> { if (revealPage != null) revealPage.run(); });
+        stageStartMs = SystemClock.uptimeMillis();
+        transitionDone = revealPage;
+        progress = 0f;
+        scheduleFrames();
     }
 
     void revealRegistration() {
         mode = Mode.REVEAL_REGISTRATION;
-        revealProgress = 0f;
-        invalidate();
-        animateFloat(0f, 1f, reducedMotion ? 1 : 1250, value -> {
-            revealProgress = value;
-            invalidate();
-        }, () -> {
-            mode = Mode.REGISTRATION;
-            modeStarted = SystemClock.uptimeMillis();
-            for (Target target : targets) {
-                if (target.view.isShown() && target.view.isFocusable()) {
-                    target.view.requestFocus();
-                    targetLabel = target.label;
-                    updateTarget(target.view);
-                    break;
-                }
-            }
-            invalidate();
-        });
+        stageStartMs = SystemClock.uptimeMillis();
+        progress = 0f;
+        applyRevealClip(0f, false);
+        scheduleFrames();
+    }
+
+    void startOpeningSequence(Runnable showLogin) {
+        mode = Mode.OPENING;
+        stageStartMs = SystemClock.uptimeMillis();
+        transitionDone = showLogin;
+        progress = 0f;
+        scheduleFrames();
     }
 
     void startLoginJourney() {
         mode = Mode.LOGIN_JOURNEY;
-        journeyProgress = 0f;
-        invalidate();
-        animateFloat(0f, 0.86f, reducedMotion ? 1 : 1500, value -> {
-            journeyProgress = value;
-            invalidate();
-        }, null);
+        stageStartMs = SystemClock.uptimeMillis();
+        progress = 0f;
+        scheduleFrames();
     }
 
     void returnToLogin(Runnable done) {
-        animateFloat(journeyProgress, 0f, reducedMotion ? 1 : 480, value -> {
-            journeyProgress = value;
-            invalidate();
-        }, () -> {
-            mode = Mode.LOGIN;
-            modeStarted = SystemClock.uptimeMillis();
-            invalidate();
-            if (done != null) done.run();
-        });
+        mode = Mode.LOGIN_RETURN;
+        stageStartMs = SystemClock.uptimeMillis();
+        transitionDone = done;
+        journeyStartProgress=progress;
+        scheduleFrames();
     }
 
     void completeLoginJourney(Runnable done) {
-        animateFloat(journeyProgress, 1f, reducedMotion ? 1 : 420, value -> {
-            journeyProgress = value;
-            invalidate();
-        }, () -> { if (done != null) done.run(); });
+        mode = Mode.LOGIN_COMPLETE;
+        stageStartMs = SystemClock.uptimeMillis();
+        transitionDone = done;
+        journeyStartProgress=progress;
+        scheduleFrames();
     }
 
-    void revealHome() {
+    void revealHome(Runnable done) {
         mode = Mode.REVEAL_HOME;
-        revealProgress = 0f;
-        invalidate();
-        animateFloat(0f, 1f, reducedMotion ? 1 : 1150, value -> {
-            revealProgress = value;
-            invalidate();
-        }, () -> setVisibility(GONE));
+        stageStartMs = SystemClock.uptimeMillis();
+        transitionDone = done;
+        progress = 0f;
+        applyRevealClip(0f, true);
+        scheduleFrames();
     }
 
-    private interface FloatUpdate { void update(float value); }
-    private void animateFloat(float from, float to, long duration, FloatUpdate update, Runnable end) {
-        if (activeAnimator != null) activeAnimator.cancel();
-        ValueAnimator animator = ValueAnimator.ofFloat(from, to);
-        activeAnimator = animator;
-        animator.setDuration(duration);
-        animator.setInterpolator(new AccelerateDecelerateInterpolator());
-        animator.addUpdateListener(value -> update.update((Float) value.getAnimatedValue()));
-        if (end != null) animator.addListener(new AnimatorListenerAdapter() {
-            @Override public void onAnimationEnd(Animator animation) { end.run(); }
-        });
-        animator.start();
+    private void scheduleFrames() {
+        if (!running || viewer == null || !sceneReady || !isShown()) return;
+        Choreographer.getInstance().removeFrameCallback(this);
+        Choreographer.getInstance().postFrameCallback(this);
     }
 
-    @Override protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        float w = getWidth(), h = getHeight();
-        if (w <= 0 || h <= 0) return;
-        if (mode == Mode.REVEAL_REGISTRATION || mode == Mode.REVEAL_HOME) {
-            drawReveal(canvas, w, h, mode == Mode.REVEAL_HOME);
+    void onHostResume() { running = true; scheduleFrames(); }
+    void onHostPause() { running = false; stopFrames(); }
+    private void stopFrames() { Choreographer.getInstance().removeFrameCallback(this); }
+
+    @Override public void doFrame(long frameTimeNanos) {
+        if (!running || viewer == null || !sceneReady || !isShown()) return;
+        long now = SystemClock.uptimeMillis();
+        if (lastFrameNs != 0 && frameTimeNanos - lastFrameNs < 15_000_000L) {
+            Choreographer.getInstance().postFrameCallback(this);
             return;
         }
-        if (mode == Mode.LOGIN_JOURNEY) {
-            drawArenaJourney(canvas, w, h, journeyProgress);
-            return;
+        lastFrameNs = frameTimeNanos;
+        updateScene(now);
+        viewer.render(frameTimeNanos);
+        Choreographer.getInstance().postFrameCallback(this);
+    }
+
+    private void updateScene(long now) {
+        float t = (now - stageStartMs) / 1000f;
+        float swing = (float) Math.sin(t * 2.4f) * .115f;
+        switch (mode) {
+            case OPENING: {
+                if (t < .55f) {
+                    float p = smooth(t / .55f);
+                    setObject(kingEntity, 0f, 1.68f + .15f*p, -.10f, -.10f, .50f + .08f*p);
+                } else if (t < 1.15f) {
+                    float p = smooth((t-.55f)/.60f);
+                    setObject(kingEntity, -.10f*p, 1.83f + .24f*(float)Math.sin(p*Math.PI), -.10f, -.24f*p, .58f);
+                } else if (t < 1.56f) {
+                    float p = (t-1.15f)/.41f;
+                    setObject(kingEntity, -.10f + .18f*p, 2.0f - .57f*p, -.10f, -.24f + .78f*p, .58f);
+                } else if (t < 2.0f) {
+                    float p = smooth((t-1.56f)/.44f);
+                    setObject(kingEntity, .08f*(1-p), 1.43f-.26f*p, -.10f, .54f*(1-p), .58f);
+                } else {
+                    float p = t-2f;
+                    setObject(kingEntity, (float)Math.sin(p*2.4f)*.10f, 1.17f, -.10f, swing, .58f);
+                }
+                if (t >= 2.55f) finish(Mode.LOGIN);
+                break;
+            }
+            case LOGIN:
+                setObject(kingEntity, (float)Math.sin(t*2.4f)*.10f, 1.17f, -.10f, swing, .58f);
+                setTorchAim(.67f, -1.66f, 0f);
+                break;
+            case DROP_KING: {
+                float p = smooth(t/1.55f);
+                float y = lerp(1.17f,-1.42f,p);
+                float x = lerp(0f,.72f,p);
+                float rz = (float)Math.sin(p*Math.PI*3)*.28f*(1-p);
+                setObject(kingEntity,x,y,-.06f,rz,.58f);
+                float attach = smooth((p-.68f)/.32f);
+                setTorchAim(lerp(.67f,.57f,attach),lerp(-1.66f,-1.05f,attach),lerp(0f,-.20f,attach));
+                if (t >= 1.58f) finish(Mode.REGISTRATION);
+                break;
+            }
+            case REVEAL_REGISTRATION: {
+                progress = smooth(t/1.7f);
+                float py = lerp(2.02f,-.35f,progress);
+                setObject(kingEntity,.93f,py-.18f,-.10f,0f,.58f);
+                // The same flashlight is carried through the sweep. Its beam and
+                // native form clip are driven by this shared progress value.
+                setTorchAim(.72f,py, (float)Math.PI);
+                applyRevealClip(progress,false);
+                if (progress >= 1f) {
+                    applyRevealClip(1f,false);
+                    mode=Mode.REGISTRATION;
+                    stageStartMs=now;
+                    setObject(kingEntity,.93f,-.95f,-.10f,0f,.58f);
+                    updateFocusedTarget();
+                }
+                break;
+            }
+            case REGISTRATION:
+                updateFocusedTarget();
+                setObject(kingEntity,.93f,-.95f,-.10f,(float)Math.sin(t*1.1f)*.025f,.58f);
+                aimTorchAtFocus();
+                break;
+            case LOGIN_JOURNEY: {
+                progress=smooth(t/1.55f);
+                drawBallJourney(progress);
+                setObject(kingEntity,0f,1.17f,-.10f,0f,.58f);
+                break;
+            }
+            case LOGIN_RETURN:
+                progress=journeyStartProgress*(1f-smooth(t/.58f));
+                drawBallJourney(progress);
+                if(t>=.58f)finish(Mode.LOGIN);
+                break;
+            case LOGIN_COMPLETE:
+                progress=lerp(journeyStartProgress,1f,smooth(t/.46f));
+                drawBallJourney(progress);
+                if(t>=.46f)finish(Mode.LOGIN);
+                break;
+            case REVEAL_HOME: {
+                progress=smooth(t/1.45f);
+                applyRevealClip(progress,true);
+                setObject(kingEntity,.93f,lerp(-.95f,1.32f,progress),-.1f,0f,.58f);
+                setTorchAim(.72f,lerp(-1.8f,2.05f,progress), (float)Math.PI);
+                if (progress>=1f) {
+                    applyRevealClip(1f,true);
+                    if (transitionDone!=null) finish(Mode.LOGIN);
+                }
+                break;
+            }
         }
-
-        drawAtmosphere(canvas, w, h);
-        drawLogoAndBrand(canvas, w, h);
-        if (mode == Mode.DROP_KING) drawKingDrop(canvas, w, h, journeyProgress);
-        else if (mode == Mode.REGISTRATION) drawFieldGuide(canvas, w, h);
-        else drawOpeningKing(canvas, w, h);
-        if (mode == Mode.LOGIN) drawFlashlight(canvas, w * .82f, h - dp(43), -0.2f);
-        if (mode == Mode.LOGIN || mode == Mode.REGISTRATION) postInvalidateDelayed(reducedMotion ? 220 : 34);
     }
 
-    private void drawAtmosphere(Canvas canvas, float w, float h) {
-        paint.setShader(new LinearGradient(0, 0, 0, h * .48f,
-            new int[] { 0xff17130a, 0x99080503, 0x00000000 }, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, w, h * .48f, paint);
-        paint.setShader(null);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1));
-        paint.setColor(0x443e3214);
-        canvas.drawOval(new RectF(w * .12f, h * .08f, w * .88f, h * .38f), paint);
-        paint.setStyle(Paint.Style.FILL);
+    private void drawBallJourney(float p) {
+        float z=lerp(.45f,-2.55f,p);
+        float x=lerp(-.82f,0f,p);
+        float y=lerp(-1.57f,-1.42f,p);
+        float radius=1f-p*.56f;
+        setObject(ballEntity,x,y,z,p*13f,radius);
     }
 
-    private void drawLogoAndBrand(Canvas canvas, float w, float h) {
-        float size = Math.min(dp(106), w * .29f);
-        float cx = w * .5f, cy = Math.max(size * .7f, h * .105f);
-        paint.setShader(new RadialGradient(cx, cy, size * .85f,
-            new int[] { 0x66d8a62f, 0x22c69325, 0x00000000 }, null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(cx, cy, size * .85f, paint);
-        paint.setShader(null);
-        RectF dst = new RectF(cx - size / 2f, cy - size / 2f, cx + size / 2f, cy + size / 2f);
-        logo.setBounds((int) dst.left, (int) dst.top, (int) dst.right, (int) dst.bottom);
-        logo.setAlpha(244);
-        logo.draw(canvas);
-        logo.setAlpha(255);
-        canvas.save();
-        canvas.clipRect(dst);
-        float shine = (SystemClock.uptimeMillis() % 2800L) / 2800f;
-        float x = dst.left - size * .55f + shine * size * 2.1f;
-        paint.setShader(new LinearGradient(x - size * .18f, dst.bottom,
-            x + size * .18f, dst.top, new int[] { 0x00fff2b0, 0x55fff2b0, 0x00fff2b0 }, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(dst, paint);
-        paint.setShader(null);
-        canvas.restore();
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
-        paint.setTextSize(dp(21));
-        paint.setColor(0xffffd759);
-        canvas.drawText("GOAL$GAMBIT", cx, dst.bottom + dp(27), paint);
-        paint.setTextSize(dp(9));
-        paint.setLetterSpacing(0f);
-        paint.setColor(0xffc9b86f);
-        canvas.drawText("COMPETE  ·  PLAY  ·  WIN", cx, dst.bottom + dp(44), paint);
-        paint.setTextAlign(Paint.Align.LEFT);
+    private void updateFocusedTarget() {
+        for (Target target : targets) if (target.view.isShown() && target.view.hasFocus()) { updateFocus(target.view); return; }
     }
 
-    private void drawOpeningKing(Canvas canvas, float w, float h) {
-        long elapsed = SystemClock.uptimeMillis() - modeStarted;
-        float x = w * .52f;
-        float y = h * .24f;
-        float swing = reducedMotion ? 0f : (float) Math.sin((elapsed / 1000f) * 2.35f) * 0.15f;
-        if (elapsed < 1850 && !reducedMotion) {
-            float p = Math.min(1f, elapsed / 1850f);
-            float arc = (float) Math.sin(p * Math.PI) * dp(32);
-            y -= arc;
-            swing += (float) Math.sin(p * 12f) * .16f;
+    private void aimTorchAtFocus() {
+        float dx=focusWorldX-torchX, dy=focusWorldY-torchY;
+        float desired=(float)Math.atan2(-dx,dy);
+        torchRotation += shortestAngle(torchRotation,desired)*.16f;
+        setTorchAim(.72f,-.75f,torchRotation);
+    }
+
+    private void setTorchAim(float x,float y,float rotation) {
+        torchX=x;torchY=y;torchRotation=rotation;
+        setObject(torchEntity,x,y,.40f,rotation,1f);
+    }
+
+    private void applyRevealClip(float p,boolean fromBottom) {
+        if (revealTarget==null || revealTarget.getWidth()<=0 || revealTarget.getHeight()<=0) return;
+        int w=revealTarget.getWidth(),h=revealTarget.getHeight();
+        int top=fromBottom?Math.round(h*(1f-p)):0;
+        int bottom=fromBottom?h:Math.round(h*p);
+        revealTarget.setClipBounds(new Rect(0,Math.max(0,top),w,Math.min(h,Math.max(top,bottom))));
+    }
+
+    private void finish(Mode next) {
+        Mode old=mode;
+        mode=next;
+        stageStartMs=SystemClock.uptimeMillis();
+        progress=0f;
+        if ((old==Mode.REVEAL_REGISTRATION || old==Mode.REVEAL_HOME) && revealTarget!=null) revealTarget.setClipBounds(null);
+        if (next==Mode.LOGIN) {
+            setObject(ballEntity,-.82f,-1.57f,.45f,0f,1f);
+            setObject(kingEntity,0f,1.17f,-.10f,0f,.58f);
+            setTorchAim(.67f,-1.66f,0f);
         }
-        drawHangingKing(canvas, x, y, swing, 1f);
+        Runnable callback=transitionDone;
+        transitionDone=null;
+        if (callback!=null) post(callback);
+        Log.d(TAG,"Auth scene transition: "+old+" -> "+next);
     }
 
-    private void drawKingDrop(Canvas canvas, float w, float h, float p) {
-        float x = w * .52f;
-        float topY = h * .24f;
-        float landingY = h - dp(145);
-        float y = topY + (landingY - topY) * p;
-        float rotation = (float) Math.sin(p * Math.PI * 2f) * .55f;
-        drawKing(canvas, x, y, rotation, 1f - Math.max(0, p - .82f) * 4f, false);
-        float attach = Math.max(0f, Math.min(1f, (p - .58f) / .28f));
-        float torchX = w * .82f + (x + dp(28) - w * .82f) * attach;
-        float torchY = h - dp(43) + (landingY + dp(30) - (h - dp(43))) * attach;
-        drawFlashlight(canvas, torchX, torchY, -.4f * attach);
+    private void setObject(int entity,float x,float y,float z,float rz,float scale) {
+        if (viewer==null || entity==0) return;
+        TransformManager manager=viewer.getEngine().getTransformManager();
+        int instance=manager.getInstance(entity);
+        if(instance==0)return;
+        float[] m=new float[16];
+        Matrix.setIdentityM(m,0);
+        Matrix.translateM(m,0,x,y,z);
+        Matrix.rotateM(m,0,(float)Math.toDegrees(rz),0f,0f,1f);
+        Matrix.scaleM(m,0,scale,scale,scale);
+        manager.setTransform(instance,m);
     }
 
-    private void drawHangingKing(Canvas canvas, float x, float y, float rotation, float alpha) {
-        drawKing(canvas, x, y, rotation, alpha, true);
+    private static float smooth(float t) { t=Math.max(0f,Math.min(1f,t));return t*t*(3f-2f*t); }
+    private static float lerp(float a,float b,float t) { return a+(b-a)*Math.max(0f,Math.min(1f,t)); }
+    private static float shortestAngle(float a,float b) { return (float)Math.atan2(Math.sin(b-a),Math.cos(b-a)); }
+
+    private void destroyViewer() {
+        if(viewer==null)return;
+        try{viewer.destroy();}catch(RuntimeException error){Log.w(TAG,"Filament cleanup",error);}
+        viewer=null;sceneReady=false;kingEntity=0;torchEntity=0;ballEntity=0;logoEntity=0;
     }
 
-    private void drawKing(Canvas canvas, float x, float y, float rotation, float alpha, boolean string) {
-        canvas.save();
-        canvas.rotate((float) Math.toDegrees(rotation), x, y);
-        int a = Math.max(0, Math.min(255, (int) (255 * alpha)));
-        paint.setColor(Color.argb(a, 236, 196, 89));
-        paint.setStrokeWidth(dp(1.5f));
-        paint.setStyle(Paint.Style.STROKE);
-        if (string) canvas.drawLine(x, y - dp(84), x, y - dp(34), paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setShader(new LinearGradient(x - dp(24), y - dp(25), x + dp(25), y + dp(54),
-            new int[] { Color.argb(a, 255, 225, 137), Color.argb(a, 180, 118, 34), Color.argb(a, 88, 55, 24) }, null, Shader.TileMode.CLAMP));
-        Path body = new Path();
-        body.moveTo(x - dp(18), y - dp(7));
-        body.quadTo(x, y - dp(22), x + dp(18), y - dp(7));
-        body.lineTo(x + dp(23), y + dp(39));
-        body.quadTo(x, y + dp(51), x - dp(23), y + dp(39));
-        body.close();
-        canvas.drawPath(body, paint);
-        paint.setShader(null);
-        paint.setColor(Color.argb(a, 226, 173, 61));
-        canvas.drawRoundRect(new RectF(x - dp(30), y + dp(36), x + dp(30), y + dp(48)), dp(5), dp(5), paint);
-        Path crown = new Path();
-        crown.moveTo(x - dp(22), y - dp(31));
-        crown.lineTo(x - dp(17), y - dp(50));
-        crown.lineTo(x - dp(7), y - dp(40));
-        crown.lineTo(x, y - dp(57));
-        crown.lineTo(x + dp(7), y - dp(40));
-        crown.lineTo(x + dp(17), y - dp(50));
-        crown.lineTo(x + dp(22), y - dp(31));
-        crown.close();
-        paint.setShader(new LinearGradient(x, y - dp(56), x, y - dp(28),
-            new int[] { Color.argb(a, 255, 231, 139), Color.argb(a, 171, 105, 27) }, null, Shader.TileMode.CLAMP));
-        canvas.drawPath(crown, paint);
-        paint.setShader(null);
-        paint.setColor(Color.argb(a, 52, 33, 13));
-        canvas.drawCircle(x - dp(7), y - dp(18), dp(2), paint);
-        canvas.drawCircle(x + dp(7), y - dp(18), dp(2), paint);
-        paint.setColor(Color.argb(a, 255, 226, 127));
-        canvas.drawCircle(x, y - dp(36), dp(2.5f), paint);
-        canvas.restore();
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if(viewer==null)initializeScene(Math.max(1,getWidth()),Math.max(1,getHeight()));
+        if(running)scheduleFrames();
     }
-
-    private void drawFlashlight(Canvas canvas, float x, float y, float rotation) {
-        canvas.save();
-        canvas.rotate((float) Math.toDegrees(rotation), x, y);
-        paint.setShader(new RadialGradient(x, y - dp(29), dp(105),
-            new int[] { 0x55ffe998, 0x20ffe998, 0x00ffe998 }, null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(x, y - dp(29), dp(105), paint);
-        paint.setShader(null);
-        Path beam = new Path();
-        beam.moveTo(x - dp(10), y - dp(30));
-        beam.lineTo(x - dp(94), y - dp(170));
-        beam.lineTo(x + dp(82), y - dp(170));
-        beam.lineTo(x + dp(10), y - dp(30));
-        beam.close();
-        paint.setShader(new LinearGradient(x, y - dp(36), x, y - dp(170),
-            new int[] { 0x44ffe9a0, 0x14ffe9a0, 0x00ffe9a0 }, null, Shader.TileMode.CLAMP));
-        canvas.drawPath(beam, paint);
-        paint.setShader(null);
-        paint.setShader(new LinearGradient(x - dp(28), y - dp(11), x + dp(27), y + dp(10),
-            new int[] { 0xff353a42, 0xffb7bdc4, 0xff292d33 }, null, Shader.TileMode.CLAMP));
-        canvas.drawRoundRect(new RectF(x - dp(28), y - dp(9), x + dp(24), y + dp(9)), dp(8), dp(8), paint);
-        paint.setShader(null);
-        paint.setColor(0xff24282d);
-        canvas.drawRoundRect(new RectF(x + dp(16), y - dp(14), x + dp(31), y + dp(14)), dp(5), dp(5), paint);
-        paint.setShader(new RadialGradient(x + dp(30), y, dp(13),
-            new int[] { 0xffffffff, 0xffffe7a0, 0xffd2a944 }, null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(x + dp(29), y, dp(8), paint);
-        paint.setShader(null);
-        canvas.restore();
-    }
-
-    private void drawFieldGuide(Canvas canvas, float w, float h) {
-        View focused = findFocused();
-        if (focused != null) updateTarget(focused);
-        if (targetX <= 0) { targetX = w * .47f; targetY = h * .53f; desiredTargetX = targetX; desiredTargetY = targetY; }
-        targetX += (desiredTargetX - targetX) * (reducedMotion ? 1f : .24f);
-        targetY += (desiredTargetY - targetY) * (reducedMotion ? 1f : .24f);
-        float tx = targetX;
-        float ty = targetY;
-        float kingX = w - dp(48), kingY = Math.min(h - dp(145), ty + dp(90));
-        int layer = canvas.saveLayer(0, 0, w, h, null);
-        canvas.drawColor(0x66000000);
-        canvas.drawRoundRect(new RectF(tx - dp(51), ty - dp(36), tx + dp(51), ty + dp(36)), dp(12), dp(12), clearPaint);
-        canvas.restoreToCount(layer);
-        drawKing(canvas, kingX, kingY, reducedMotion ? 0 : (float) Math.sin(SystemClock.uptimeMillis() / 850f) * .035f, .92f, false);
-        drawFlashlight(canvas, kingX - dp(18), kingY + dp(45), (float) Math.atan2(ty - kingY, tx - kingX));
-        paint.setColor(0x66ffe995);
-        paint.setStrokeWidth(dp(1.3f));
-        canvas.drawLine(kingX - dp(20), kingY + dp(40), tx, ty, paint);
-        paint.setColor(0x99ffe9a0);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1));
-        canvas.drawRoundRect(new RectF(tx - dp(42), ty - dp(27), tx + dp(42), ty + dp(27)), dp(12), dp(12), paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(dp(9));
-        paint.setColor(0xffffdd76);
-        canvas.drawText(targetLabel.toUpperCase(), tx, ty - dp(34), paint);
-        paint.setTextAlign(Paint.Align.LEFT);
-        postInvalidateDelayed(reducedMotion ? 220 : 40);
-    }
-
-    private View findFocused() {
-        for (Target target : targets) if (target.view.hasFocus()) return target.view;
-        return null;
-    }
-
-    private void updateTarget(View target) {
-        int[] p = new int[2];
-        target.getLocationOnScreen(p);
-        int[] own = new int[2];
-        getLocationOnScreen(own);
-        desiredTargetX = p[0] - own[0] + target.getWidth() * .5f;
-        desiredTargetY = p[1] - own[1] + target.getHeight() * .5f;
-        if (targetX <= 0) { targetX = desiredTargetX; targetY = desiredTargetY; }
-    }
-
-    private void drawReveal(Canvas canvas, float w, float h, boolean upward) {
-        int save = canvas.saveLayer(0, 0, w, h, null);
-        canvas.drawColor(0xff030303);
-        float edge = upward ? h * (1f - revealProgress) : h * revealProgress;
-        if (upward) canvas.drawRect(0, edge, w, h, clearPaint);
-        else canvas.drawRect(0, 0, w, edge, clearPaint);
-        float x = w * (upward ? .25f : .74f);
-        drawSpotlight(canvas, x, edge, upward);
-        canvas.restoreToCount(save);
-        drawHangingKing(canvas, x, edge - (upward ? dp(43) : -dp(43)), 0, 1f);
-        drawFlashlight(canvas, x + dp(23), edge, upward ? -1.05f : 1.05f);
-    }
-
-    private void drawSpotlight(Canvas canvas, float x, float y, boolean upward) {
-        float radius = dp(75);
-        paint.setShader(new RadialGradient(x, y, radius,
-            new int[] { 0x00ffffff, 0x44ffe69a, 0x00ffffff }, null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(x, y, radius, paint);
-        paint.setShader(null);
-        paint.setColor(0x77ffe9aa);
-        paint.setStrokeWidth(dp(2));
-        canvas.drawLine(x, y, x, y + (upward ? dp(90) : -dp(90)), paint);
-    }
-
-    private void drawArenaJourney(Canvas canvas, float w, float h, float progress) {
-        canvas.drawColor(0xff050505);
-        paint.setShader(new RadialGradient(w * .5f, h * .53f, w * .8f,
-            new int[] { 0xff1c1608, 0xff090806, 0xff020202 }, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, w, h, paint);
-        paint.setShader(null);
-        Path tunnel = new Path();
-        tunnel.moveTo(w * .12f, h * .82f);
-        tunnel.lineTo(w * .36f, h * .28f);
-        tunnel.quadTo(w * .5f, h * .12f, w * .64f, h * .28f);
-        tunnel.lineTo(w * .88f, h * .82f);
-        tunnel.close();
-        paint.setColor(0xff0d0c09);
-        canvas.drawPath(tunnel, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(2));
-        paint.setShader(new LinearGradient(w * .12f, h * .82f, w * .5f, h * .28f,
-            new int[] { 0x00d4a630, 0xfff2c757 }, null, Shader.TileMode.CLAMP));
-        canvas.drawLine(w * .12f, h * .82f, w * .36f, h * .28f, paint);
-        canvas.drawLine(w * .88f, h * .82f, w * .64f, h * .28f, paint);
-        paint.setShader(null);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(dp(18));
-        paint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
-        paint.setColor(0xffffd75e);
-        canvas.drawText("THE ARENA", w * .5f, h * .43f, paint);
-        paint.setTextSize(dp(10));
-        paint.setColor(0xffc6b477);
-        canvas.drawText("GOAL$GAMBIT", w * .5f, h * .48f, paint);
-        float x = w * (.5f + .27f * (1f - progress));
-        float y = h * (.78f - .34f * progress);
-        float r = dp(17) * (1f - progress * .7f);
-        paint.setShader(new RadialGradient(x - r * .25f, y - r * .3f, r * 1.3f,
-            new int[] { 0xffffffff, 0xffd7ae50, 0xff292725 }, null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(x, y, r, paint);
-        paint.setShader(null);
-        paint.setColor(0x66f5c94f);
-        paint.setStrokeWidth(dp(2));
-        canvas.drawLine(x - r, y + r * .9f, x - r - dp(70) * (1f - progress), y + r * 1.4f, paint);
-        if (progress > .65f) {
-            paint.setColor(Color.argb((int) (170 * ((progress - .65f) / .35f)), 255, 221, 116));
-            canvas.drawCircle(w * .5f, h * .55f, dp(8) * (1f - progress), paint);
-        }
-        paint.setTextAlign(Paint.Align.LEFT);
-    }
-
-    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
+    @Override protected void onSizeChanged(int w,int h,int oldw,int oldh) { super.onSizeChanged(w,h,oldw,oldh); updateCamera(w,h); }
+    @Override protected void onDetachedFromWindow() { stopFrames(); destroyViewer(); super.onDetachedFromWindow(); }
 }

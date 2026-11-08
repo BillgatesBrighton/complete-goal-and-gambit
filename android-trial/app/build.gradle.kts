@@ -9,14 +9,14 @@ val configuredApiBase = providers.gradleProperty("GG_TRIAL_API_BASE_URL")
 
 android {
     namespace = "com.goalgambit.trial"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.goalgambit.trial"
         minSdk = 24
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.2.1"
+        versionCode = 15
+        versionName = "1.3.0"
         buildConfigField("String", "API_BASE_URL", "\"" + configuredApiBase + "\"")
     }
 
@@ -37,6 +37,9 @@ android {
 }
 
 dependencies {
+    implementation("com.google.android.filament:filament-android:1.77.3")
+    implementation("com.google.android.filament:gltfio-android:1.77.3")
+    implementation("com.google.android.filament:filament-utils-android:1.77.3")
     implementation("io.socket:socket.io-client:2.1.2") {
         exclude(group = "org.json", module = "json")
     }
