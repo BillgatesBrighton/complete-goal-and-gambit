@@ -294,8 +294,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         addHeading(registering ? "Join the arena" : "Welcome back", registering ? "Create your GOAL$GAMBIT player account." : "Sign in to continue to your games.");
 
         EditText username = input("Username", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        username.setAutofillHints(View.AUTOFILL_HINT_USERNAME);
-        username.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        configureAutofill(username, View.AUTOFILL_HINT_USERNAME);
         authExperience.watch(username, "Username");
         content.addView(username, margins(-1, dp(52), 0, dp(14), 0, 0));
         EditText phone = null;
@@ -303,11 +302,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         EditText confirmPassword = null;
         if (registering) {
             phone = input("Phone number", InputType.TYPE_CLASS_PHONE);
-            phone.setAutofillHints(View.AUTOFILL_HINT_PHONE);
+            configureAutofill(phone, View.AUTOFILL_HINT_PHONE);
             authExperience.watch(phone, "Phone number");
             content.addView(phone, margins(-1, dp(52), 0, dp(10), 0, 0));
             email = input("Email address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-            email.setAutofillHints(View.AUTOFILL_HINT_EMAIL_ADDRESS);
+            configureAutofill(email, View.AUTOFILL_HINT_EMAIL_ADDRESS);
             authExperience.watch(email, "Email address");
             content.addView(email, margins(-1, dp(52), 0, dp(10), 0, 0));
 
@@ -332,14 +331,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         }
 
         EditText password = input("Password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        password.setAutofillHints(View.AUTOFILL_HINT_PASSWORD);
-        password.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        configureAutofill(password, View.AUTOFILL_HINT_PASSWORD);
         authExperience.watch(password, "Password");
         content.addView(passwordVisibilityRow(password), margins(-1, dp(52), 0, dp(8), 0, 0));
         if (registering) {
             confirmPassword = input("Confirm password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            confirmPassword.setAutofillHints(View.AUTOFILL_HINT_PASSWORD);
-            confirmPassword.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+            configureAutofill(confirmPassword, View.AUTOFILL_HINT_PASSWORD);
             authExperience.watch(confirmPassword, "Confirm password");
             content.addView(passwordVisibilityRow(confirmPassword), margins(-1, dp(52), 0, dp(8), 0, 0));
             TextView emailNotice = text("A verified email address is required. GOAL$GAMBIT will send the verification email using its existing account flow.", 12, SUBTLE, false);
@@ -423,6 +420,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         buttonParams.setMargins(dp(7), 0, 0, 0);
         row.addView(toggle, buttonParams);
         return row;
+    }
+
+    private void configureAutofill(View field, String hint) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            field.setAutofillHints(hint);
+            field.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        }
     }
 
     private void savePasswordWithAndroid(EditText username, EditText password, boolean requested) {

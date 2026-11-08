@@ -4,8 +4,6 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -16,6 +14,7 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewTreeObserver;
@@ -31,7 +30,7 @@ final class AuthExperienceView extends View {
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     private final Paint clearPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Bitmap logo;
+    private final Drawable logo;
     private final List<Target> targets = new ArrayList<>();
     private Mode mode = Mode.LOGIN;
     private long modeStarted = SystemClock.uptimeMillis();
@@ -58,11 +57,11 @@ final class AuthExperienceView extends View {
         setLayerType(View.LAYER_TYPE_HARDWARE, null);
         setClickable(false);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-        try {
-            logo = BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
-        } catch (RuntimeException ignored) {
-            throw new IllegalStateException("The GOAL$GAMBIT Player App logo could not be loaded.");
-        }
+        Drawable appLogo = null;
+        try { appLogo = context.getDrawable(R.mipmap.ic_launcher); }
+        catch (RuntimeException ignored) {}
+        if (appLogo == null) throw new IllegalStateException("The GOAL$GAMBIT Player App logo could not be loaded.");
+        logo = appLogo.mutate();
         try {
             reducedMotion = android.provider.Settings.Global.getFloat(
                 context.getContentResolver(), android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f;
@@ -234,9 +233,10 @@ final class AuthExperienceView extends View {
         canvas.drawCircle(cx, cy, size * .85f, paint);
         paint.setShader(null);
         RectF dst = new RectF(cx - size / 2f, cy - size / 2f, cx + size / 2f, cy + size / 2f);
-        paint.setAlpha(244);
-        canvas.drawBitmap(logo, null, dst, paint);
-        paint.setAlpha(255);
+        logo.setBounds((int) dst.left, (int) dst.top, (int) dst.right, (int) dst.bottom);
+        logo.setAlpha(244);
+        logo.draw(canvas);
+        logo.setAlpha(255);
         canvas.save();
         canvas.clipRect(dst);
         float shine = (SystemClock.uptimeMillis() % 2800L) / 2800f;
