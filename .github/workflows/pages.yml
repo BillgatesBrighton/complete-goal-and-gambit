@@ -7,6 +7,8 @@ on:
     paths:
       - "frontend/**"
       - "index.html"
+      - "robots.txt"
+      - "sitemap.xml"
       - ".nojekyll"
   workflow_dispatch:
 
@@ -34,7 +36,7 @@ jobs:
         run: |
           mkdir -p _site/frontend
           cp -R frontend/. _site/frontend/
-          cp index.html .nojekyll _site/
+          cp index.html .nojekyll robots.txt sitemap.xml _site/
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
