@@ -2,13 +2,16 @@
   "id": "./",
   "name": "GOAL$GAMBIT",
   "short_name": "GOAL$GAMBIT",
-  "description": "Chess and eFootball matches",
-  "start_url": "pages/dashboard.html",
+  "description": "Play competitive chess and eFootball matches with GOAL$GAMBIT.",
+  "start_url": "pages/index.html",
   "scope": "./",
   "display": "standalone",
   "background_color": "#080808",
   "theme_color": "#080808",
+  "categories": ["games", "sports"],
   "icons": [
-    { "src": "images/notification-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "images/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "images/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "images/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
