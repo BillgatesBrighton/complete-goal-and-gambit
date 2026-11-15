@@ -1,0 +1,77 @@
+/* Quiet, animated gold illumination shared across GOAL$GAMBIT pages. */
+body {
+    isolation: isolate;
+}
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: -32%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(ellipse 36% 29% at 13% 17%, rgba(244, 189, 32, 0.14), transparent 74%),
+        radial-gradient(ellipse 34% 31% at 86% 78%, rgba(255, 215, 90, 0.11), transparent 72%),
+        radial-gradient(ellipse 23% 21% at 52% 48%, rgba(244, 189, 32, 0.055), transparent 78%);
+    opacity: 0.62;
+    transform: translate3d(-1.1%, -0.4%, 0) scale(0.985);
+    animation: gg-ambient-gold 22s ease-in-out infinite alternate;
+    will-change: transform, opacity;
+}
+
+/* Let the landing-page artwork catch the same moving gold light. */
+body.gg-homepage .hero::before {
+    content: "";
+    position: absolute;
+    inset: -24%;
+    z-index: 3;
+    pointer-events: none;
+    background:
+        radial-gradient(ellipse 34% 43% at 20% 43%, rgba(255, 203, 66, 0.24), transparent 73%),
+        radial-gradient(ellipse 27% 38% at 82% 58%, rgba(244, 189, 32, 0.18), transparent 74%);
+    opacity: 0.48;
+    mix-blend-mode: screen;
+    transform: translate3d(-1.2%, 0, 0);
+    animation: gg-hero-gold 18s ease-in-out infinite alternate;
+    will-change: transform, opacity;
+}
+
+body.gg-homepage .hero-content {
+    z-index: 4;
+}
+
+@keyframes gg-ambient-gold {
+    0% {
+        opacity: 0.42;
+        transform: translate3d(-1.2%, -0.4%, 0) scale(0.985);
+    }
+    50% {
+        opacity: 0.72;
+        transform: translate3d(0.7%, 0.5%, 0) scale(1.01);
+    }
+    100% {
+        opacity: 0.52;
+        transform: translate3d(1.1%, -0.3%, 0) scale(0.995);
+    }
+}
+
+@keyframes gg-hero-gold {
+    0% {
+        opacity: 0.32;
+        transform: translate3d(-1.2%, -0.3%, 0) scale(0.99);
+    }
+    100% {
+        opacity: 0.58;
+        transform: translate3d(1.2%, 0.5%, 0) scale(1.02);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body::before,
+    body.gg-homepage .hero::before {
+        animation: none;
+        opacity: 0.52;
+        transform: none;
+        will-change: auto;
+    }
+}
