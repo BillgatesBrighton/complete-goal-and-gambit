@@ -109,14 +109,12 @@ const androidPushService = createAndroidPushService(pool);
 const pushService = {
     status: function () {
         return Object.assign({}, webPushService.status(), {
-            configured: false,
-            webPushDisabled: true,
+            webPushDisabled: false,
             androidConfigured: androidPushService.status().configured
         });
     },
     enqueueNotification: async function (client, userId, notification) {
-        const androidOnlyNotification = Object.assign({}, notification || {}, { androidOnly: true });
-        const event = await webPushService.enqueueNotification(client, userId, androidOnlyNotification);
+        const event = await webPushService.enqueueNotification(client, userId, notification || {});
         if (event.created) {
             await client.query("SAVEPOINT android_push_enqueue");
             try {
@@ -131,9 +129,13 @@ const pushService = {
         return event;
     },
     sendPendingJobs: function () {
-        return androidPushService.sendPendingJobs();
+        return Promise.all([
+            webPushService.sendPendingJobs(),
+            androidPushService.sendPendingJobs()
+        ]);
     },
     start: function () {
+        webPushService.start();
         androidPushService.start();
         chessScheduleReminders.start();
         adminAnnouncementReminders.start();
