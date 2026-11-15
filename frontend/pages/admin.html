@@ -17,7 +17,7 @@
     <div id="accessMessage">Checking administrator access…</div>
     <a id="loginFallback" href="login.html" hidden>Sign in again</a>
   </main>
-  <script src="../js/api.js?v=20261108-server-health"></script>
+  <script src="../js/api.js?v=20261115-auth-message-sanitization"></script>
   <script>
     (function () {
       "use strict";
@@ -50,7 +50,7 @@
           if (response.status === 403) {
             var denial = {};
             try { denial = await response.json(); } catch (_) {}
-            showAccessMessage(denial.message || "The server did not authorize this account for the Admin Desk. Confirm that this account is active and has the administrator role.", false);
+            showAccessMessage("Administrator access is required for this page. Sign in with an administrator account.", false);
             return;
           }
           if (!response.ok) throw new Error("Could not load the administrator dashboard (HTTP " + response.status + ").");

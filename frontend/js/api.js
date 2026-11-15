@@ -346,6 +346,17 @@
                 });
             }
 
+            // Do not surface credential-validation details to page UI. Keep
+            // ordinary login and password errors useful while hiding backend
+            // token/session internals anywhere a response message is rendered.
+            if (data && typeof data.message === "string" &&
+                (/\b(?:jwt|bearer token|access token|refresh token|authorization header)\b|\b(?:authentication|auth)\s+(?:token|session)\b|\b(?:invalid|expired|missing|required|revoked|malformed)\b.{0,40}\b(?:token|session)\b|\b(?:token|session)\b.{0,40}\b(?:invalid|expired|missing|revoked)\b|session expired after an account change/i.test(data.message) ||
+                    (response.status === 401 && /^account not found\.?$/i.test(data.message.trim())))) {
+                data = Object.assign({}, data, {
+                    message: "Your sign-in could not be verified. Please sign in again."
+                });
+            }
+
             if (response.status === 401 && token && !options.noRedirect) {
                 clearSession();
                 location.href = "login.html";

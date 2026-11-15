@@ -459,7 +459,7 @@ body {
 
 </style>
 
-<script src="../js/api.js?v=20261108-server-health"></script>
+<script src="../js/api.js?v=20261115-auth-message-sanitization"></script>
 
 </head>
 
@@ -1203,35 +1203,10 @@ async function findMatch() {
         );
 
 
-        /*
-         * If the backend explicitly says
-         * authentication failed, remove the
-         * invalid token.
-         */
-
-        const lower =
-            message.toLowerCase();
-
-
-        if (
-            lower.includes(
-                "authentication token"
-            ) ||
-            lower.includes(
-                "invalid token"
-            ) ||
-            lower.includes(
-                "token expired"
-            ) ||
-            lower.includes(
-                "unauthorized"
-            )
-        ) {
-
-            localStorage.removeItem(
-                "goalGambitToken"
-            );
-
+        // Use the response status to recover from expired credentials. The
+        // backend's internal token/session diagnostic is intentionally hidden.
+        if (server.status === 401) {
+            GG.clearSession();
         }
 
         return;

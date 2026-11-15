@@ -205,6 +205,9 @@ async function api(path, options={}){
   try{
     const r=await fetch(apiBase()+path,{method:options.method||"GET",headers,body:options.body!==undefined?JSON.stringify(options.body):undefined,signal:options.signal});
     let data={}; try{data=await r.json()}catch(_){ }
+    if(data&&typeof data.message==="string"&&(/\b(?:jwt|bearer token|access token|refresh token|authorization header)\b|\b(?:authentication|auth)\s+(?:token|session)\b|\b(?:invalid|expired|missing|required|revoked|malformed)\b.{0,40}\b(?:token|session)\b|\b(?:token|session)\b.{0,40}\b(?:invalid|expired|missing|revoked)\b|session expired after an account change/i.test(data.message)||(r.status===401&&/^account not found\.?$/i.test(data.message.trim())))){
+      data.message="Your sign-in could not be verified. Please sign in again.";
+    }
     if(r.status===401){localStorage.removeItem("goalGambitToken");location.href="login.html"}
     return {ok:r.ok,status:r.status,data};
   }catch(_){return {ok:false,status:0,data:{message:"Live match connection lost. Your game is still saved; reconnect and try again."}}}
