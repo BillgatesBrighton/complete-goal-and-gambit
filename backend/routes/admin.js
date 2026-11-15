@@ -488,11 +488,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 return res.status(404).json({success:false,message:"Account not found."});
             }
             await client.query("INSERT INTO wallets(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING", [userId]);
-            const wallet = await client.query("SELECT balance,locked_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [userId]);
+            const wallet = await client.query("SELECT balance,locked_balance,withdrawal_reserved_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [userId]);
             const previous = Number(wallet.rows[0].balance);
             const updated = await client.query(
                 `UPDATE wallets SET balance=balance+$1,updated_at=NOW()
-                  WHERE user_id=$2 AND balance+$1 >= 0
+                  WHERE user_id=$2 AND balance-withdrawal_reserved_balance+$1 >= 0
                   RETURNING balance,locked_balance`,
                 [amount, userId]
             );

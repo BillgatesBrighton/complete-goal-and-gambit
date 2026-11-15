@@ -1021,7 +1021,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             if (candidate.rows.length) {
                 if (stake > 0) {
                     const locked = await client.query(
-                        "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
+                        "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance-withdrawal_reserved_balance >= $1 RETURNING user_id",
                         [stake, userId]
                     );
                     if (!locked.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + stake.toFixed(2) + " to join this match."), { status: 402 });
@@ -1081,7 +1081,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
 
             if (stake > 0) {
                 const locked = await client.query(
-                    "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
+                    "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance-withdrawal_reserved_balance >= $1 RETURNING user_id",
                     [stake, userId]
                 );
                 if (!locked.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + stake.toFixed(2) + " to join this match."), { status: 402 });
@@ -1427,7 +1427,7 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
 
             if (Number(match.stake_amount) > 0) {
                 const wallet = await client.query(
-                    "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance >= $1 RETURNING user_id",
+                    "UPDATE wallets SET balance=balance-$1, locked_balance=locked_balance+$1, updated_at=NOW() WHERE user_id=$2 AND balance-withdrawal_reserved_balance >= $1 RETURNING user_id",
                     [match.stake_amount, userId]
                 );
                     if (!wallet.rows.length) throw Object.assign(new Error("Insufficient available wallet balance. You need KSh " + Number(match.stake_amount).toFixed(2) + " to join this match."), { status: 402 });

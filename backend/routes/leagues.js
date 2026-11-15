@@ -198,7 +198,7 @@ module.exports = function (pool, authenticateToken) {
             if (fee > 0) {
                 const w = await client.query(
                     `UPDATE wallets SET balance = balance - $1, updated_at = NOW()
-                      WHERE user_id = $2 AND balance >= $1 RETURNING balance`, [fee, uid]);
+                      WHERE user_id = $2 AND balance-withdrawal_reserved_balance >= $1 RETURNING balance`, [fee, uid]);
                 if (!w.rows.length) {
                     throw Object.assign(
                         new Error("Insufficient available wallet balance. You need KSh " + fee.toFixed(2) + " to join the " + league.name + " League."),

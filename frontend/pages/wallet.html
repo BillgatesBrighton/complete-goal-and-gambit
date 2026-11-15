@@ -102,6 +102,13 @@ main {
     transition: 0.25s;
 }
 
+.balance-detail {
+    margin: 8px 0 0;
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
 .balance-amount.updated {
     animation: balancePop 0.45s ease;
 }
@@ -427,8 +434,8 @@ Manage your funds.
 </h1>
 
 <p>
-Deposit funds for competitions or request a manual withdrawal. Your balance is
-deducted only after the admin confirms the M-Pesa payment.
+Deposit funds for competitions or request a manual withdrawal. Pending withdrawal
+funds are reserved and deducted from your wallet balance only after the admin confirms payment.
 </p>
 
 </section>
@@ -436,12 +443,14 @@ deducted only after the admin confirms the M-Pesa payment.
 <section class="balance">
 
 <div class="small-label">
-Available Balance
+Wallet Balance
 </div>
 
 <div class="balance-amount" id="balance">
 KSh 0.00
 </div>
+
+<p class="balance-detail" id="walletAvailabilityDetails" role="status" aria-live="polite">Available to use: KSh 0.00</p>
 
 </section>
 
@@ -608,6 +617,8 @@ var TYPE_LABELS = {
 
 
 var currentBalance = 0;
+var currentAvailableBalance = 0;
+var currentReservedWithdrawalBalance = 0;
 var pendingWithdrawalRefreshTimer = null;
 var trackedWithdrawalReference = null;
 
@@ -633,6 +644,10 @@ function updateWithdrawalEstimate() {
     var rate = withdrawalFeeRate(amount);
     var fee = Math.round(amount * rate);
     var payout = amount - fee;
+    if (amount > currentAvailableBalance) {
+        estimate.textContent = "Amount exceeds your available balance of " + GG.formatMoney(currentAvailableBalance) + ".";
+        return;
+    }
     estimate.textContent =
         "Estimated payout: " + GG.formatMoney(payout);
 
@@ -732,6 +747,14 @@ function updateBalance(animate) {
     el.textContent =
         GG.formatMoney(currentBalance);
 
+    var details = document.getElementById("walletAvailabilityDetails");
+    if (details) {
+        details.textContent = "Available to use: " + GG.formatMoney(currentAvailableBalance) +
+            (currentReservedWithdrawalBalance > 0
+                ? " · Pending withdrawal reserved: " + GG.formatMoney(currentReservedWithdrawalBalance) + " (not deducted until payment is confirmed)"
+                : "");
+    }
+
 
     localStorage.setItem(
         "goalGambitBalance",
@@ -767,6 +790,8 @@ async function loadWallet(animate) {
             Number(
                 result.data.wallet.balance || 0
             );
+        currentAvailableBalance = Number(result.data.wallet.availableBalance ?? currentBalance);
+        currentReservedWithdrawalBalance = Number(result.data.wallet.reservedWithdrawalBalance || 0);
 
         updateBalance(animate);
 
@@ -1283,6 +1308,8 @@ async function withdraw() {
 
         if (result.data.wallet) {
             currentBalance = Number(result.data.wallet.balance || 0);
+            currentAvailableBalance = Number(result.data.wallet.availableBalance ?? currentBalance);
+            currentReservedWithdrawalBalance = Number(result.data.wallet.reservedWithdrawalBalance || 0);
             updateBalance(true);
         }
         await loadTransactions(trackedWithdrawalReference);

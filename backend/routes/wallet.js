@@ -135,7 +135,7 @@ const routerFactory = function(
                 "SELECT 1 FROM manual_withdrawal_requests WHERE user_id=$1 AND status='pending' LIMIT 1",
                 [userId]
             );
-            const availableBalance = Number(walletResult.rows[0].balance || 0);
+            const availableBalance = Math.max(0, Number(walletResult.rows[0].balance || 0) - Number(walletResult.rows[0].withdrawal_reserved_balance || 0));
             const eligible = availableBalance >= amount && pending.rows.length === 0;
             return res.json({
                 success: true,
@@ -239,7 +239,7 @@ const routerFactory = function(
                         reservedWithdrawalBalance: Number(wallet.withdrawal_reserved_balance || 0),
 
                         availableBalance:
-                            balance,
+                            Math.max(0, balance - Number(wallet.withdrawal_reserved_balance || 0)),
 
                         currency:
                             wallet.currency,
@@ -336,7 +336,7 @@ const routerFactory = function(
                     wallet: {
                         balance: Number(newBalance.toFixed(2)),
                         lockedBalance: Number(wallet.locked_balance || 0),
-                        availableBalance: Number(newBalance.toFixed(2)),
+                        availableBalance: Number((newBalance - Number(wallet.withdrawal_reserved_balance || 0)).toFixed(2)),
                         currency: wallet.currency
                     }
                 });
@@ -387,7 +387,8 @@ const routerFactory = function(
                     [userId]
                 );
                 if (!walletResult.rows.length) throw Object.assign(new Error("Wallet not found."), { status: 404 });
-                if (Number(walletResult.rows[0].balance || 0) < amount) {
+                const availableBalance = Number(walletResult.rows[0].balance || 0) - Number(walletResult.rows[0].withdrawal_reserved_balance || 0);
+                if (availableBalance < amount) {
                     throw Object.assign(new Error("Insufficient available balance."), { status: 400 });
                 }
                 const pending = await client.query(
@@ -398,16 +399,15 @@ const routerFactory = function(
                     throw Object.assign(new Error("You already have a withdrawal request awaiting admin payment."), { status: 409 });
                 }
                 const reserved = await client.query(
-                    `UPDATE wallets SET balance=balance-$1,
-                            withdrawal_reserved_balance=withdrawal_reserved_balance+$1,updated_at=NOW()
-                      WHERE user_id=$2 AND balance >= $1 RETURNING balance,withdrawal_reserved_balance`,
+                    `UPDATE wallets SET withdrawal_reserved_balance=withdrawal_reserved_balance+$1,updated_at=NOW()
+                      WHERE user_id=$2 AND balance-withdrawal_reserved_balance >= $1 RETURNING balance,withdrawal_reserved_balance`,
                     [amount, userId]
                 );
                 if (!reserved.rows.length) throw Object.assign(new Error("Insufficient available balance."), { status: 400 });
                 await client.query(
                     `INSERT INTO manual_withdrawal_requests
-                     (reference,user_id,recipient_phone,total_amount,fee_amount,payout_amount,funds_reserved)
-                     VALUES($1,$2,$3,$4,$5,$6,TRUE)`,
+                     (reference,user_id,recipient_phone,total_amount,fee_amount,payout_amount,funds_reserved,balance_debited_at_request)
+                     VALUES($1,$2,$3,$4,$5,$6,TRUE,FALSE)`,
                     [reference, userId, mpesaPhone, amount, fee, payout]
                 );
                 await client.query(
@@ -434,13 +434,18 @@ const routerFactory = function(
                     success: true,
                     status: "pending",
                     reference,
+                    wallet: {
+                        balance: Number(reserved.rows[0].balance),
+                        reservedWithdrawalBalance: Number(reserved.rows[0].withdrawal_reserved_balance),
+                        availableBalance: Number((Number(reserved.rows[0].balance) - Number(reserved.rows[0].withdrawal_reserved_balance)).toFixed(2))
+                    },
                     fee,
                     feeRate,
                     payout,
                     message: "Withdrawal request received. The admin will manually send " +
                         "KSh " + payout.toLocaleString("en-KE") + " to your M-Pesa number. " +
                         "KSh " + amount.toLocaleString("en-KE") + " (including the processing fee) " +
-                        "has been reserved and cannot be spent while the request is pending."
+                        "has been reserved and cannot be spent while pending. It will be deducted from your wallet only after payment is confirmed."
                 });
             } catch (error) {
                 if (client) await client.query("ROLLBACK").catch(() => {});

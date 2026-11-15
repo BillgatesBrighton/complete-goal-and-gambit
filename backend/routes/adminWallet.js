@@ -82,7 +82,7 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
                             )
                             SELECT
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_available l ON l.account_id=w.user_id
-                                  WHERE COALESCE(w.balance,0)<>COALESCE(l.balance,0)) AS player_available_mismatches,
+                                  WHERE COALESCE(w.balance-w.withdrawal_reserved_balance,0)<>COALESCE(l.balance,0)) AS player_available_mismatches,
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_locked l ON l.account_id=w.user_id
                                   WHERE COALESCE(w.locked_balance,0)<>COALESCE(l.balance,0)) AS player_locked_mismatches,
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_withdrawal_reserved l ON l.account_id=w.user_id
@@ -163,7 +163,7 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
         try {
             await client.query("BEGIN");
             const requestResult = await client.query(
-                `SELECT id,reference,user_id,total_amount,fee_amount,payout_amount,recipient_phone,status,funds_reserved
+                `SELECT id,reference,user_id,total_amount,fee_amount,payout_amount,recipient_phone,status,funds_reserved,balance_debited_at_request
                    FROM manual_withdrawal_requests WHERE id=$1 FOR UPDATE`,
                 [requestId]
             );
@@ -178,11 +178,17 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
             );
             if (!walletResult.rows.length) throw Object.assign(new Error("Player wallet not found."), { status: 404 });
             const total = Number(request.total_amount);
+            const balanceDebitedAtRequest = request.balance_debited_at_request !== false;
             if (Number(walletResult.rows[0].withdrawal_reserved_balance || 0) < total) throw Object.assign(new Error("Reserved player funds do not reconcile with this withdrawal; it was not completed."), { status: 409 });
 
             const walletUpdate = await client.query(
-                "UPDATE wallets SET withdrawal_reserved_balance=withdrawal_reserved_balance-$1,updated_at=NOW() WHERE user_id=$2 AND withdrawal_reserved_balance >= $1 RETURNING balance,withdrawal_reserved_balance",
-                [total, request.user_id]
+                `UPDATE wallets
+                    SET balance=balance-CASE WHEN $3::boolean THEN 0 ELSE $1 END,
+                        withdrawal_reserved_balance=withdrawal_reserved_balance-$1,updated_at=NOW()
+                  WHERE user_id=$2 AND withdrawal_reserved_balance >= $1
+                    AND ($3::boolean OR balance >= $1)
+                  RETURNING balance,withdrawal_reserved_balance`,
+                [total, request.user_id, balanceDebitedAtRequest]
             );
             if (!walletUpdate.rows.length) throw Object.assign(new Error("Reserved player funds do not reconcile with this withdrawal."), { status: 409 });
             await client.query(
@@ -273,15 +279,19 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            const requestResult = await client.query("SELECT id,reference,user_id,total_amount,status,funds_reserved FROM manual_withdrawal_requests WHERE id=$1 FOR UPDATE", [requestId]);
+            const requestResult = await client.query("SELECT id,reference,user_id,total_amount,status,funds_reserved,balance_debited_at_request FROM manual_withdrawal_requests WHERE id=$1 FOR UPDATE", [requestId]);
             if (!requestResult.rows.length) throw Object.assign(new Error("Withdrawal request not found."), { status: 404 });
             const request = requestResult.rows[0];
             if (request.status !== "pending") throw Object.assign(new Error("Only a pending withdrawal can be cancelled."), { status: 409 });
             const amount = Number(request.total_amount);
             if (request.funds_reserved) {
+                const balanceDebitedAtRequest = request.balance_debited_at_request !== false;
                 const wallet = await client.query(
-                    `UPDATE wallets SET balance=balance+$1,withdrawal_reserved_balance=withdrawal_reserved_balance-$1,updated_at=NOW()
-                      WHERE user_id=$2 AND withdrawal_reserved_balance >= $1 RETURNING balance`, [amount, request.user_id]);
+                    `UPDATE wallets
+                        SET balance=balance+CASE WHEN $3::boolean THEN $1 ELSE 0 END,
+                            withdrawal_reserved_balance=withdrawal_reserved_balance-$1,updated_at=NOW()
+                      WHERE user_id=$2 AND withdrawal_reserved_balance >= $1
+                      RETURNING balance`, [amount, request.user_id, balanceDebitedAtRequest]);
                 if (!wallet.rows.length) throw Object.assign(new Error("Reserved funds do not reconcile; cancellation was stopped."), { status: 409 });
             }
             await client.query("UPDATE manual_withdrawal_requests SET status='cancelled',resolved_by=$2 WHERE id=$1", [requestId, Number(req.user.userId)]);

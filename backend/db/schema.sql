@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS manual_withdrawal_requests (
     status              VARCHAR(20) NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','completed','cancelled')),
     funds_reserved      BOOLEAN NOT NULL DEFAULT FALSE,
+    balance_debited_at_request BOOLEAN NOT NULL DEFAULT TRUE,
     requested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at        TIMESTAMPTZ,
     resolved_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -141,6 +142,20 @@ CREATE TABLE IF NOT EXISTS manual_withdrawal_requests (
     admin_cleared_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 ALTER TABLE manual_withdrawal_requests ADD COLUMN IF NOT EXISTS funds_reserved BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manual_withdrawal_requests ADD COLUMN IF NOT EXISTS balance_debited_at_request BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Upgrade legacy pending requests once: keep them unavailable while making
+-- the total wallet balance show the amount that will be deducted only on payout.
+WITH migrated AS (
+    UPDATE manual_withdrawal_requests
+       SET balance_debited_at_request=FALSE
+     WHERE status='pending' AND funds_reserved=TRUE AND balance_debited_at_request=TRUE
+     RETURNING user_id,total_amount
+), totals AS (
+    SELECT user_id,SUM(total_amount) AS amount FROM migrated GROUP BY user_id
+)
+UPDATE wallets w SET balance=w.balance+totals.amount,updated_at=NOW()
+  FROM totals WHERE w.user_id=totals.user_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_withdrawal_one_pending_per_user
     ON manual_withdrawal_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS idx_manual_withdrawal_admin_queue
@@ -1347,12 +1362,12 @@ END $$;
 -- journal. This is idempotent and does not alter any wallet balance.
 WITH source AS (
     SELECT 'OPENING-USER-'||w.user_id AS reference,w.user_id::bigint AS user_id,
-           w.balance::numeric(14,2) AS available,
+           (w.balance-w.withdrawal_reserved_balance)::numeric(14,2) AS available,
            w.locked_balance::numeric(14,2) AS locked,
            w.withdrawal_reserved_balance::numeric(14,2) AS withdrawal_reserved,
-           (w.balance+w.locked_balance+w.withdrawal_reserved_balance)::numeric(14,2) AS total
+           (w.balance+w.locked_balance)::numeric(14,2) AS total
       FROM wallets w
-     WHERE w.balance+w.locked_balance+w.withdrawal_reserved_balance>0
+     WHERE w.balance+w.locked_balance>0
 ), inserted AS (
     INSERT INTO financial_ledger_transactions(reference,transaction_type,amount,currency,description,context)
     SELECT reference,'wallet_opening_balance',total,'KES','One-time wallet opening balance imported for ledger reconciliation',

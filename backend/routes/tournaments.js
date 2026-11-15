@@ -361,7 +361,7 @@ module.exports = function (pool, authenticateToken, pushService) {
                     `UPDATE wallets
                      SET balance = balance - $1,
                          updated_at = NOW()
-                     WHERE user_id = $2 AND balance >= $1
+                     WHERE user_id = $2 AND balance-withdrawal_reserved_balance >= $1
                      RETURNING user_id`,
                     [fee, req.user.userId]
                 );

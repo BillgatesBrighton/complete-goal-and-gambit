@@ -560,7 +560,7 @@ const result =
             locked_balance = locked_balance + $1,
             updated_at = NOW()
         WHERE user_id = $2
-          AND balance >= $1
+          AND balance - withdrawal_reserved_balance >= $1
         RETURNING user_id
         `,
         [
