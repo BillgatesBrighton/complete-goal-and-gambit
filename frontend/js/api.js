@@ -20,6 +20,7 @@
         (needsDefaultBackend ? "http://localhost:5000" : githubPagesBackend);
     var TOKEN_KEY = "goalGambitToken";
     var POST_LOGIN_PATH_KEY = "goalGambitPostLoginPath";
+    var PROTECTED_PAGE_PATHS_KEY = "goalGambitProtectedPagePaths";
     // Resolve the frontend root from this shared script so the worker stays
     // inside /frontend on GitHub Pages and works from the backend's static root.
     var apiScriptUrl = document.currentScript && document.currentScript.src
@@ -38,6 +39,43 @@
     function getToken() {
         return localStorage.getItem(TOKEN_KEY);
     }
+
+    function rememberProtectedPage() {
+        try {
+            var pages = JSON.parse(sessionStorage.getItem(PROTECTED_PAGE_PATHS_KEY) || "[]");
+            if (!Array.isArray(pages)) pages = [];
+            if (pages.indexOf(location.pathname) === -1) pages.push(location.pathname);
+            if (pages.length > 100) pages = pages.slice(-100);
+            sessionStorage.setItem(PROTECTED_PAGE_PATHS_KEY, JSON.stringify(pages));
+        } catch (_) {}
+    }
+
+    function isRememberedProtectedPage(pathname) {
+        try {
+            var pages = JSON.parse(sessionStorage.getItem(PROTECTED_PAGE_PATHS_KEY) || "[]");
+            return Array.isArray(pages) && pages.indexOf(pathname) !== -1;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function returnToHomeIfLoggedOut(event) {
+        if (!event || !event.persisted || getToken()) return;
+        if (isRememberedProtectedPage(location.pathname)) {
+            location.replace(new URL("pages/index.html", frontendRootUrl).href);
+        }
+    }
+
+    function isBackNavigation() {
+        try {
+            var entries = performance.getEntriesByType("navigation");
+            return !!(entries.length && entries[0].type === "back_forward");
+        } catch (_) {
+            return false;
+        }
+    }
+
+    window.addEventListener("pageshow", returnToHomeIfLoggedOut);
 
     function rememberMatchRoomReturn() {
         if (!/\/pages\/match-room\.html$/i.test(location.pathname)) return;
@@ -196,7 +234,8 @@
     function logout() {
         disablePushNotifications({ silent: true }).catch(function() {}).finally(function() {
             clearSession();
-            location.href = "login.html";
+            try { sessionStorage.removeItem(POST_LOGIN_PATH_KEY); } catch (_) {}
+            location.replace(new URL("pages/index.html", frontendRootUrl).href);
         });
     }
 
@@ -375,10 +414,15 @@
     // Call at the top of any page that needs a logged-in user.
     function requireLogin() {
         if (!getToken()) {
+            if (isRememberedProtectedPage(location.pathname) && isBackNavigation()) {
+                location.replace(new URL("pages/index.html", frontendRootUrl).href);
+                return false;
+            }
             rememberMatchRoomReturn();
             location.href = "login.html";
             return false;
         }
+        rememberProtectedPage();
         startPresence();
         return true;
     }
