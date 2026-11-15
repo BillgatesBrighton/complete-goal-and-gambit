@@ -9,6 +9,7 @@ on:
       - "index.html"
       - "robots.txt"
       - "sitemap.xml"
+      - ".github/workflows/pages.yml"
       - ".nojekyll"
   workflow_dispatch:
 
