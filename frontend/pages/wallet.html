@@ -3,6 +3,7 @@
 <html lang="en">
 
 <head>
+    <meta name="robots" content="noindex">
 
 <meta charset="UTF-8">
 
@@ -434,8 +435,10 @@ Manage your funds.
 </h1>
 
 <p>
-Deposit funds for competitions or request a manual withdrawal. Pending withdrawal
-funds are reserved and deducted from your wallet balance only after the admin confirms payment.
+Deposit funds for competitions or request a manual M-Pesa withdrawal. The admin sends
+the payout to the number you enter. A pending withdrawal is reserved, but your wallet
+balance is deducted only after the admin confirms payment. Review the estimated fee and
+payout shown below before submitting.
 </p>
 
 </section>
@@ -519,7 +522,7 @@ inputmode="numeric"
 
 >
 
-<div class="phone-hint" id="withdrawalEstimate">
+<div class="phone-hint" id="withdrawalEstimate" role="status" aria-live="polite">
 Enter an amount to see the estimated payout.
 </div>
 
@@ -649,7 +652,8 @@ function updateWithdrawalEstimate() {
         return;
     }
     estimate.textContent =
-        "Estimated payout: " + GG.formatMoney(payout);
+        "Estimated M-Pesa payout: " + GG.formatMoney(payout) +
+        " · Withdrawal fee: " + GG.formatMoney(fee);
 
 }
 

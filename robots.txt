@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://billgatesbrighton.github.io/complete-goal-and-gambit/sitemap.xml

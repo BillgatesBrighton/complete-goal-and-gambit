@@ -9,6 +9,11 @@
     box-sizing: border-box;
 }
 
+*:focus-visible {
+    outline: 3px solid var(--gold, #f4bd20);
+    outline-offset: 3px;
+}
+
 html {
     scroll-behavior: smooth;
 }
@@ -291,26 +296,58 @@ img {
     z-index: 0;
 }
 
+.hero-art {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.hero-art img {
+    position: absolute;
+    top: 50%;
+    width: min(38vw, 520px);
+    height: min(76%, 550px);
+    object-fit: cover;
+    opacity: 0.62;
+    filter: saturate(0.78) contrast(1.05);
+    transform: translateY(-50%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.hero-art-chess {
+    left: -3%;
+    object-position: center;
+}
+
+.hero-art-football {
+    right: -3%;
+    width: min(35vw, 480px);
+    object-position: center;
+}
+
 .hero-overlay {
     position: absolute;
 
     inset: 0;
 
-    z-index: 1;
+    z-index: 2;
 
     background:
         linear-gradient(
             90deg,
-            rgba(0,0,0,0.95) 0%,
-            rgba(0,0,0,0.72) 48%,
-            rgba(0,0,0,0.35) 100%
+            rgba(0,0,0,0.48) 0%,
+            rgba(0,0,0,0.78) 38%,
+            rgba(0,0,0,0.78) 62%,
+            rgba(0,0,0,0.46) 100%
         );
 }
 
 .hero-content {
     position: relative;
 
-    z-index: 2;
+    z-index: 3;
 
     width: 90%;
     max-width: 950px;
@@ -600,7 +637,7 @@ img {
             rgba(0,0,0,0.96),
             rgba(0,0,0,0.08)
         ),
-        url("images/chess-background.jpg");
+        url("images/chess-background.webp");
 }
 
 .football-card {
@@ -610,7 +647,7 @@ img {
             rgba(0,0,0,0.96),
             rgba(0,0,0,0.08)
         ),
-        url("images/efootball-background.jpg");
+        url("images/efootball-background.webp");
 }
 
 .game-logo {
@@ -1172,6 +1209,10 @@ footer {
 
     .hero {
         min-height: 680px;
+    }
+
+    .hero-art {
+        display: none;
     }
 
     .hero h1 {
