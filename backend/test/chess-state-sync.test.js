@@ -50,6 +50,35 @@ async function startChessApi(pool, io, userId = 41, pushService, connectionMonit
     const app = express();
     app.use(express.json());
     const routePool = Object.create(pool);
+    routePool.query = typeof pool.query === "function"
+        ? function (sql, params) {
+            if (String(sql).includes("FROM auth_sessions s") && String(sql).includes("JOIN users u")) {
+                return Promise.resolve({ rows: [{ "1": 1 }] });
+            }
+            return pool.query(sql, params);
+        }
+        : undefined;
+    if (typeof pool.connect === "function") {
+        routePool.connect = async function () {
+            const client = await pool.connect();
+            return {
+                async query(sql, params) {
+                    const statement = String(sql).replace(/\s+/g, " ").trim();
+                    if (statement.startsWith("SET LOCAL ") ||
+                        /^SELECT pg_advisory_xact_lock(?:_shared)?\(\$1::integer,\$2::integer\)$/i.test(statement) ||
+                        (statement.includes("FROM auth_sessions s") && statement.includes("JOIN users u"))) {
+                        return { rows: statement.includes("FROM auth_sessions s") ? [{ "1": 1 }] : [] };
+                    }
+                    if (statement.includes("SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1")) {
+                        return { rows: [] };
+                    }
+                    return client.query(sql, params);
+                },
+                on: typeof client.on === "function" ? client.on.bind(client) : () => {},
+                release: typeof client.release === "function" ? client.release.bind(client) : () => {}
+            };
+        };
+    }
     if (typeof pool.query !== "function") {
         routePool.query = async function (sql) {
             if (String(sql).includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
@@ -57,7 +86,11 @@ async function startChessApi(pool, io, userId = 41, pushService, connectionMonit
         };
     }
     const router = chessRoutes(routePool, (req, _res, next) => {
-        req.user = { userId };
+        req.user = {
+            userId,
+            sessionId: "00000000-0000-4000-8000-" + String(userId).padStart(12, "0"),
+            authVersion: 0
+        };
         next();
     }, io, pushService, accountPresence);
     if (connectionMonitor) router.setConnectionMonitor(connectionMonitor);
@@ -138,10 +171,10 @@ test("unready match-room connections cannot move, resign, or change a draw resul
             return {
                 async query(sql) {
                     const text = String(sql).trim();
-                    if (text === "BEGIN" || text === "ROLLBACK") return { rows: [] };
+                    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
                     if (text === "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE") return { rows: [current] };
                     writes++;
-                    throw new Error("An unready match action must not write state.");
+                    throw new Error("An unready match action must not write state: " + text);
                 },
                 release() {}
             };
@@ -623,6 +656,7 @@ class FakeElement {
     addEventListener(name, callback) { this.listeners[name] = callback; }
     appendChild(child) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child); this.children.push(child); child.parentElement = this; child.parentNode = this; this.appendCount++; return child; }
     append(...children) { children.forEach(child => this.appendChild(child)); }
+    replaceChildren(...children) { this.children.forEach(child => { child.parentElement = null; child.parentNode = null; }); this.children = []; this.append(...children); }
     closest() { return null; }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     removeAttribute(name) { delete this.attributes[name]; }
@@ -826,10 +860,10 @@ test("white and black perspectives show the authenticated player below the board
         const squares = harness.board.getBoardSquares();
         if (color === "w") {
             assert.equal(squares.get("e1").element.style.gridRow, "8");
-            assert.equal(squares.get("e1").pieceUse.getAttribute("href"), "../images/chess-pieces.svg#wk");
+            assert.equal(squares.get("e1").pieceImage.src, "../images/chess-pieces/fantasy/wK.svg");
         } else {
             assert.equal(squares.get("e8").element.style.gridRow, "8");
-            assert.equal(squares.get("e8").pieceUse.getAttribute("href"), "../images/chess-pieces.svg#bk");
+            assert.equal(squares.get("e8").pieceImage.src, "../images/chess-pieces/fantasy/bK.svg");
         }
 
         const positionBeforeFlip = { fen: match.fen, pgn: match.pgn, activeColor: match.activeColor, playerColor: match.playerColor };
@@ -851,7 +885,9 @@ test("chess shell invalidates cached board code that controls player perspective
     assert.match(serviceWorker, /goal-gambit-chess-shell-v3/);
     assert.match(serviceWorker, /path \+= "\?v=20261027-player-name-sync"/);
     assert.match(serviceWorker, /self\.skipWaiting\(\)/);
-    assert.match(boardHtml, /board\.js\?v=20261027-player-name-sync/);
+    assert.match(boardHtml, /board\.js\?v=20261029-fantasy-svg-pieces/);
+    assert.match(serviceWorker, /caches\.match\(request, \{ ignoreSearch: true \}\)/,
+        "the chess shell can serve the current versioned board script from its path-based cache");
 });
 
 test("board coalesces refreshes, rejects stale responses, filters self events and cleans up switched matches", async () => {
@@ -1104,18 +1140,17 @@ test("premove is queued provisionally and submitted only after the opponent move
         (performance.now() - premoveReceivedAt).toFixed(3) + " ms.");
 });
 
-test("the board renderer references local scalable SVG silhouettes for all twelve pieces", () => {
+test("the board renderer references local scalable SVG artwork for all twelve pieces", () => {
     const harness = createBoardHarness(async () => { throw new Error("Piece rendering should not fetch"); }, { search: "" });
     harness.board.setMatchId(1);
     harness.board.applyState(browserMatch(1));
     const cells = harness.board.getBoardSquares();
-    assert.equal(cells.get("a1").pieceUse.attributes.href, "../images/chess-pieces.svg#wr");
-    assert.equal(cells.get("e1").pieceUse.attributes.href, "../images/chess-pieces.svg#wk");
-    assert.equal(cells.get("a8").pieceUse.attributes.href, "../images/chess-pieces.svg#br");
-    assert.equal(cells.get("e8").pieceUse.attributes.href, "../images/chess-pieces.svg#bk");
-    const svg = fs.readFileSync(path.join(__dirname, "../../frontend/images/chess-pieces.svg"), "utf8");
-    for (const id of ["wk", "wq", "wr", "wb", "wn", "wp", "bk", "bq", "br", "bb", "bn", "bp"])
-        assert.match(svg, new RegExp('<symbol id="' + id + '"'));
+    assert.equal(cells.get("a1").pieceImage.src, "../images/chess-pieces/fantasy/wR.svg");
+    assert.equal(cells.get("e1").pieceImage.src, "../images/chess-pieces/fantasy/wK.svg");
+    assert.equal(cells.get("a8").pieceImage.src, "../images/chess-pieces/fantasy/bR.svg");
+    assert.equal(cells.get("e8").pieceImage.src, "../images/chess-pieces/fantasy/bK.svg");
+    for (const id of ["wK", "wQ", "wR", "wB", "wN", "wP", "bK", "bQ", "bR", "bB", "bN", "bP"])
+        assert.ok(fs.statSync(path.join(__dirname, "../../frontend/images/chess-pieces/fantasy/" + id + ".svg")).isFile(), id);
 });
 
 test("premove can be cancelled and an opponent capture that makes it illegal is discarded", async () => {
@@ -1161,7 +1196,7 @@ test("server-confirmed connection pause freezes browser clocks and blocks both m
     harness.board.updateClocks();
     assert.equal(harness.board.getRemaining("w"), before);
     assert.equal(harness.board.getState().connectionPaused, true);
-    assert.match(harness.elements.get("gameStatus").textContent, /server has paused this game for both players/i);
+    assert.match(harness.elements.get("gameStatus").textContent, /this game is paused for both players/i);
     assert.equal(harness.elements.get("drawButton").hidden, true);
     assert.equal(harness.elements.get("resignButton").hidden, true);
     assert.equal(posts, 0);

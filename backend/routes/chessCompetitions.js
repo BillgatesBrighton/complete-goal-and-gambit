@@ -5,6 +5,8 @@ const crypto = require("crypto");
 const { settleClosedChessTournamentSeasons } = require("../services/chessTournamentPayouts");
 const { creditPlatform } = require("../services/adminWalletAccounting");
 const { recordJournal } = require("../services/financialLedger");
+const { lockActiveAuthSession } = require("../services/authSession");
+const { currentChessSeason, lockChessTournamentGroup } = require("../services/chessTournamentSync");
 
 const SUPPORTED_TIME_CONTROLS = new Set(["10+5", "3+2", "1+1"]);
 
@@ -17,11 +19,13 @@ function chessStandingSql(matchType) {
               FROM chess_matches m
              WHERE m.match_type = $1
                AND m.status = 'completed'
-               AND COALESCE(m.finished_at, m.created_at) >= date_trunc('month', NOW())
+               AND m.result IS DISTINCT FROM 'no_contest'
+               AND ($1 = 'tournament' OR COALESCE(m.finished_at, m.created_at) >= date_trunc('month', NOW()))
                AND m.player_white_id IS NOT NULL
                AND m.player_black_id IS NOT NULL
                AND ($2::varchar IS NULL OR m.time_control = $2)
                AND ($3::numeric IS NULL OR m.stake_amount = $3)
+               AND ($1 <> 'tournament' OR m.season_key=$4)
             UNION ALL
             SELECT m.player_black_id AS user_id,
                    CASE WHEN m.result = 'draw' THEN 'draw'
@@ -29,24 +33,26 @@ function chessStandingSql(matchType) {
               FROM chess_matches m
              WHERE m.match_type = $1
                AND m.status = 'completed'
-               AND COALESCE(m.finished_at, m.created_at) >= date_trunc('month', NOW())
+               AND m.result IS DISTINCT FROM 'no_contest'
+               AND ($1 = 'tournament' OR COALESCE(m.finished_at, m.created_at) >= date_trunc('month', NOW()))
                AND m.player_white_id IS NOT NULL
                AND m.player_black_id IS NOT NULL
                AND ($2::varchar IS NULL OR m.time_control = $2)
                AND ($3::numeric IS NULL OR m.stake_amount = $3)
+               AND ($1 <> 'tournament' OR m.season_key=$4)
         ), participants AS (
             SELECT r.user_id FROM player_results r
              WHERE $1 <> 'tournament' OR EXISTS (
                 SELECT 1 FROM chess_tournament_entries e
                  WHERE e.user_id=r.user_id
-                   AND e.season_key=TO_CHAR(date_trunc('month',NOW()),'YYYY-MM')
+                   AND e.season_key=$4
                    AND e.time_control=$2 AND e.stake_amount=$3
                    AND e.cancelled_at IS NULL AND e.forfeited_at IS NULL
              )
             UNION
             SELECT user_id FROM chess_tournament_entries
              WHERE $1='tournament'
-               AND season_key=TO_CHAR(date_trunc('month',NOW()),'YYYY-MM')
+               AND season_key=$4
                AND ($2::varchar IS NULL OR time_control=$2)
                AND ($3::numeric IS NULL OR stake_amount=$3)
                AND cancelled_at IS NULL AND forfeited_at IS NULL
@@ -86,37 +92,56 @@ module.exports = function (pool, authenticateToken) {
         if (!Number.isSafeInteger(userId) || userId < 1 || !SUPPORTED_TIME_CONTROLS.has(timeControl) || ![20, 50, 100].includes(stake)) {
             return res.status(400).json({ success: false, message: "Choose a supported chess tournament clock and entry stake." });
         }
+        let client;
         try {
-            const account = await pool.query(
+            client = await pool.connect();
+            await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            const seasonKey = await currentChessSeason(client);
+            await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["goal-gambit-chess-user:" + userId]);
+            await lockChessTournamentGroup(client, seasonKey, timeControl, stake, "shared");
+            if (await currentChessSeason(client) !== seasonKey) {
+                throw Object.assign(new Error("This tournament season just changed. Please try again."), { status: 409 });
+            }
+            const account = await client.query(
                 "SELECT game,account_status FROM users WHERE id=$1",
                 [userId]
             );
             if (!account.rows.length || account.rows[0].account_status !== "active") {
-                return res.status(403).json({ success: false, message: "Your account cannot enter a chess tournament." });
+                throw Object.assign(new Error("Your account cannot enter a chess tournament."), { status: 403 });
             }
             if (!["chess", "both"].includes(account.rows[0].game)) {
-                return res.status(403).json({ success: false, message: "Your account is not registered for Chess." });
+                throw Object.assign(new Error("Your account is not registered for Chess."), { status: 403 });
             }
-            const inserted = await pool.query(
+            const inserted = await client.query(
                 `INSERT INTO chess_tournament_entries(season_key,time_control,stake_amount,user_id)
-                 VALUES(TO_CHAR(date_trunc('month',NOW()),'YYYY-MM'),$1,$2,$3)
+                 VALUES($1,$2,$3,$4)
                  ON CONFLICT(season_key,time_control,stake_amount,user_id) DO UPDATE
                     SET cancelled_at=NULL
                   WHERE chess_tournament_entries.forfeited_at IS NULL
                  RETURNING id`,
-                [timeControl, stake, userId]
+                [seasonKey, timeControl, stake, userId]
             );
             if (!inserted.rows.length) {
-                return res.status(409).json({ success: false, message: "You have forfeited this chess tournament for the current month." });
+                throw Object.assign(new Error("You have forfeited this chess tournament for the current month."), { status: 409 });
             }
+            await client.query("COMMIT");
             return res.json({
                 success: true,
                 alreadyEntered: inserted.rowCount === 0,
                 message: "You are on the live tournament table. Your match stake is locked only when you join a game."
             });
         } catch (error) {
+            if (client) await client.query("ROLLBACK").catch(() => {});
+            if (Number(error.status) >= 400 && Number(error.status) < 500) {
+                return res.status(error.status).json({ success: false, message: error.message });
+            }
             console.error("Chess tournament entry error:", error.message);
             return res.status(500).json({ success: false, message: "Could not add you to the chess tournament table." });
+        } finally {
+            if (client) client.release();
         }
     });
 
@@ -128,7 +153,7 @@ module.exports = function (pool, authenticateToken) {
             return res.status(400).json({ success: false, message: "Choose a supported chess tournament clock and entry stake." });
         }
         try {
-            const seasonKey = await pool.query("SELECT TO_CHAR(date_trunc('month',NOW()),'YYYY-MM') AS season_key");
+            const seasonKey = await pool.query("SELECT TO_CHAR(date_trunc('month',clock_timestamp() AT TIME ZONE 'Africa/Nairobi'),'YYYY-MM') AS season_key");
             const season = seasonKey.rows[0].season_key;
             const entryResult = await pool.query(
                 `SELECT id,cancelled_at,forfeited_at,forfeited_amount
@@ -148,19 +173,20 @@ module.exports = function (pool, authenticateToken) {
                 });
             }
             const matchResult = await pool.query(
-                `SELECT id,status,started_at,finished_at
+                `SELECT id,status,result,started_at,finished_at
                    FROM chess_matches
                   WHERE match_type='tournament' AND time_control=$1 AND stake_amount=$2
-                    AND TO_CHAR(date_trunc('month',COALESCE(finished_at,created_at)),'YYYY-MM')=$3
+                    AND season_key=$3
                     AND (player_white_id=$4 OR player_black_id=$4)
                   ORDER BY id DESC`,
                 [timeControl,stake,season,userId]
             );
             const matches = matchResult.rows;
             const hasStartedMatch = matches.some(match =>
-                Boolean(match.started_at) || ["active","settling","completed"].includes(String(match.status))
+                Boolean(match.started_at) || ["active","settling"].includes(String(match.status)) ||
+                (String(match.status)==="completed" && match.result!=="no_contest")
             );
-            const hasCompletedMatch = matches.some(match => String(match.status) === "completed");
+            const hasCompletedMatch = matches.some(match => String(match.status) === "completed" && match.result!=="no_contest");
             const hasUnresolvedMatch = matches.some(match =>
                 ["active","settling"].includes(String(match.status)) ||
                 (Boolean(match.started_at) && !["completed","cancelled"].includes(String(match.status)))
@@ -196,12 +222,12 @@ module.exports = function (pool, authenticateToken) {
                          FROM chess_matches m
                         WHERE m.match_type='tournament' AND m.time_control=e.time_control
                           AND m.stake_amount=e.stake_amount
-                          AND TO_CHAR(date_trunc('month',COALESCE(m.finished_at,m.created_at)),'YYYY-MM')=e.season_key
+                          AND m.season_key=e.season_key
                           AND (m.player_white_id=e.user_id OR m.player_black_id=e.user_id)
                           AND m.status IN ('waiting','active','settling')
                         ORDER BY m.id DESC LIMIT 1
                    ) activity ON TRUE
-                  WHERE e.season_key=TO_CHAR(date_trunc('month',NOW()),'YYYY-MM')
+                 WHERE e.season_key=TO_CHAR(date_trunc('month',clock_timestamp() AT TIME ZONE 'Africa/Nairobi'),'YYYY-MM')
                     AND e.user_id=$1 AND e.cancelled_at IS NULL AND e.forfeited_at IS NULL
                   ORDER BY e.joined_at DESC,e.time_control,e.stake_amount`,
                 [userId]
@@ -229,12 +255,20 @@ module.exports = function (pool, authenticateToken) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            const currentSeason = await currentChessSeason(client);
             await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["goal-gambit-chess-user:" + userId]);
+            await lockChessTournamentGroup(client, currentSeason, timeControl, stake, "shared");
+            if (await currentChessSeason(client) !== currentSeason) {
+                throw Object.assign(new Error("This tournament season just changed. Please retry in the current season."), { status: 409 });
+            }
             const entryResult = await client.query(
                 `SELECT * FROM chess_tournament_entries
-                  WHERE season_key=TO_CHAR(date_trunc('month',NOW()),'YYYY-MM')
-                    AND time_control=$1 AND stake_amount=$2 AND user_id=$3 FOR UPDATE`,
-                [timeControl,stake,userId]
+                  WHERE season_key=$1
+                    AND time_control=$2 AND stake_amount=$3 AND user_id=$4 FOR UPDATE`,
+                [currentSeason,timeControl,stake,userId]
             );
             if (!entryResult.rows.length || entryResult.rows[0].cancelled_at) {
                 const error = Object.assign(new Error("You have not joined this chess tournament."), { status: 404 });
@@ -248,48 +282,66 @@ module.exports = function (pool, authenticateToken) {
             const matches = await client.query(
                 `SELECT * FROM chess_matches
                   WHERE match_type='tournament' AND time_control=$1 AND stake_amount=$2
-                    AND TO_CHAR(date_trunc('month',COALESCE(finished_at,created_at)),'YYYY-MM')=$3
+                    AND season_key=$3
                     AND (player_white_id=$4 OR player_black_id=$4)
                     AND status IN ('waiting','active','settling','completed')
                   ORDER BY id FOR UPDATE`,
                 [timeControl,stake,season,userId]
             );
             const started = matches.rows.some(match =>
-                Boolean(match.started_at) || ["active","settling","completed"].includes(String(match.status))
+                Boolean(match.started_at) || ["active","settling"].includes(String(match.status)) ||
+                (String(match.status)==="completed" && match.result!=="no_contest")
             );
             if (started) {
                 const error = Object.assign(new Error("Your first tournament match has started. Use Forfeit tournament instead."), { status: 409 });
                 throw error;
             }
+            const waitingMatches = matches.rows.filter(match => match.status === "waiting");
+            const waitingPlayerIds = Array.from(new Set(waitingMatches.flatMap(match =>
+                [Number(match.player_white_id), Number(match.player_black_id)].filter(id => Number.isSafeInteger(id) && id > 0)
+            ))).sort((a,b)=>a-b);
+            if (waitingPlayerIds.length) {
+                await client.query("SELECT user_id FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE", [waitingPlayerIds]);
+            }
             let refunded = 0;
-            for (const match of matches.rows) {
-                if (match.status !== "waiting" || Number(match.player_white_id) !== userId) continue;
+            let refundedToOpponent = 0;
+            for (const match of waitingMatches) {
+                const participants = [Number(match.player_white_id), Number(match.player_black_id)].filter(id=>Number.isSafeInteger(id)&&id>0);
                 const amount = Number(match.stake_amount || 0);
-                if (amount > 0) {
-                    const wallet = await client.query(
-                        `UPDATE wallets SET balance=balance+$1,locked_balance=locked_balance-$1,updated_at=NOW()
-                          WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
-                        [amount,userId]
-                    );
-                    if (!wallet.rows.length) throw new Error("The locked tournament stake could not be refunded safely.");
-                    const reference = `CHESS-TOURN-CANCEL-${match.id}-${crypto.randomUUID()}`;
+                for (const participantId of participants) {
+                    if (amount > 0) {
+                        const wallet = await client.query(
+                            `UPDATE wallets SET balance=balance+$1,locked_balance=locked_balance-$1,updated_at=NOW()
+                              WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`,
+                            [amount,participantId]
+                        );
+                        if (wallet.rowCount !== 1) throw new Error("A locked tournament stake could not be refunded safely.");
+                        const reference = `CHESS-TOURN-CANCEL-${match.id}-${participantId}`;
+                        await client.query(
+                            `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                             VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
+                            [participantId,amount,reference,`Chess ${timeControl} tournament search cancelled and stake refunded`]
+                        );
+                        await recordJournal(client, {
+                            reference: `${reference}-JOURNAL`,
+                            transactionType: "chess_tournament_search_refund",
+                            amount,
+                            description: `Chess ${timeControl} tournament search cancelled and stake refunded`,
+                            context: { userId: participantId, matchId: Number(match.id), seasonKey: season },
+                            postings: [
+                                { accountType: "chess_match_locked", accountId: participantId, debit: amount },
+                                { accountType: "user_wallet_available", accountId: participantId, credit: amount }
+                            ]
+                        });
+                    }
+                    if (participantId === userId) refunded += amount;
+                    else refundedToOpponent += amount;
                     await client.query(
-                        `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
-                         VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
-                        [userId,amount,reference,`Chess ${timeControl} tournament search cancelled and stake refunded`]
+                        `UPDATE chess_match_financial_dispositions
+                            SET disposition='refunded',reference=$3,settled_at=NOW()
+                          WHERE match_id=$1 AND user_id=$2 AND disposition='pending'`,
+                        [match.id,participantId,`CHESS-TOURN-CANCEL-${match.id}-${participantId}`]
                     );
-                    await recordJournal(client, {
-                        reference: `CHESS-TOURN-CANCEL-JOURNAL-${match.id}`,
-                        transactionType: "chess_tournament_search_refund",
-                        amount,
-                        description: `Chess ${timeControl} tournament search cancelled and stake refunded`,
-                        context: { userId, matchId: Number(match.id), seasonKey: season },
-                        postings: [
-                            { accountType: "chess_match_locked", accountId: userId, debit: amount },
-                            { accountType: "user_wallet_available", accountId: userId, credit: amount }
-                        ]
-                    });
-                    refunded += amount;
                 }
                 await client.query(
                     `UPDATE chess_matches SET status='cancelled',finished_at=NOW(),settled_at=NOW(),payout_status='refunded'
@@ -307,7 +359,7 @@ module.exports = function (pool, authenticateToken) {
                 success: true,
                 refunded,
                 message: refunded > 0
-                    ? "Tournament entry cancelled. KSh " + refunded.toFixed(2) + " was returned to your available wallet balance."
+                    ? "Tournament entry cancelled. KSh " + refunded.toFixed(2) + " was returned to your available wallet balance." + (refundedToOpponent > 0 ? " The paired opponent's KSh " + refundedToOpponent.toFixed(2) + " stake was also returned because the scheduled match was cancelled." : "")
                     : "Tournament entry cancelled. No tournament match stake had been locked."
             });
         } catch (error) {
@@ -330,9 +382,12 @@ module.exports = function (pool, authenticateToken) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            const seasonResult = await client.query("SELECT TO_CHAR(date_trunc('month',NOW()),'YYYY-MM') AS season_key");
-            const season = seasonResult.rows[0].season_key;
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            const season = await currentChessSeason(client);
             await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["goal-gambit-chess-user:" + userId]);
+            await lockChessTournamentGroup(client, season, timeControl, stake, "shared");
             const entryResult = await client.query(
                 `SELECT * FROM chess_tournament_entries
                   WHERE season_key=$1 AND time_control=$2 AND stake_amount=$3 AND user_id=$4 FOR UPDATE`,
@@ -349,13 +404,13 @@ module.exports = function (pool, authenticateToken) {
             const matches = await client.query(
                 `SELECT * FROM chess_matches
                   WHERE match_type='tournament' AND time_control=$1 AND stake_amount=$2
-                    AND TO_CHAR(date_trunc('month',COALESCE(finished_at,created_at)),'YYYY-MM')=$3
+                    AND season_key=$3
                     AND (player_white_id=$4 OR player_black_id=$4)
                     AND status IN ('waiting','active','settling','completed')
                   ORDER BY id FOR UPDATE`,
                 [timeControl,stake,season,userId]
             );
-            const hasCompletedMatch = matches.rows.some(match => String(match.status) === "completed");
+            const hasCompletedMatch = matches.rows.some(match => String(match.status) === "completed" && match.result!=="no_contest");
             if (!hasCompletedMatch) {
                 const error = Object.assign(new Error("Forfeit becomes available after your first tournament match is completed. Cancel before then to receive any locked search stake back."), { status: 409 });
                 throw error;
@@ -369,24 +424,54 @@ module.exports = function (pool, authenticateToken) {
                 throw error;
             }
             const waitingMatches = matches.rows.filter(match => match.status === "waiting");
+            const affectedWalletIds = Array.from(new Set([userId, ...waitingMatches.flatMap(match =>
+                [Number(match.player_white_id),Number(match.player_black_id)].filter(id=>Number.isSafeInteger(id)&&id>0)
+            )])).sort((a,b)=>a-b);
+            await client.query("SELECT user_id FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE", [affectedWalletIds]);
             for (const match of waitingMatches) {
-                await client.query(
-                    `UPDATE chess_matches SET status='cancelled',finished_at=NOW(),settled_at=NOW(),payout_status='forfeited'
-                      WHERE id=$1 AND status='waiting'`,
-                    [match.id]
-                );
+                const opponents = [Number(match.player_white_id),Number(match.player_black_id)].filter(id=>Number.isSafeInteger(id)&&id>0&&id!==userId);
+                const amount = Number(match.stake_amount || 0);
+                for (const opponentId of opponents) {
+                    if (amount > 0) {
+                        const wallet = await client.query(
+                            `UPDATE wallets SET balance=balance+$1,locked_balance=locked_balance-$1,updated_at=NOW()
+                              WHERE user_id=$2 AND locked_balance >= $1 RETURNING user_id`, [amount,opponentId]
+                        );
+                        if (wallet.rowCount !== 1) throw new Error("The paired opponent's locked tournament stake could not be refunded safely.");
+                        const refundReference = `CHESS-TOURN-FORFEIT-OPPONENT-${match.id}-${opponentId}`;
+                        await client.query(
+                            `INSERT INTO transactions(user_id,transaction_type,amount,currency,status,reference,description)
+                             VALUES($1,'match_refund',$2,'KES','completed',$3,$4)`,
+                            [opponentId,amount,refundReference,"Chess tournament search cancelled after the other entry was forfeited"]
+                        );
+                        await recordJournal(client, {
+                            reference: refundReference + "-JOURNAL",transactionType:"chess_tournament_search_refund",
+                            amount,description:"Chess tournament search cancelled after the other entry was forfeited",
+                            context:{userId:opponentId,matchId:Number(match.id),seasonKey:season},
+                            postings:[
+                                {accountType:"chess_match_locked",accountId:opponentId,debit:amount},
+                                {accountType:"user_wallet_available",accountId:opponentId,credit:amount}
+                            ]
+                        });
+                    }
+                    await client.query(
+                        `UPDATE chess_match_financial_dispositions
+                            SET disposition='refunded',reference=$3,settled_at=NOW()
+                          WHERE match_id=$1 AND user_id=$2 AND disposition='pending'`,
+                        [match.id,opponentId,`CHESS-TOURN-FORFEIT-OPPONENT-${match.id}-${opponentId}`]
+                    );
+                }
             }
             const contributions = await client.query(
-                `SELECT COALESCE(SUM(stake_amount),0)::numeric AS amount
-                   FROM chess_matches
-                  WHERE match_type='tournament' AND status='completed' AND payout_status='pending_competition'
-                    AND time_control=$1 AND stake_amount=$2
-                    AND TO_CHAR(date_trunc('month',COALESCE(finished_at,created_at)),'YYYY-MM')=$3
-                    AND (player_white_id=$4 OR player_black_id=$4)`,
-                [timeControl,stake,season,userId]
+                `SELECT COALESCE(SUM(d.stake_amount),0)::numeric AS amount
+                   FROM chess_match_financial_dispositions d
+                   JOIN chess_matches m ON m.id=d.match_id
+                  WHERE d.user_id=$1 AND d.season_key=$2 AND d.disposition='pending'
+                    AND m.match_type='tournament' AND m.time_control=$3 AND m.stake_amount=$4
+                    AND ((m.status='completed' AND m.payout_status='pending_competition') OR m.status='waiting')`,
+                [userId,season,timeControl,stake]
             );
             let forfeitedAmount = Number(contributions.rows[0].amount || 0);
-            for (const match of waitingMatches) forfeitedAmount += Number(match.stake_amount || 0);
             forfeitedAmount = Math.round(forfeitedAmount * 100) / 100;
 
             if (forfeitedAmount > 0) {
@@ -410,7 +495,29 @@ module.exports = function (pool, authenticateToken) {
                      VALUES($1,'chess_tournament_forfeit',$2,'KES','completed',$3,$4)`,
                     [userId,forfeitedAmount,reference,`Chess ${timeControl} KSh ${stake} tournament stake forfeited to admin wallets`]
                 );
+                await client.query(
+                    `UPDATE chess_match_financial_dispositions d
+                        SET disposition='admin_forfeited',reference=$1,settled_at=NOW()
+                       FROM chess_matches m
+                      WHERE d.match_id=m.id AND d.user_id=$2 AND d.disposition='pending'
+                        AND d.season_key=$3 AND m.match_type='tournament' AND m.time_control=$4 AND m.stake_amount=$5
+                        AND ((m.status='completed' AND m.payout_status='pending_competition') OR m.status='waiting')`,
+                    [reference,userId,season,timeControl,stake]
+                );
             }
+            for (const match of waitingMatches) {
+                await client.query(
+                    `UPDATE chess_matches SET status='cancelled',finished_at=NOW(),settled_at=NOW(),payout_status='forfeited'
+                      WHERE id=$1 AND status='waiting'`, [match.id]
+                );
+            }
+            await client.query(
+                `UPDATE chess_matches m SET payout_status='forfeited'
+                  WHERE m.match_type='tournament' AND m.season_key=$1 AND m.time_control=$2 AND m.stake_amount=$3
+                    AND m.status='completed' AND m.payout_status='pending_competition'
+                    AND NOT EXISTS (SELECT 1 FROM chess_match_financial_dispositions d WHERE d.match_id=m.id AND d.disposition='pending')`,
+                [season,timeControl,stake]
+            );
             await client.query(
                 `UPDATE chess_tournament_entries SET forfeited_at=NOW(),forfeited_amount=$1
                   WHERE id=$2 AND forfeited_at IS NULL`,
@@ -439,7 +546,7 @@ module.exports = function (pool, authenticateToken) {
         res.set("Cache-Control", "no-store");
         try {
             const [standings, fixtures] = await Promise.all([
-                pool.query(chessStandingSql("ranked"), ["ranked", null, null]),
+                pool.query(chessStandingSql("ranked"), ["ranked", null, null, null]),
                 pool.query(
                     `SELECT m.id, m.time_control, m.status, m.result, m.winner_id,
                             wu.username AS white_player, bu.username AS black_player,
@@ -480,29 +587,29 @@ module.exports = function (pool, authenticateToken) {
 
         try {
             await settleClosedChessTournamentSeasons(pool);
+            const seasonKey = await currentChessSeason(pool);
             const [standings, fixtures] = await Promise.all([
-                pool.query(chessStandingSql("tournament"), ["tournament", timeControl, stake]),
+                pool.query(chessStandingSql("tournament"), ["tournament", timeControl, stake, seasonKey]),
                 pool.query(
                     `SELECT m.id, m.time_control, m.stake_amount, m.status, m.result, m.winner_id,
                             wu.username AS white_player, bu.username AS black_player,
-                            m.created_at, m.started_at, m.finished_at
+                            m.created_at, m.started_at, m.finished_at,m.season_key,m.scheduled_at,m.deadline_at
                        FROM chess_matches m
                        LEFT JOIN users wu ON wu.id = m.player_white_id
                        LEFT JOIN users bu ON bu.id = m.player_black_id
                       WHERE m.match_type = 'tournament'
                         AND m.time_control = $1
                         AND m.stake_amount = $2
-                        AND (m.created_at >= date_trunc('month', NOW())
-                             OR m.status IN ('waiting', 'active', 'settling'))
+                        AND m.season_key=$3
                         AND m.status IN ('waiting', 'active', 'settling', 'completed')
                       ORDER BY COALESCE(m.finished_at, m.started_at, m.created_at) DESC, m.id DESC
                       LIMIT 50`,
-                    [timeControl, stake]
+                    [timeControl, stake, seasonKey]
                 )
             ]);
             return res.json({
                 success: true,
-                tournament: { timeControl, stake, season: "current_month" },
+                tournament: { timeControl, stake, season: seasonKey },
                 standings: standings.rows,
                 fixtures: fixtures.rows.map(row => ({
                     ...row,

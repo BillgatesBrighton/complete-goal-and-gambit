@@ -5,7 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const { settleEfootballMatch } = require("../services/efootballsettlement");
 const { recordJournal } = require("../services/financialLedger");
-const { safeStoragePath } = require("../services/privateEvidence");
+const { safeStoragePath, readPrivateImage } = require("../services/privateEvidence");
+const { encryptMessage } = require("../services/chatEncryption");
 const { createAdminOnly } = require("../middleware/adminAuthorization");
 
 const CASE_STATUSES = new Set(["open", "investigating", "awaiting_player", "awaiting_evidence", "escalated", "resolved", "dismissed"]);
@@ -260,7 +261,9 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             res.setHeader("Content-Disposition", "inline");
             res.setHeader("X-Content-Type-Options", "nosniff");
             res.setHeader("Cache-Control", "private, no-store");
-            return res.sendFile(file);
+            const image = await readPrivateImage(file);
+            res.setHeader("Content-Length",image.length);
+            return res.end(image);
         } catch (error) {
             console.error("Admin complaint evidence read failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not open evidence." });
@@ -358,7 +361,12 @@ module.exports = function createAdminComplaintCases(pool, authenticateToken, pus
             );
             const threadId = threadInsert.rows[0] ? threadInsert.rows[0].id : (await client.query("SELECT id FROM chat_threads WHERE thread_type='support' AND user_one_id=$1 AND user_two_id IS NULL ORDER BY id LIMIT 1", [targetId])).rows[0].id;
             const playerFacing = `Admin requested ${requestType === "evidence" ? "evidence" : "clarification"} for complaint ${record.complaint_ref}: ${message}`;
-            await client.query("INSERT INTO chat_messages(thread_id,sender_id,message) VALUES($1,$2,$3)", [threadId, req.user.userId, playerFacing]);
+            const sealed=encryptMessage(playerFacing);
+            await client.query(
+                `INSERT INTO chat_messages(thread_id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id)
+                 VALUES($1,$2,$3,$4,$5,$6,$7)`,
+                [threadId,req.user.userId,sealed.message,sealed.message_ciphertext,sealed.message_iv,sealed.message_auth_tag,sealed.encryption_key_id]
+            );
             await client.query("UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1", [threadId]);
             await client.query("INSERT INTO system_notifications(user_id,type,title,message,match_id) VALUES($1,$2,$3,$4,$5)", [targetId, "complaint_request", "Complaint response requested", playerFacing, record.match_id]);
             const nextStatus = requestType === "evidence" ? "awaiting_evidence" : "awaiting_player";

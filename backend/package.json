@@ -13,7 +13,10 @@
     "email:check": "node scripts/check-email.js",
     "email:test": "node scripts/send-test-email.js",
     "setup-db": "node db/setup.js",
-    "test": "node test/password-recovery-links.test.js && node test/efootball-schedule-rules.test.js && node test/efootball-scheduler.test.js && node test/efootball-schedule-endpoints.test.js && node test/chess-match-isolation.test.js && node test/chess-state-sync.test.js && node test/chess-direct-challenges.test.js && node test/chess-connection-monitor.test.js && node test/chess-schedule-reminders-presence.test.js && node test/account-presence.test.js && node test/chess-engine-relay.test.js && node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/admin-match-management.test.js && node test/admin-wallet.test.js && node test/user-history.test.js && node test/chess-competitions.test.js && node test/chat.test.js && node test/announcement-companion.test.js && node test/wallet-financial-rules.test.js"
+    "data:encrypt-chat": "node db/encryptExistingChatData.js",
+    "security:provision-chat-key": "node scripts/provision-chat-encryption.js",
+    "test:security-integration": "node test/security-integration/run.js",
+    "test": "node test/auth-sessions.test.js && node test/auth-session-cleanup.test.js && node test/website-logout.test.js && node test/player-logout-guard.test.js && node test/password-recovery-links.test.js && node test/efootball-schedule-rules.test.js && node test/efootball-scheduler.test.js && node test/efootball-schedule-endpoints.test.js && node test/chess-match-isolation.test.js && node test/chess-state-sync.test.js && node test/chess-direct-challenges.test.js && node test/chess-connection-monitor.test.js && node test/chess-schedule-reminders-presence.test.js && node test/account-presence.test.js && node test/chess-engine-relay.test.js && node test/push.test.js && node test/efootball-workflow.test.js && node test/private-evidence.test.js && node test/admin-access.test.js && node test/admin-match-management.test.js && node test/admin-wallet.test.js && node test/user-history.test.js && node test/chess-competitions.test.js && node test/chat.test.js && node test/announcement-companion.test.js && node test/wallet-financial-rules.test.js && node test/request-url-redaction.test.js && node test/jwt-secret-policy.test.js && node test/admin-redesign.test.js"
   },
   "author": "GOAL$GAMBIT",
   "license": "ISC",
@@ -28,6 +31,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "nodemailer": "^10.3.1",
+    "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
     "socket.io": "^4.8.4",
     "tesseract.js": "7.0.0",
@@ -35,6 +39,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "3.1.11",
+    "socket.io-client": "^4.8.4"
   }
 }

@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
+const { encryptPrivateBuffer, decryptPrivateBuffer, isPrivateDataEncrypted } = require("./privateDataEncryption");
 
 const TYPES = Object.freeze({
     jpeg: { mime: "image/jpeg", extension: ".jpg" },
@@ -41,8 +42,24 @@ async function storePrivateImage(directory, buffer, type) {
     await fs.promises.mkdir(directory, { recursive: true });
     const storageKey = randomUUID() + extension;
     const target = safeStoragePath(directory, storageKey);
-    await fs.promises.writeFile(target, buffer, { flag: "wx", mode: 0o600 });
+    await fs.promises.writeFile(target, encryptPrivateBuffer(buffer), { flag: "wx", mode: 0o600 });
     return { storageKey, path: target, mimeType: type.mime, byteSize: buffer.length };
 }
 
-module.exports = { detectImageType, getImageType, safeStoragePath, storePrivateImage };
+async function readPrivateImage(filePath) {
+    const stored = await fs.promises.readFile(filePath);
+    return decryptPrivateBuffer(stored);
+}
+
+async function encryptExistingPrivateImage(filePath) {
+    const original=await fs.promises.readFile(filePath);
+    if(isPrivateDataEncrypted(original))return false;
+    const temporary=filePath+"."+randomUUID()+".tmp";
+    try{
+        await fs.promises.writeFile(temporary,encryptPrivateBuffer(original),{flag:"wx",mode:0o600});
+        await fs.promises.rename(temporary,filePath);
+        return true;
+    }catch(error){await fs.promises.unlink(temporary).catch(()=>{});throw error;}
+}
+
+module.exports = { detectImageType, getImageType, safeStoragePath, storePrivateImage, readPrivateImage, encryptExistingPrivateImage };

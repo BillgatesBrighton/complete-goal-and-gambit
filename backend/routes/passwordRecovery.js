@@ -5,6 +5,10 @@ const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const rateLimit = require("../middleware/rateLimit");
 const createToken = require("../services/authToken");
+const {
+    acquireAccountInvalidationLocks,
+    lockAndRevokeUserSessions
+} = require("../services/authSession");
 const defaultEmailService = require("../services/emailService");
 const { publicAccountRole } = require("../middleware/adminAuthorization");
 
@@ -230,6 +234,10 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
                 return res.status(400).json({ success: false, message: "This recovery link is invalid, expired, or not approved." });
             }
 
+            // Account gates precede user/session locks. The recovery-request
+            // row is already locked so its ticket cannot be consumed twice.
+            await acquireAccountInvalidationLocks(client, recovery.user_id);
+
             const account = await client.query(
                 `SELECT id,username,phone,rating,game,role,account_status,auth_version,email,email_verified_at,created_at
                    FROM users WHERE id=$1 AND account_status='active' FOR UPDATE`,
@@ -241,6 +249,11 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
                 transactionOpen = false;
                 return res.status(400).json({ success: false, message: "This recovery link is invalid, expired, or not approved." });
             }
+
+            // Match account-change lock ordering: user row first, then every
+            // unrevoked session in stable order, held through reset and token
+            // issuance so recovery cannot race an admitted socket operation.
+            await lockAndRevokeUserSessions(client, recovery.user_id);
 
             const passwordHash = await bcrypt.hash(password, 12);
             const updatedAccount = await client.query(
@@ -269,7 +282,7 @@ module.exports = function passwordRecoveryRoutes(pool, options) {
             );
             const user = updatedAccount.rows[0];
             user.role = publicAccountRole(user);
-            const token = createToken(user);
+            const token = await createToken(user, client, { accountMutationLockHeld: "exclusive" });
             await client.query("COMMIT");
             transactionOpen = false;
             if (io) io.in("user_" + user.id).disconnectSockets(true);

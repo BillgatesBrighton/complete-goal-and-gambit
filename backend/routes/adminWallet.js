@@ -82,7 +82,7 @@ module.exports = function createAdminWalletRoutes(pool, authenticateToken, mpesa
                             )
                             SELECT
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_available l ON l.account_id=w.user_id
-                                  WHERE COALESCE(w.balance-w.withdrawal_reserved_balance,0)<>COALESCE(l.balance,0)) AS player_available_mismatches,
+                                WHERE COALESCE(w.balance-w.withdrawal_reserved_balance,0)<>COALESCE(l.balance,0)) AS player_available_mismatches,
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_locked l ON l.account_id=w.user_id
                                   WHERE COALESCE(w.locked_balance,0)<>COALESCE(l.balance,0)) AS player_locked_mismatches,
                                 (SELECT COUNT(*) FROM wallets w FULL OUTER JOIN user_withdrawal_reserved l ON l.account_id=w.user_id

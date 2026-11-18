@@ -3,6 +3,8 @@
 const jwt = require("jsonwebtoken");
 const { publicAccountRole } = require("./adminAuthorization");
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 let dbPool = null;
 
 function setPool(pool) {
@@ -27,7 +29,8 @@ async function authenticateToken(req, res, next) {
     }
 
     const userId = Number(decoded && decoded.userId);
-    if (!Number.isSafeInteger(userId) || userId <= 0) {
+    const sessionId = String(decoded && decoded.jti || "");
+    if (!Number.isSafeInteger(userId) || userId <= 0 || !UUID_PATTERN.test(sessionId)) {
         return unauthorized(res, "Invalid authentication token.");
     }
 
@@ -37,11 +40,12 @@ async function authenticateToken(req, res, next) {
             message: "Account status is temporarily unavailable. Please try again."
         });
     }
+    const requestPool = dbPool;
 
     try {
         // Read the account on every authenticated request so suspended and
         // closed accounts lose access immediately, even with a valid JWT.
-        const result = await dbPool.query(
+        const result = await requestPool.query(
             `SELECT id, username, role, account_status, suspended_until, auth_version
              FROM users WHERE id = $1`,
             [userId]
@@ -55,6 +59,7 @@ async function authenticateToken(req, res, next) {
         if (Number(decoded.authVersion || 0) !== Number(user.auth_version || 0)) {
             return unauthorized(res, "Your session expired after an account change. Please sign in again.");
         }
+
         if (user.account_status === "closed") {
             return res.status(403).json({
                 success: false,
@@ -63,7 +68,7 @@ async function authenticateToken(req, res, next) {
         }
 
         if (user.account_status === "suspended" && user.suspended_until) {
-            const activated = await dbPool.query(
+            const activated = await requestPool.query(
                 `UPDATE users
                  SET account_status = 'active', suspended_until = NULL
                  WHERE id = $1 AND account_status = 'suspended'
@@ -77,7 +82,7 @@ async function authenticateToken(req, res, next) {
             } else {
                 // Re-read if another request changed the account between
                 // the initial check and the guarded expiration update.
-                const current = await dbPool.query(
+                const current = await requestPool.query(
                     `SELECT username, role, account_status, suspended_until, auth_version
                      FROM users WHERE id = $1`,
                     [user.id]
@@ -108,9 +113,21 @@ async function authenticateToken(req, res, next) {
             return unauthorized(res, "Your session expired after an account change. Please sign in again.");
         }
 
+        const session = await requestPool.query(
+            `SELECT 1 FROM auth_sessions s
+              JOIN users u ON u.id=s.user_id
+              WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL
+                AND s.expires_at>NOW() AND u.auth_version=$3`,
+            [sessionId, user.id, Number(decoded.authVersion || 0)]
+        );
+        if (!session.rows.length) {
+            return unauthorized(res, "Invalid or expired authentication session.");
+        }
+
         req.user = {
             ...decoded,
             userId: user.id,
+            sessionId,
             username: user.username,
             role: publicAccountRole(user)
         };

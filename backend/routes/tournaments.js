@@ -7,6 +7,7 @@ const { ensureTournamentRound, recordFixtureResult } = require("../services/efoo
 const { creditPlatform, refundReservedPlatformFee } = require("../services/adminWalletAccounting");
 const { recordJournal } = require("../services/financialLedger");
 const { getEfootballScheduleState } = require("../services/efootballScheduleRules");
+const { lockActiveAuthSession } = require("../services/authSession");
 
 function httpError(status, message) {
     const error = new Error(message);
@@ -264,6 +265,9 @@ module.exports = function (pool, authenticateToken, pushService) {
             client = await pool.connect();
             await client.query("BEGIN");
             inTransaction = true;
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw httpError(401, "Authentication session is no longer active.");
+            }
 
             const user = await client.query(
                 "SELECT game,account_status FROM users WHERE id = $1",
@@ -496,6 +500,9 @@ module.exports = function (pool, authenticateToken, pushService) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw httpError(401, "Authentication session is no longer active.");
+            }
             const tournament = await client.query(
                 "SELECT id,name,entry_fee,status,max_players FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
                 [id]
@@ -650,6 +657,9 @@ module.exports = function (pool, authenticateToken, pushService) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw httpError(401, "Authentication session is no longer active.");
+            }
             const tournamentResult = await client.query(
                 "SELECT id,name,status FROM efootball_tournaments WHERE id=$1 FOR UPDATE",
                 [id]

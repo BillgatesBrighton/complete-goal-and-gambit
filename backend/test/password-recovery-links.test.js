@@ -23,6 +23,7 @@ function createMemoryPool() {
     const users = new Map();
     const verificationRequests = new Map();
     const recoveryRequests = new Map();
+    const sessions = new Map();
     let nextUserId = 30;
     let nextWalletUserId = null;
 
@@ -71,6 +72,33 @@ function createMemoryPool() {
                 const statement = String(sql).replace(/\s+/g, " ").trim();
                 params = params || [];
                 if (["BEGIN", "COMMIT", "ROLLBACK"].includes(statement)) return { rows: [] };
+                if (/^SET LOCAL lock_timeout = '10s'$/i.test(statement)) return { rows: [] };
+                if (/^SELECT pg_advisory_xact_lock(?:_shared)?\(\$1::integer,\$2::integer\)$/i.test(statement)) return { rows: [] };
+
+                if (/^SELECT auth_version FROM users WHERE id=\$1 FOR SHARE$/i.test(statement)) {
+                    const user=findUserById(params[0]);
+                    return { rows: user ? [{auth_version:user.auth_version}] : [] };
+                }
+
+                if (/^SELECT id FROM auth_sessions WHERE user_id=\$1 AND revoked_at IS NULL ORDER BY id FOR UPDATE$/i.test(statement)) {
+                    return { rows:Array.from(sessions.values()).filter(session=>session.user_id===Number(params[0])&&session.revoked_at===null).sort((a,b)=>a.id.localeCompare(b.id)).map(session=>({id:session.id})) };
+                }
+                if (/^UPDATE auth_sessions SET revoked_at=NOW\(\) WHERE user_id=\$1 AND id=ANY\(\$2::uuid\[\]\) AND revoked_at IS NULL$/i.test(statement)) {
+                    const [userId,ids]=params;
+                    let rowCount=0;
+                    for(const id of ids){const session=sessions.get(String(id));if(session&&session.user_id===Number(userId)&&session.revoked_at===null){session.revoked_at=new Date();rowCount++;}}
+                    return {rows:[],rowCount};
+                }
+
+                if (/INSERT INTO auth_sessions \(id,user_id,created_at,expires_at\)/i.test(statement)) {
+                    const [id, userId, createdAt, expiresAt] = params;
+                    sessions.set(String(id), {
+                        id: String(id), user_id: Number(userId),
+                        created_at: new Date(Number(createdAt) * 1000),
+                        expires_at: new Date(Number(expiresAt) * 1000), revoked_at: null
+                    });
+                    return { rows: [] };
+                }
 
                 if (/SELECT id FROM users WHERE username = \$1 OR phone = \$2 OR \(LOWER\(email\) = \$3 AND email_verified_at IS NOT NULL\) LIMIT 1/i.test(statement)) {
                     const match = Array.from(users.values()).some((user) =>
@@ -216,7 +244,7 @@ function createMemoryPool() {
         return client;
     }
 
-    return { users, verificationRequests, recoveryRequests, query, connect, addUser };
+    return { users, verificationRequests, recoveryRequests, sessions, query, connect, addUser };
 }
 
 async function postJson(server, endpoint, body, headers) {
@@ -298,6 +326,9 @@ test("registration, email verification, and verified-email password recovery are
         password: "new-user-password", game: "both", chessRating: 1200
     });
     assert.equal(registration.status, 201);
+    const registrationClaims = jwt.verify(registration.body.token, JWT_SECRET_FOR_TEST);
+    assert.match(registrationClaims.jti, /^[0-9a-f-]{36}$/i, "registration issues a uniquely identified session");
+    assert.equal(pool.sessions.get(registrationClaims.jti).user_id, registration.body.user.id, "registration session is stored for its account");
     assert.equal(registration.body.user.email, "newuser@example.org");
     assert.equal(registration.body.user.email_verified_at, null, "signup never marks an entered address verified");
     assert.equal(registration.body.emailVerificationSent, true);
@@ -435,6 +466,8 @@ test("registration, email verification, and verified-email password recovery are
     const claims = jwt.verify(reset.body.token, JWT_SECRET_FOR_TEST);
     assert.equal(claims.userId, 11);
     assert.equal(claims.authVersion, 1);
+    assert.ok(claims.jti, "password recovery issues a tracked session");
+    assert.equal(pool.sessions.get(claims.jti).user_id, 11);
     assert.equal(pool.users.get(11).auth_version, 1);
     assert.equal(await bcrypt.compare("alice-new-password", pool.users.get(11).password_hash), true);
     assert.ok(disconnectedRooms.includes("user_11"), "old live sessions are disconnected after password change");
@@ -443,6 +476,8 @@ test("registration, email verification, and verified-email password recovery are
         username: "alice", password: "alice-new-password"
     });
     assert.equal(loginAfterReset.status, 200, "the new password is accepted by normal authentication");
+    const loginClaims = jwt.verify(loginAfterReset.body.token, JWT_SECRET_FOR_TEST);
+    assert.ok(pool.sessions.has(loginClaims.jti), "login creates a persistent session row before returning its token");
     const reusedReset = await postJson(server, "/api/auth/password-recovery/complete", {
         ticketId: finalResetValues.get("ticket"), secret: finalResetValues.get("secret"), newPassword: "another-password"
     });

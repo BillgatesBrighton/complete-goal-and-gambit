@@ -37,6 +37,7 @@ BALL_BLACK = add_material("Football charcoal panels", [.025, .027, .031, 1], .04
 FLOOR = add_material("Arena midnight stone", [.035, .038, .043, 1], .28, .33)
 GLOW = add_material("Volumetric golden beam", [1, .77, .34, .16], .0, .4, [.2, .12, .035], "BLEND")
 GLASS = add_material("Optical lens glass", [.95, .89, .62, .62], .18, .13, [.16, .11, .025], "BLEND")
+LOGO_SURFACE = add_material("Logo No. 3 polished reflective enamel", [1, 1, 1, 1], .34, .20)
 
 def add_accessor(data, component_type, kind, count, target, minimum=None, maximum=None):
     align4()
@@ -57,7 +58,7 @@ def add_node(name, mesh=None, children=None, translation=None):
     nodes.append(n)
     return len(nodes)-1
 
-def add_mesh(name, vertices, faces, material, parent=None):
+def add_mesh(name, vertices, faces, material, parent=None, uvs=None):
     # Smooth normals are averaged at shared vertices. Meshes with deliberate hard
     # edges use duplicated vertices in their authoring routines.
     sums = [[0.0, 0.0, 0.0] for _ in vertices]
@@ -79,7 +80,8 @@ def add_mesh(name, vertices, faces, material, parent=None):
     idbytes = struct.pack("<" + "I"*len(idx), *idx)
     # Every authored mesh includes UV coordinates. Most rely on solid PBR
     # factors; the arena floor uses the locally embedded stone texture below.
-    uvbytes = struct.pack("<" + "f"*(len(vertices)*2), *(coord for v in vertices for coord in (v[0]*.42, v[2]*.42)))
+    uv_data = uvs if uvs is not None else [(v[0]*.42, v[2]*.42) for v in vertices]
+    uvbytes = struct.pack("<" + "f"*(len(vertices)*2), *(coord for uv in uv_data for coord in uv))
     lo = [min(v[k] for v in vertices) for k in range(3)]
     hi = [max(v[k] for v in vertices) for k in range(3)]
     pa = add_accessor(posbytes, 5126, "VEC3", len(vertices), 34962, lo, hi)
@@ -204,37 +206,68 @@ for side in [-1,1]:
 box(0,-2.48,-2.6,2.95,.04,4.6,GOLD,world)
 for i in range(9):
     box(0,-2.40,-4.35+i*.43,2.75,.012,.018,GOLD_BRIGHT if i%2==0 else STEEL,world)
-# 3D championship plaque and geometric crest above the king.
-logo=add_node("Goal Gambit three-dimensional crest",translation=[0,1.83,-.55])
-box(0,0,0,1.78,.43,.18,BLACK,logo)
-box(0,0,.105,1.66,.33,.035,GOLD,logo)
-box(0,0,.13,1.56,.26,.025,BLACK,logo)
-torus((0,0,.17),.115,.025,logo,GOLD_BRIGHT,36,8)
-extruded_wordmark(logo)
-for angle in range(0,360,60):
-    a=math.radians(angle)
-    cylinder(math.sin(a)*.085,math.cos(a)*.085,.19,.014,.035,GOLD_BRIGHT,logo,sides=10,axis="z")
+# Logo No. 3 sits on a shallow, curved, PBR enamel badge. Its exact artwork is
+# the supplied chess-and-football fusion logo; the moving spotlight lights the
+# actual textured 3D surface and its raised metal frame.
+logo=add_node("Goal Gambit three-dimensional crest",translation=[0,1.72,-.55])
+logo_w,logo_h=2.85,1.90
+box(0,0,-.055,logo_w+.12,logo_h+.12,.12,BLACK,logo)
+segments_x,segments_y=20,14
+logo_vertices=[]; logo_faces=[]; logo_uvs=[]
+for row in range(segments_y+1):
+    v=row/segments_y
+    y=logo_h*(.5-v)
+    for col in range(segments_x+1):
+        u=col/segments_x
+        x=logo_w*(u-.5)
+        z=.035+.11*(1-(x/(logo_w*.5))**2)
+        logo_vertices.append([x,y,z]); logo_uvs.append([u,v])
+for row in range(segments_y):
+    for col in range(segments_x):
+        a=row*(segments_x+1)+col; b=a+1; d=(row+1)*(segments_x+1)+col; c=d+1
+        logo_faces.extend([[a,d,b],[b,d,c]])
+add_mesh("Exact Logo Number 3 curved PBR surface",logo_vertices,logo_faces,LOGO_SURFACE,logo,logo_uvs)
+box(0,logo_h*.5,.02,logo_w+.10,.055,.09,GOLD_BRIGHT,logo)
+box(0,-logo_h*.5,.02,logo_w+.10,.055,.09,GOLD_BRIGHT,logo)
+box(-logo_w*.5,.0,.02,.055,logo_h,.09,GOLD,logo)
+box(logo_w*.5,.0,.02,.055,logo_h,.09,GOLD,logo)
 
-# Hanging string and one assembled king mesh, authored as smooth 3D geometry.
+# Hanging string and two-part articulated king mesh, authored as smooth 3D geometry.
 hook=add_node("King hanging point",translation=[0,1.37,-.12])
 cylinder(0,.17,0,.012,.32,GOLD,hook,sides=8)
 king=add_node("KingPivot",translation=[0,1.17,-.10])
-lathe([(-.82,.22),(-.78,.34),(-.71,.34),(-.67,.22),(-.58,.17),(-.48,.13),(-.34,.12),(-.30,.23),(-.24,.25),(-.20,.14),(-.11,.10),(-.07,.21),(-.025,.20),(0,.12)],king)
+lathe([(-.82,.22),(-.78,.34),(-.71,.34),(-.67,.22),(-.58,.17)],king)
 torus((0,-.76,0),.285,.028,king,GOLD_BRIGHT)
-torus((0,-.25,0),.215,.025,king,GOLD_BRIGHT)
-torus((0,-.08,0),.205,.023,king,GOLD_BRIGHT)
-for side in [-1,1]:
-    cylinder(side*.23,-.47,0,.065,.35,GOLD,king,sides=16,axis="z")
-    uv,uf=uv_sphere(side*.24,-.48,0,.075,.09,.075,16,10)
-    add_mesh("King glove",uv,uf,GOLD_BRIGHT,king)
+upper=add_node("KingUpperBodyPivot")
+nodes[king].setdefault("children", []).append(upper)
+lathe([(-.58,.17),(-.48,.13),(-.34,.12),(-.30,.23),(-.24,.25),(-.20,.14),(-.11,.10),(-.07,.21),(-.025,.20),(0,.12)],upper)
+torus((0,-.25,0),.215,.025,upper,GOLD_BRIGHT)
+torus((0,-.08,0),.205,.023,upper,GOLD_BRIGHT)
+for side, label in [(1,"Right"),(-1,"Left")]:
+    # Each shoulder is an independent articulated 3D pivot with an elbow,
+    # forearm and fitted glove. The right hand grips the one shared flashlight.
+    arm=add_node("King"+label+"ArmPivot",translation=[side*.20,-.28,.035])
+    nodes[upper].setdefault("children", []).append(arm)
+    uv,uf=uv_sphere(0,0,0,.070,.068,.070,16,10)
+    add_mesh("King "+label.lower()+" shoulder joint",uv,uf,GOLD_BRIGHT,arm)
+    cylinder(0,-.115,0,.037,.22,GOLD,arm,sides=16,axis="y")
+    uv,uf=uv_sphere(0,-.23,0,.047,.047,.047,16,10)
+    add_mesh("King "+label.lower()+" elbow joint",uv,uf,GOLD_BRIGHT,arm)
+    cylinder(0,-.315,.012,.032,.18,GOLD,arm,sides=16,axis="y")
+    uv,uf=uv_sphere(0,-.415,.025,.060,.070,.060,16,10)
+    add_mesh("King "+label.lower()+" articulated glove",uv,uf,GOLD_BRIGHT,arm)
+    if side > 0:
+        # Small opposed fingers curl around the flashlight barrel.
+        for finger in [-1,1]:
+            cylinder(finger*.030,-.415,.075,.016,.075,GOLD_BRIGHT,arm,sides=10,axis="y")
 # Crown with eight separate raised points and jewel.
-torus((0,.0,0),.15,.025,king,GOLD_BRIGHT)
+torus((0,.0,0),.15,.025,upper,GOLD_BRIGHT)
 for i in range(8):
     a=2*math.pi*i/8
     x,z=math.cos(a)*.16,math.sin(a)*.16
-    cylinder(x,.075,z,.024,.16,GOLD_BRIGHT,king,sides=10,r2=.006)
+    cylinder(x,.075,z,.024,.16,GOLD_BRIGHT,upper,sides=10,r2=.006)
 uv,uf=uv_sphere(0,.12,0,.045,.055,.045,16,10)
-add_mesh("Crown sapphire",uv,uf,STEEL,king)
+add_mesh("Crown sapphire",uv,uf,STEEL,upper)
 
 # Actual metallic LED flashlight with one continuously tracked fixture/beam.
 torch=add_node("FlashlightRoot",translation=[.67,-2.08,.20])
@@ -244,7 +277,7 @@ cylinder(0,.40,0,.13,.06,GOLD_BRIGHT,torch,sides=40)
 uv,uf=uv_sphere(0,.435,0,.098,.028,.098,24,12)
 add_mesh("LED optical lens",uv,uf,GLASS,torch)
 for y in [-.18,-.12,-.06,.00,.06,.12]: torus((0,y,0),.106,.008,torch,STEEL,36,6)
-cone_mesh(torch,1.85,.56,GLOW,40)
+cone_mesh(torch,2.15,.34,GLOW,40)
 
 # 3D football with a full spherical shell and raised pentagonal inlays.
 ball=add_node("MatchBallRoot",translation=[-.82,-1.57,.45])
@@ -274,7 +307,10 @@ spot_node=add_node("FlashlightSpotlight",translation=[0,.44,0])
 nodes[spot_node]["rotation"]=[.7071068,0,0,.7071068]
 nodes[torch]["children"].append(spot_node)
 nodes[spot_node]["extensions"]={"KHR_lights_punctual":{"light":light_id}}
-root_nodes=[world,logo,hook,king,torch,ball]
+logo_light=add_node("GoalLogoSpotlight",translation=[-1.45,2.65,1.75])
+nodes[logo_light]["rotation"]=[-.215,0,0,.977]
+nodes[logo_light]["extensions"]={"KHR_lights_punctual":{"light":1}}
+root_nodes=[world,logo,hook,king,torch,ball,logo_light]
 # A subtle, seamless procedural stone texture keeps the arena floor tactile.
 def make_stone_png(size=128):
     raw=bytearray()
@@ -289,18 +325,29 @@ def make_stone_png(size=128):
     def chunk(kind,data): return struct.pack(">I",len(data))+kind+data+struct.pack(">I",zlib.crc32(kind+data)&0xffffffff)
     return b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">2I5B",size,size,8,6,0,0,0))+chunk(b"IDAT",zlib.compress(bytes(raw),9))+chunk(b"IEND",b"")
 
+logo_path=os.path.join(os.path.dirname(__file__),"..","app","src","main","assets","images","logo-number-3.jpg")
+with open(logo_path,"rb") as logo_file: logo_jpeg=logo_file.read()
+align4(); logo_image_offset=len(blob); blob.extend(logo_jpeg)
+logo_image_view=len(views); views.append({"buffer":0,"byteOffset":logo_image_offset,"byteLength":len(logo_jpeg)})
+materials[LOGO_SURFACE]["pbrMetallicRoughness"]["baseColorTexture"]={"index":0}
+
 png=make_stone_png()
 align4(); image_offset=len(blob); blob.extend(png)
 stone_image_view=len(views); views.append({"buffer":0,"byteOffset":image_offset,"byteLength":len(png)})
-materials[FLOOR]["pbrMetallicRoughness"]["baseColorTexture"]={"index":0}
+materials[FLOOR]["pbrMetallicRoughness"]["baseColorTexture"]={"index":1}
 doc={
  "asset":{"version":"2.0","generator":"GOAL$GAMBIT original procedural PBR scene"},
  "extensionsUsed":["KHR_lights_punctual"],
- "extensions":{"KHR_lights_punctual":{"lights":[{"type":"spot","color":[1.0,.79,.42],"intensity":1200,"range":7,"spot":{"innerConeAngle":.12,"outerConeAngle":.50}}]}},
+ "extensions":{"KHR_lights_punctual":{"lights":[
+   {"type":"spot","color":[1.0,.79,.42],"intensity":1800,"range":7,"spot":{"innerConeAngle":.045,"outerConeAngle":.16}},
+   {"type":"spot","color":[1.0,.67,.22],"intensity":0,"range":8,"spot":{"innerConeAngle":.045,"outerConeAngle":.22}}
+ ]}},
  "scene":0,"scenes":[{"name":"GOAL$GAMBIT auth arena","nodes":root_nodes}],
  "nodes":nodes,"meshes":meshes,"materials":materials,
- "images":[{"name":"Authored dark arena stone","bufferView":stone_image_view,"mimeType":"image/png"}],
- "textures":[{"sampler":0,"source":0}],"samplers":[{"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497}],
+ "images":[
+   {"name":"Supplied GOAL$GAMBIT Logo No. 3","bufferView":logo_image_view,"mimeType":"image/jpeg"},
+   {"name":"Authored dark arena stone","bufferView":stone_image_view,"mimeType":"image/png"}],
+ "textures":[{"sampler":0,"source":0},{"sampler":0,"source":1}],"samplers":[{"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497}],
  "accessors":accessors,"bufferViews":views,"buffers":[{"byteLength":0}]
 }
 doc["buffers"][0]["byteLength"]=len(blob)

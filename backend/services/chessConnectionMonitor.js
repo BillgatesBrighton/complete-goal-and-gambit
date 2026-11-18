@@ -56,7 +56,7 @@ function createChessConnectionMonitor(options) {
         if (!hasSockets) matches.delete(id);
     }
 
-    function resumeIfReady(matchId) {
+    function resumeIfReady(matchId, actorUser) {
         const id = Number(matchId);
         const entry = matches.get(id);
         if (!entry || !resumeMatch || !allParticipantsConnected(entry, connectedUserIds(id))) {
@@ -65,7 +65,7 @@ function createChessConnectionMonitor(options) {
         }
         if (resumeInflight.has(id)) return resumeInflight.get(id);
         const operation = Promise.resolve()
-            .then(() => resumeMatch(id, connectedUserIds(id)))
+            .then(() => resumeMatch(id, connectedUserIds(id), actorUser))
             .catch(error => {
                 if (typeof settings.onError === "function") settings.onError(error, id, "resume");
                 return null;
@@ -78,14 +78,14 @@ function createChessConnectionMonitor(options) {
         return operation;
     }
 
-    function maybeResume(matchId) {
+    function maybeResume(matchId, actorUser) {
         const id = Number(matchId);
         const pause = pauseInflight.get(id);
-        if (pause) return pause.then(() => resumeIfReady(id));
-        return resumeIfReady(id);
+        if (pause) return pause.then(() => resumeIfReady(id, actorUser));
+        return resumeIfReady(id, actorUser);
     }
 
-    function pauseForLostUser(matchId, userId, pauseOptions) {
+    function pauseForLostUser(matchId, userId, pauseOptions, actorUser) {
         const id = Number(matchId), uid = Number(userId);
         if (!pauseMatch || pauseInflight.has(id)) return pauseInflight.get(id) || Promise.resolve(null);
         const entry = matches.get(id);
@@ -96,12 +96,12 @@ function createChessConnectionMonitor(options) {
         const operation = Promise.resolve().then(async function() {
             const currentEntry = matches.get(id);
             if (allParticipantsConnected(currentEntry, connectedUserIds(id))) return null;
-            return pauseMatch(id, uid, pauseOptions);
+            return pauseMatch(id, uid, pauseOptions, actorUser);
         }).catch(error => {
             if (typeof settings.onError === "function") settings.onError(error, id, "pause");
             return null;
         }).then(async function(result) {
-            if (result && result.paused) await resumeIfReady(id);
+            if (result && result.paused) await resumeIfReady(id, actorUser);
             return result;
         }).finally(() => {
             if (pauseInflight.get(id) === operation) pauseInflight.delete(id);
@@ -148,7 +148,7 @@ function createChessConnectionMonitor(options) {
         if (existing && existing.matchId === matchId && existing.userId === userId) {
             const entry = matchEntry(matchId);
             entry.players = new Set([whiteId, blackId].filter(id => Number.isSafeInteger(id) && id > 0));
-            if (details.connectionPausedAt || pauseInflight.has(matchId)) return maybeResume(matchId);
+            if (details.connectionPausedAt || pauseInflight.has(matchId)) return maybeResume(matchId, socket.user);
             return Promise.resolve(null);
         }
 
@@ -171,9 +171,9 @@ function createChessConnectionMonitor(options) {
             // values rather than charging downtime or allowing a timeout.
             return pauseForLostUser(matchId, missingUserId, {
                 preserveStoredClock: firstObservation && !details.connectionPausedAt
-            });
+            }, socket.user);
         }
-        if (details.connectionPausedAt || pauseInflight.has(matchId)) return maybeResume(matchId);
+        if (details.connectionPausedAt || pauseInflight.has(matchId)) return maybeResume(matchId, socket.user);
         return Promise.resolve(null);
     }
 

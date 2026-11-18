@@ -62,6 +62,7 @@ function createMemoryChessPool(matches, accounts = new Map()) {
     return {
         async query(sql, params) {
             const text = String(sql);
+            if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
             if (text.includes("SELECT id FROM chess_matches WHERE player_black_id IS NOT NULL")) return { rows: [] };
             if (text.includes("FROM chess_matches m") && text.includes("WHERE m.id = $1")) {
                 const match = matches.get(Number(params[0]));
@@ -88,6 +89,17 @@ function createMemoryChessPool(matches, accounts = new Map()) {
                         releaseRow = null;
                         lockedMatch = null;
                         return { rows: [] };
+                    }
+                    if (text.startsWith("SET LOCAL ")) return { rows: [] };
+                    if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
+                    if (text.includes("SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1")) {
+                        const match = matches.get(Number(params[0]));
+                        return { rows: match ? [{
+                            match_type: match.match_type,
+                            season_key: match.season_key || null,
+                            time_control: match.time_control,
+                            stake_amount: match.stake_amount
+                        }] : [] };
                     }
                     if (text.includes("pg_advisory_xact_lock")) {
                         releases.push(await getLock("advisory:" + String(params[0]))());
@@ -186,7 +198,8 @@ function createMemoryChessPool(matches, accounts = new Map()) {
                     if (releaseRow) releaseRow();
                     releaseRow = null;
                     lockedMatch = null;
-                }
+                },
+                on() {}
             };
         }
     };
@@ -196,7 +209,12 @@ async function startIsolatedApi(pool, io) {
     const app = express();
     app.use(express.json());
     app.use("/api/chess", chessRoutes(pool, (req, _res, next) => {
-        req.user = { userId: Number(req.headers["x-test-user-id"]) };
+        const userId = Number(req.headers["x-test-user-id"]);
+        req.user = {
+            userId,
+            sessionId: "00000000-0000-4000-8000-" + String(userId).padStart(12, "0"),
+            authVersion: 0
+        };
         next();
     }, io));
     const server = require("node:http").createServer(app);
@@ -359,6 +377,7 @@ function createJoinPool({ userId, account, existingMatch, waitingMatch, waitingP
     const pool = {
         async query(sql, params) {
             const text = String(sql);
+            if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
             if (text.includes("SELECT id FROM chess_matches WHERE player_black_id IS NOT NULL")) return { rows: [] };
             if (text.includes("FROM chess_matches m") && text.includes("WHERE m.id = $1")) {
                 return { rows: waitingMatch ? [waitingMatch] : [] };
@@ -371,7 +390,17 @@ function createJoinPool({ userId, account, existingMatch, waitingMatch, waitingP
                     const text = String(sql).trim();
                     trace.push(text);
                     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text)) return { rows: [] };
+                    if (text.startsWith("SET LOCAL ")) return { rows: [] };
+                    if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
                     if (text.includes("pg_advisory_xact_lock")) return { rows: [] };
+                    if (text.includes("SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1")) {
+                        return { rows: waitingMatch ? [{
+                            match_type: waitingMatch.match_type,
+                            season_key: waitingMatch.season_key || null,
+                            time_control: waitingMatch.time_control,
+                            stake_amount: waitingMatch.stake_amount
+                        }] : [] };
+                    }
                     if (text.includes("SELECT rating, game, account_status FROM users WHERE id=$1 FOR UPDATE")) {
                         return { rows: [account] };
                     }
@@ -487,6 +516,7 @@ test("an unmatched casual search remains a one-player waiting match without a fa
     const pool = {
         async query(sql) {
             const text = String(sql);
+            if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
             if (text.includes("SELECT id FROM chess_matches WHERE player_black_id IS NOT NULL")) return { rows: [] };
             if (text.includes("FROM chess_matches m") && text.includes("WHERE m.id = $1")) return { rows: [created] };
             throw new Error("Unexpected top-level create query: " + text.slice(0, 100));
@@ -496,6 +526,8 @@ test("an unmatched casual search remains a one-player waiting match without a fa
                 async query(sql, params) {
                     const text = String(sql).trim();
                     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text) || text.includes("pg_advisory_xact_lock")) return { rows: [] };
+                    if (text.startsWith("SET LOCAL ")) return { rows: [] };
+                    if (text.includes("FROM auth_sessions s") && text.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
                     if (text.includes("SELECT rating, game, account_status FROM users WHERE id=$1 FOR UPDATE")) {
                         return { rows: [{ rating: 1200, game: "chess", account_status: "active" }] };
                     }
@@ -504,6 +536,7 @@ test("an unmatched casual search remains a one-player waiting match without a fa
                     if (text.includes("INSERT INTO chess_matches")) return { rows: [{ id: created.id }] };
                     throw new Error("Unexpected create transaction query: " + text.slice(0, 120));
                 },
+                on() {},
                 release() {}
             };
         }

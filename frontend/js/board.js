@@ -101,6 +101,8 @@ const flipButton = document.getElementById("flipButton");
 const drawButton = document.getElementById("drawButton");
 const resignButton = document.getElementById("resignButton");
 const cancelSearchButton = document.getElementById("cancelSearchButton");
+const tournamentReadyButton = document.getElementById("tournamentReadyButton");
+const tournamentScheduleNotice = document.getElementById("tournamentScheduleNotice");
 const cancelPremoveButton = document.getElementById("cancelPremoveButton");
 const acceptDrawButton = document.getElementById("acceptDrawButton");
 const declineDrawButton = document.getElementById("declineDrawButton");
@@ -309,7 +311,9 @@ function matchSnapshot(m){
     whiteName:m.whiteName||null,blackName:m.blackName||null,whiteRating:m.whiteRating??null,blackRating:m.blackRating??null,
     whiteTimeMs:Number(m.whiteTimeMs??localWhiteMs),blackTimeMs:Number(m.blackTimeMs??localBlackMs),activeColor:m.activeColor||"w",
     timeControl:m.timeControl||config.timeControl||"10+0",matchType:m.matchType||"ranked",stake:Number(m.stake||0),
-    drawOfferUserId:m.drawOfferUserId||null,startedAt:m.startedAt||null,finishedAt:m.finishedAt||null,savedAt:Date.now()
+    drawOfferUserId:m.drawOfferUserId||null,startedAt:m.startedAt||null,finishedAt:m.finishedAt||null,
+    seasonKey:m.seasonKey||null,scheduledAt:m.scheduledAt||null,deadlineAt:m.deadlineAt||null,
+    whiteReadyAt:m.whiteReadyAt||null,blackReadyAt:m.blackReadyAt||null,myReady:Boolean(m.myReady),savedAt:Date.now()
   };
 }
 function newOfflineRecord(snapshot){
@@ -1013,14 +1017,20 @@ function applyState(m){
     ?(m.connectionPauseReason==="integrity"?"Game paused while the official position is verified.":"Connection interrupted. This game is paused for both players while the connection is restored.")
     :null;
   const liveWarning=!realtimeMatchReady&&m.status==="active"?"Waiting for both players to establish the live match connection. Official play is paused.":null;
-  setInfo();setPlayers();setStatus(pausedMessage||liveWarning||(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:(m.status==="waiting"?"Searching for an opponent…":m.status==="settling"?"Settling result…":m.status==="cancelled"?"Search cancelled":"Game finished")),m.connectionPaused||liveWarning||m.status==="waiting"||m.status==="settling"?"waiting":"ready");
+  const scheduledWaiting=m.status==="waiting"&&m.scheduledAt&&m.playerBlackId;
+  const waitingText=scheduledWaiting
+    ?(m.myReady?"You're marked Ready. Waiting for the other player and scheduled start.":"Scheduled match · mark Ready when you are present.")
+    :m.status==="waiting"?"Searching for an opponent…":m.status==="settling"?"Settling result…":m.status==="cancelled"?"Search cancelled":"Game finished";
+  setInfo();setPlayers();setStatus(pausedMessage||liveWarning||(m.status==="active"?(m.activeColor===playerColor?"Your turn":"Opponent's turn")+check:waitingText),m.connectionPaused||liveWarning||m.status==="waiting"||m.status==="settling"?"waiting":"ready");
   if(m.connectionPaused)setConnectionStatus(pausedMessage,"recovery");
   else if(liveWarning)setConnectionStatus(liveWarning,"offline");
   else if(realtimeMatchReady&&!offlineMode&&!offlineConflict)setConnectionStatus("");
   if(m.status==="waiting"){
     const turnMessage=document.getElementById("turnMessage");
     const bracket=m.ratingBracket;
-    if(turnMessage)turnMessage.textContent=bracket
+    if(turnMessage)turnMessage.textContent=scheduledWaiting
+      ?(m.myReady?"You're Ready. Waiting for your opponent or the scheduled start.":"Your scheduled Chess match is waiting. Confirm Ready when you are present.")
+      :bracket
       ? "Searching within your " + bracket.minimum + "–" + bracket.maximum + " chess rating bracket, with the same clock and stake. Your stake is locked while you search."
       : "Searching for a chess player with the same settings. Your stake is locked while you search.";
   }
@@ -1219,7 +1229,7 @@ function createOrJoin(){
   if(await restoreSavedMatch())return;
   const speed=(config.rankedMode||"rapid").toLowerCase(); const tc=config.timeControl||({rapid:"10+5",blitz:"3+2",bullet:"1+1"}[speed]||"10+5");
   setStatus("Checking your wallet…","waiting");
-  const created=await api("/api/chess/create",{method:"POST",body:{matchType:config.tournamentMode?"tournament":"ranked",speed,stake:Number(config.rankedStake||0),timeControl:tc}});
+  const created=await api("/api/chess/create",{method:"POST",body:{matchType:config.tournamentMode?"tournament":"ranked",speed,stake:Number(config.rankedStake||0),timeControl:tc,scheduledAt:config.scheduledAt||null,deadlineAt:config.deadlineAt||null}});
   if(created.ok){
     setMatchId(created.data.match.matchId);
     rememberMatch(matchId);
@@ -1286,6 +1296,9 @@ function updateMatchActions(){
   if(cancelSearchButton){cancelSearchButton.hidden=!waiting;cancelSearchButton.classList.toggle("hidden",!waiting);cancelSearchButton.disabled=cancelPending}
   if(drawButton){drawButton.hidden=!active;drawButton.disabled=!active}
   if(resignButton){resignButton.hidden=!active;resignButton.disabled=!active||resignPending}
+  const scheduledWaiting=!!state&&state.status==="waiting"&&state.matchType==="tournament"&&Boolean(state.scheduledAt)&&Boolean(state.playerBlackId);
+  if(tournamentReadyButton){tournamentReadyButton.hidden=!scheduledWaiting;tournamentReadyButton.classList.toggle("hidden",!scheduledWaiting);tournamentReadyButton.disabled=!scheduledWaiting||Boolean(state.myReady)}
+  if(tournamentScheduleNotice){tournamentScheduleNotice.hidden=!scheduledWaiting;if(scheduledWaiting){const schedule=new Date(state.scheduledAt).toLocaleString("en-KE",{timeZone:"Africa/Nairobi",dateStyle:"medium",timeStyle:"short"});tournamentScheduleNotice.textContent="Scheduled for "+schedule+" EAT"+(state.deadlineAt?" · attendance deadline "+new Date(state.deadlineAt).toLocaleTimeString("en-KE",{timeZone:"Africa/Nairobi",hour:"2-digit",minute:"2-digit"})+" EAT":" · no automatic expiry");}}
 }
 function cleanupSocket(){
   realtimeMatchReady=false;
@@ -1443,7 +1456,7 @@ function boardConfigurationKey(value){
   const targetId=Number(value&&value.matchId)||0;
   if(targetId>0)return "match:"+targetId;
   const c=value||{};
-  return "search:"+[c.mode||"",c.rankedMode||c.speed||"",Number(c.rankedStake||0),c.timeControl||"",Boolean(c.tournamentMode),c.tournamentId||""].join("|");
+  return "search:"+[c.mode||"",c.rankedMode||c.speed||"",Number(c.rankedStake||0),c.timeControl||"",Boolean(c.tournamentMode),c.tournamentId||"",c.scheduledAt||"",c.deadlineAt||""].join("|");
 }
 function initializeBoard(nextConfig){
   const requestedConfig=nextConfig&&typeof nextConfig==="object"?nextConfig:{};
@@ -1477,16 +1490,30 @@ function initializeBoard(nextConfig){
 function showGameOver(result,winnerId){
   if(Number(localStorage.getItem("goalGambitChessMatchId"))===Number(matchId))localStorage.removeItem("goalGambitChessMatchId");
   if(gameOverModal)gameOverModal.classList.remove("hidden");
+  if(result==="no_contest"){
+    if(gameOverTitleElement)gameOverTitleElement.textContent="No contest";
+    if(gameOverMessageElement)gameOverMessageElement.textContent="Neither player marked Ready before the configured deadline. The locked stakes were transferred to the administrator reserve.";
+    return;
+  }
   const me=getUserId();const win=winnerId&&Number(winnerId)===me;
-  if(gameOverTitleElement)gameOverTitleElement.textContent=result==="draw"?"Draw":win?"You Win":"You Lose";
-  if(gameOverMessageElement)gameOverMessageElement.textContent=result==="draw"?"The match ended in a draw.":win?"Congratulations — the result is confirmed.":"The match has ended. The result is confirmed.";
+  if(gameOverTitleElement)gameOverTitleElement.textContent=result==="draw"?"Draw":result==="walkover"?(win?"Walkover win":"Walkover loss"):win?"You Win":"You Lose";
+  if(gameOverMessageElement)gameOverMessageElement.textContent=result==="draw"?"The match ended in a draw.":result==="walkover"?(win?"Your opponent did not mark Ready before the deadline. The walkover win is recorded.":"You did not mark Ready before the deadline. The opponent's walkover is recorded."):win?"Congratulations — the result is confirmed.":"The match has ended. The result is confirmed.";
 }
 async function resign(){if(!matchId||!state||state.status!=="active"||!realtimeMatchReady)return;if(!confirm("Resign this match? It will be recorded as a loss and the match will be settled."))return;resignPending=true;updateMatchActions();try{const r=await api("/api/chess/"+matchId+"/resign",{method:"POST"});if(r.ok)applyState(r.data.match);else setStatus(r.data.message||"Unable to resign.","waiting")}catch(_){setStatus("Connection unavailable. The match is still active.","waiting")}finally{resignPending=false;updateMatchActions()}}
 async function offerDraw(){if(!matchId||!state||state.status!=="active"||!realtimeMatchReady)return;const r=await api("/api/chess/"+matchId+"/draw",{method:"POST"});setStatus(r.data.message||(r.ok?"Draw offer sent.":"Unable to offer a draw."),r.ok?"ready":"waiting")}
 async function respondDraw(accept){if(!matchId||!realtimeMatchReady)return;const r=await api("/api/chess/"+matchId+"/draw/respond",{method:"POST",body:{accept}});if(r.ok&&r.data.match)applyState(r.data.match);if(drawPanelElement)drawPanelElement.classList.add("hidden")}
+async function markTournamentReady(){
+  if(!matchId||!state||state.status!=="waiting"||!state.scheduledAt||!state.playerBlackId)return;
+  if(tournamentReadyButton)tournamentReadyButton.disabled=true;
+  const response=await api("/api/chess/"+matchId+"/ready",{method:"POST"});
+  if(response.ok&&response.data.match)applyState(response.data.match);
+  else if(response.data&&response.data.message)setStatus(response.data.message,"waiting");
+  if(tournamentReadyButton&&state&&!state.myReady)tournamentReadyButton.disabled=false;
+}
 
 if(flipButton)flipButton.addEventListener("click",()=>{boardFlipped=!boardFlipped;renderBoard()});
 if(cancelSearchButton)cancelSearchButton.addEventListener("click",cancelSearch);
+if(tournamentReadyButton)tournamentReadyButton.addEventListener("click",markTournamentReady);
 if(cancelPremoveButton)cancelPremoveButton.addEventListener("click",()=>clearPremove("Premove cancelled."));
 if(resignButton)resignButton.addEventListener("click",resign);
 if(drawButton)drawButton.addEventListener("click",offerDraw);
@@ -1530,7 +1557,7 @@ else setStatus("Choose ranked match settings to begin.","ready");
   if(matchId||!mode||window.parent!==window)return;
   const speed=mode.split("-")[0];
   const minutes=Number(params.get("minutes")||0), inc=Number(params.get("increment")||0);
-  config={rankedMode:speed,tournamentMode:mode.includes("tournament"),rankedStake:Number(params.get("stake")||0),timeControl:inc>0?minutes+"+"+inc:minutes+":00"};
+  config={rankedMode:speed,tournamentMode:mode.includes("tournament"),rankedStake:Number(params.get("stake")||0),timeControl:inc>0?minutes+"+"+inc:minutes+":00",scheduledAt:params.get("scheduledAt")||null,deadlineAt:params.get("deadlineAt")||null};
   setInfo();
   createOrJoin().then(setupSocket);
 })();

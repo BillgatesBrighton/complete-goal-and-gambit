@@ -31,6 +31,25 @@ ALTER TABLE users ALTER COLUMN game SET DEFAULT 'both';
 ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user';
 ALTER TABLE users ALTER COLUMN account_status SET DEFAULT 'active';
 
+-- Opaque per-device authentication sessions. JWTs carry only this identifier;
+-- bearer tokens themselves are never persisted. Legacy JWTs without a row are
+-- rejected by the authentication middleware after this migration is applied.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id          UUID PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    revoked_at  TIMESTAMPTZ,
+    CONSTRAINT auth_sessions_expiry_after_creation CHECK (expires_at > created_at),
+    CONSTRAINT auth_sessions_revoked_after_creation CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_expiry
+    ON auth_sessions(user_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_active_expiry
+    ON auth_sessions(expires_at) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry_cleanup
+    ON auth_sessions(expires_at);
+
 
 CREATE TABLE IF NOT EXISTS password_reset_codes (
     user_id           INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -115,11 +134,17 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency          VARCHAR(3)    NOT NULL DEFAULT 'KES',
     status            VARCHAR(20)   NOT NULL DEFAULT 'completed',
     reference         VARCHAR(120)  UNIQUE,
+    mpesa_callback_token_hash CHAR(64),
+    mpesa_payer_phone VARCHAR(20),
     description       TEXT,
     created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS mpesa_callback_token_hash CHAR(64);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS mpesa_payer_phone VARCHAR(20);
 CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_reference_unique ON transactions (reference);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_mpesa_callback_token_unique
+    ON transactions (mpesa_callback_token_hash) WHERE mpesa_callback_token_hash IS NOT NULL;
 
 -- Manual wallet withdrawal requests stay visible to admins until paid,
 -- declined, and (for completed requests) cleared from the admin queue.
@@ -144,18 +169,24 @@ CREATE TABLE IF NOT EXISTS manual_withdrawal_requests (
 ALTER TABLE manual_withdrawal_requests ADD COLUMN IF NOT EXISTS funds_reserved BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE manual_withdrawal_requests ADD COLUMN IF NOT EXISTS balance_debited_at_request BOOLEAN NOT NULL DEFAULT TRUE;
 
--- Upgrade legacy pending requests once: keep them unavailable while making
--- the total wallet balance show the amount that will be deducted only on payout.
+-- New manual requests reserve funds without reducing the player's wallet
+-- balance. Restore the displayed wallet balance once for older pending rows
+-- that were debited when requested; their spendable amount remains unchanged
+-- because the matching withdrawal reserve is still held.
 WITH migrated AS (
     UPDATE manual_withdrawal_requests
        SET balance_debited_at_request=FALSE
      WHERE status='pending' AND funds_reserved=TRUE AND balance_debited_at_request=TRUE
      RETURNING user_id,total_amount
 ), totals AS (
-    SELECT user_id,SUM(total_amount) AS amount FROM migrated GROUP BY user_id
+    SELECT user_id,SUM(total_amount) AS amount
+      FROM migrated
+     GROUP BY user_id
 )
-UPDATE wallets w SET balance=w.balance+totals.amount,updated_at=NOW()
-  FROM totals WHERE w.user_id=totals.user_id;
+UPDATE wallets w
+   SET balance=w.balance+totals.amount,updated_at=NOW()
+  FROM totals
+ WHERE w.user_id=totals.user_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_withdrawal_one_pending_per_user
     ON manual_withdrawal_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS idx_manual_withdrawal_admin_queue
@@ -236,6 +267,11 @@ CREATE TABLE IF NOT EXISTS chess_matches (
     rating_updated_at   TIMESTAMPTZ,
     settled_at          TIMESTAMPTZ,
     payout_status       VARCHAR(20),
+    season_key          VARCHAR(7),
+    scheduled_at        TIMESTAMPTZ,
+    deadline_at         TIMESTAMPTZ,
+    white_ready_at      TIMESTAMPTZ,
+    black_ready_at      TIMESTAMPTZ,
     created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 -- Existing databases keep their original table definition when the schema is
@@ -246,6 +282,26 @@ ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS active_color CHAR(1);
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS draw_offer_user_id BIGINT;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS rating_updated_at TIMESTAMPTZ;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20);
+-- Season assignment and attendance metadata are set only for newly created
+-- tournament matches. Historical tournament rows remain NULL for explicit
+-- reconciliation; schema startup never guesses their season.
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS season_key VARCHAR(7);
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS white_ready_at TIMESTAMPTZ;
+ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS black_ready_at TIMESTAMPTZ;
+DO $migration$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chess_matches_deadline_requires_schedule' AND conrelid='chess_matches'::regclass) THEN
+        ALTER TABLE chess_matches ADD CONSTRAINT chess_matches_deadline_requires_schedule
+            CHECK (deadline_at IS NULL OR (scheduled_at IS NOT NULL AND deadline_at > scheduled_at)) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chess_matches_ready_requires_schedule' AND conrelid='chess_matches'::regclass) THEN
+        ALTER TABLE chess_matches ADD CONSTRAINT chess_matches_ready_requires_schedule
+            CHECK (scheduled_at IS NOT NULL OR (white_ready_at IS NULL AND black_ready_at IS NULL)) NOT VALID;
+    END IF;
+END
+$migration$;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_at TIMESTAMPTZ;
 ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS admin_cleared_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 -- Persist server-owned connection pauses so a reconnect cannot restart a clock
@@ -256,6 +312,7 @@ ALTER TABLE chess_matches ADD COLUMN IF NOT EXISTS connection_lost_user_id INTEG
 UPDATE chess_matches
    SET payout_status='pending_competition'
  WHERE match_type='tournament' AND status='completed' AND stake_amount>0
+   AND season_key IS NOT NULL
    AND (payout_status IS NULL OR payout_status='not_applicable');
 -- Queue rows have no black player until a match is found. Keep both player
 -- references nullable so older installations match the current table shape
@@ -313,6 +370,67 @@ CREATE INDEX IF NOT EXISTS idx_active_chess_users_by_rating
     WHERE account_status='active' AND game IN ('chess','both');
 CREATE INDEX IF NOT EXISTS idx_chess_matches_admin_history
     ON chess_matches (admin_cleared_at, finished_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_chess_tournament_season_state
+    ON chess_matches (season_key,time_control,stake_amount,status,payout_status,id)
+    WHERE match_type='tournament';
+CREATE INDEX IF NOT EXISTS idx_chess_tournament_schedule_due
+    ON chess_matches (scheduled_at,deadline_at,id)
+    WHERE match_type='tournament' AND status='waiting'
+      AND season_key IS NOT NULL AND player_black_id IS NOT NULL AND scheduled_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS chess_match_financial_dispositions (
+    match_id       BIGINT NOT NULL REFERENCES chess_matches(id) ON DELETE RESTRICT,
+    user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_key     VARCHAR(7) NOT NULL,
+    stake_amount   NUMERIC(12,2) NOT NULL CHECK (stake_amount >= 0),
+    disposition    VARCHAR(20) NOT NULL DEFAULT 'pending'
+                   CHECK (disposition IN ('pending','competition_paid','admin_forfeited','refunded')),
+    reference      VARCHAR(140),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    settled_at     TIMESTAMPTZ,
+    PRIMARY KEY(match_id,user_id),
+    CHECK ((disposition='pending' AND settled_at IS NULL) OR
+           (disposition<>'pending' AND settled_at IS NOT NULL))
+);
+-- Account deletion already anonymizes the shared Chess match itself. Remove
+-- its per-player settlement marker with that account while retaining the
+-- underlying match and journal history. Keep existing installations aligned.
+DO $migration$
+DECLARE delete_action "char";
+BEGIN
+    SELECT confdeltype INTO delete_action
+      FROM pg_constraint
+     WHERE conrelid='chess_match_financial_dispositions'::regclass
+       AND conname='chess_match_financial_dispositions_user_id_fkey';
+    IF delete_action IS NULL THEN
+        ALTER TABLE chess_match_financial_dispositions
+            ADD CONSTRAINT chess_match_financial_dispositions_user_id_fkey
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE;
+    ELSIF delete_action <> 'c' THEN
+        ALTER TABLE chess_match_financial_dispositions
+            DROP CONSTRAINT chess_match_financial_dispositions_user_id_fkey;
+        ALTER TABLE chess_match_financial_dispositions
+            ADD CONSTRAINT chess_match_financial_dispositions_user_id_fkey
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE;
+    END IF;
+END
+$migration$;
+CREATE INDEX IF NOT EXISTS idx_chess_match_dispositions_group
+    ON chess_match_financial_dispositions(season_key,disposition,match_id,user_id);
+
+CREATE TABLE IF NOT EXISTS chess_tournament_groups (
+    season_key    VARCHAR(7) NOT NULL,
+    time_control  VARCHAR(20) NOT NULL,
+    stake_amount  NUMERIC(12,2) NOT NULL CHECK (stake_amount >= 0),
+    status        VARCHAR(16) NOT NULL DEFAULT 'open' CHECK (status IN ('open','settled')),
+    opened_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closes_at     TIMESTAMPTZ NOT NULL,
+    settled_at    TIMESTAMPTZ,
+    PRIMARY KEY(season_key,time_control,stake_amount),
+    CHECK ((status='open' AND settled_at IS NULL) OR (status='settled' AND settled_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_chess_tournament_groups_closing
+    ON chess_tournament_groups(status,closes_at,season_key,time_control,stake_amount);
 
 CREATE TABLE IF NOT EXISTS chess_scheduled_matches (
     id                      BIGSERIAL PRIMARY KEY,
@@ -1059,10 +1177,77 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     client_message_id VARCHAR(80)
 );
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS client_message_id VARCHAR(80);
+-- Chat content is encrypted by the application before it reaches PostgreSQL.
+-- The plaintext `message` column remains only as a compatibility placeholder
+-- for legacy rows and older integrations; new writes store ciphertext here.
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS message_ciphertext BYTEA;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS message_iv BYTEA;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS message_auth_tag BYTEA;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS encryption_key_id VARCHAR(80);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_sender_client_id
     ON chat_messages(sender_id,client_message_id) WHERE client_message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS admin_chat_history_audit_events (
+    id BIGSERIAL PRIMARY KEY,
+    admin_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    player_user_id INTEGER NOT NULL,
+    thread_id BIGINT,
+    action VARCHAR(16) NOT NULL CHECK (action IN ('view','export')),
+    export_format VARCHAR(16) CHECK (export_format IS NULL OR export_format IN ('json','pdf')),
+    evidence_sha256 CHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((action='view' AND export_format IS NULL AND evidence_sha256 IS NULL)
+        OR (action='export' AND export_format IS NOT NULL AND evidence_sha256 ~ '^[a-f0-9]{64}$'))
+);
+CREATE INDEX IF NOT EXISTS idx_admin_chat_history_audit_player
+    ON admin_chat_history_audit_events(player_user_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_chat_history_audit_admin
+    ON admin_chat_history_audit_events(admin_id,created_at DESC,id DESC);
+
+CREATE OR REPLACE FUNCTION gg_guard_admin_chat_history_audit() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'Administrator chat history audit events are immutable';
+END;
+$$ LANGUAGE plpgsql;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_admin_chat_history_audit_immutable' AND NOT tgisinternal) THEN
+        CREATE TRIGGER gg_admin_chat_history_audit_immutable BEFORE UPDATE OR DELETE ON admin_chat_history_audit_events
+            FOR EACH ROW EXECUTE FUNCTION gg_guard_admin_chat_history_audit();
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS efootball_result_evidence (
+    id BIGSERIAL PRIMARY KEY,
+    verification_id BIGINT NOT NULL REFERENCES efootball_result_verifications(id) ON DELETE CASCADE,
+    uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    storage_key VARCHAR(100) NOT NULL UNIQUE,
+    mime_type VARCHAR(40) NOT NULL CHECK (mime_type IN ('image/jpeg','image/png','image/webp')),
+    byte_size INTEGER NOT NULL CHECK (byte_size BETWEEN 1 AND 8388608),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(verification_id,uploader_id)
+);
+CREATE INDEX IF NOT EXISTS idx_efootball_result_evidence_case
+    ON efootball_result_evidence(verification_id,created_at,id);
+
+ALTER TABLE efootball_result_admin_events ADD COLUMN IF NOT EXISTS from_status VARCHAR(30);
+ALTER TABLE efootball_result_admin_events ADD COLUMN IF NOT EXISTS to_status VARCHAR(30);
+ALTER TABLE efootball_result_admin_events ADD COLUMN IF NOT EXISTS reason TEXT;
+ALTER TABLE efootball_result_admin_events ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE efootball_result_admin_events ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE OR REPLACE FUNCTION gg_guard_efootball_result_admin_event() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'eFootball result investigation events are immutable';
+END;
+$$ LANGUAGE plpgsql;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='gg_efootball_result_admin_events_immutable' AND NOT tgisinternal) THEN
+        CREATE TRIGGER gg_efootball_result_admin_events_immutable BEFORE UPDATE OR DELETE ON efootball_result_admin_events
+            FOR EACH ROW EXECUTE FUNCTION gg_guard_efootball_result_admin_event();
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS complaints (
     id BIGSERIAL PRIMARY KEY,

@@ -14,6 +14,8 @@ test("Chess competition frontend endpoints are mounted and do not return API 404
         async query(sql, params) {
             const text = String(sql);
             queries.push({ text, params });
+            if (text.includes("FROM chess_tournament_groups")) return { rows: [] };
+            if (text.includes("TO_CHAR(date_trunc('month'")) return { rows: [{ season_key: "2026-11" }] };
             if (text.includes("SELECT DISTINCT TO_CHAR")) return { rows: [] };
             if (text.includes("WITH player_results")) return { rows: [] };
             if (text.includes("FROM chess_matches m") && text.includes("match_type = 'ranked'")) return { rows: [] };
@@ -23,12 +25,30 @@ test("Chess competition frontend endpoints are mounted and do not return API 404
             }
             if (text.includes("INSERT INTO chess_tournament_entries")) return { rowCount: 1, rows: [{ id: 91 }] };
             throw new Error("Unexpected Chess competition query: " + text.slice(0, 100));
+        },
+        async connect() {
+            return {
+                async query(sql) {
+                    const statement = String(sql).replace(/\s+/g, " ").trim();
+                    queries.push({ text: statement, params: [] });
+                    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(statement) ||
+                        statement.startsWith("SET LOCAL ") || statement.includes("pg_advisory_xact_lock") ||
+                        statement.startsWith("INSERT INTO chess_tournament_groups")) return { rows: [] };
+                    if (statement.includes("FROM auth_sessions s") && statement.includes("JOIN users u")) return { rows: [{ "1": 1 }] };
+                    if (statement.includes("TO_CHAR(date_trunc('month'")) return { rows: [{ season_key: "2026-11" }] };
+                    if (statement.includes("SELECT status FROM chess_tournament_groups")) return { rows: [{ status: "open" }] };
+                    if (statement.includes("SELECT game,account_status FROM users WHERE id=$1")) return { rows: [{ game: "both", account_status: "active" }] };
+                    if (statement.includes("INSERT INTO chess_tournament_entries")) return { rows: [{ id: 91 }], rowCount: 1 };
+                    throw new Error("Unexpected Chess competition transaction query: " + statement.slice(0, 100));
+                },
+                release() {}
+            };
         }
     };
     const app = express();
     app.use(express.json());
     const authenticateTestUser = (req, _res, next) => {
-        req.user = { userId: 73 };
+        req.user = { userId: 73, sessionId: "00000000-0000-4000-8000-000000000073", authVersion: 0 };
         next();
     };
 

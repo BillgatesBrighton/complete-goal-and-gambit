@@ -7,6 +7,10 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+process.env.CHAT_DATA_ENCRYPTION_ACTIVE_KEY_ID = "announcement-companion-test";
+process.env.CHAT_DATA_ENCRYPTION_KEYS = JSON.stringify({
+    "announcement-companion-test": crypto.randomBytes(32).toString("base64")
+});
 const adminRoutes = require("../routes/admin");
 const companionRoutes = require("../routes/companion");
 const chatRoutes = require("../routes/chat");
@@ -161,7 +165,7 @@ test("support chat message references make offline retries idempotent and bind m
                     messageInsertCount += 1;
                     return { rows: messageInsertCount === 1 ? [saved] : [] };
                 }
-                if (/SELECT id,sender_id,message,created_at,read_at,client_message_id/i.test(sql)) return { rows: [saved] };
+                if (/SELECT id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,read_at,client_message_id/i.test(sql)) return { rows: [saved] };
                 if (/SELECT id FROM users WHERE role='admin'/i.test(sql)) return { rows: [] };
                 return { rows: [] };
             },
@@ -363,7 +367,9 @@ test("companion onboarding requires authenticated app registration, current term
     assert.equal(status.onboardingComplete, false);
     assert.equal(status.termsAccepted, false);
     assert.equal(status.termsVersion, companionRoutes.TERMS_VERSION);
-    assert.equal(status.apk.version, "1.2.2", "the companion download reports the newly built app version");
+    const gradleSource = fs.readFileSync(path.join(__dirname, "../../android/app/build.gradle.kts"), "utf8");
+    const expectedAppVersion = gradleSource.match(/versionName\s*=\s*"([^"]+)"/)[1];
+    assert.equal(status.apk.version, expectedAppVersion, "the download metadata matches the current Android build version");
     assert.equal((await readStatus({})).status, 401, "status is private to an authenticated account");
     assert.equal((await fetch(base + "/terms/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 401,
         "an unauthenticated request cannot record terms acceptance");
@@ -424,7 +430,8 @@ test("companion onboarding requires authenticated app registration, current term
     assert.equal(invalidInstall.status, 400, "malformed installation identifiers cannot confirm an app install");
 
     const frontend = fs.readFileSync(path.join(__dirname, "../../frontend/js/api.js"), "utf8");
-    assert.match(frontend, /onboardingComplete === true/);
+    assert.match(frontend, /status\.data\.needsAcknowledgement/,
+        "the signed-in guide follows the server's current acknowledgement requirement");
     assert.doesNotMatch(frontend, /navigator\.getInstalledRelatedApps/, "PWA/browser presence is not treated as a separately installed APK");
 });
 

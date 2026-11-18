@@ -7,8 +7,11 @@ const crypto = require("crypto");
 const rateLimit = require("../middleware/rateLimit");
 const { publicAccountRole } = require("../middleware/adminAuthorization");
 const createToken = require("../services/authToken");
+const {
+    acquireAccountInvalidationLocks,
+    lockAndRevokeUserSessions
+} = require("../services/authSession");
 const defaultEmailService = require("../services/emailService");
-const router = express.Router();
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -113,6 +116,7 @@ function tokenMatches(expectedHash, secret) {
 // ======================================================
 
 module.exports = function(pool, authenticateToken, io, options) {
+    const router = express.Router();
     options = options || {};
     const emailService = options.emailService || defaultEmailService;
 
@@ -429,6 +433,8 @@ module.exports = function(pool, authenticateToken, io, options) {
                     [user.id]
                 );
 
+                const token = await createToken(user, client);
+
 
                 // -------------------------------
                 // COMMIT
@@ -448,13 +454,6 @@ module.exports = function(pool, authenticateToken, io, options) {
                     console.error("Registration email verification delivery failed.");
                 }
 
-
-                // -------------------------------
-                // TOKEN
-                // -------------------------------
-
-                const token =
-                    createToken(user);
 
                 user.role = publicAccountRole(user);
 
@@ -693,6 +692,7 @@ module.exports = function(pool, authenticateToken, io, options) {
         "/login",
         loginLimiter,
         async function(req, res) {
+            let sessionClient;
 
             try {
 
@@ -837,8 +837,10 @@ module.exports = function(pool, authenticateToken, io, options) {
                 }
 
 
-                const token =
-                    createToken(user);
+                sessionClient = await pool.connect();
+                await sessionClient.query("BEGIN");
+                const token = await createToken(user, sessionClient);
+                await sessionClient.query("COMMIT");
 
 
                 res.json({
@@ -889,6 +891,8 @@ module.exports = function(pool, authenticateToken, io, options) {
 
             } catch (error) {
 
+                if (sessionClient) await sessionClient.query("ROLLBACK").catch(() => {});
+
                 console.error(
                     "Login error:",
                     error.message
@@ -904,10 +908,42 @@ module.exports = function(pool, authenticateToken, io, options) {
 
                 });
 
+            } finally {
+                if (sessionClient) sessionClient.release();
+
             }
 
         }
     );
+
+
+    router.post("/logout", authenticateToken, async function(req, res) {
+        const sessionId = String(req.user && req.user.sessionId || "");
+        const userId = Number(req.user && req.user.userId);
+        if (!sessionId || !Number.isSafeInteger(userId) || userId <= 0) {
+            return res.status(401).json({ success: false, message: "Authentication session is invalid." });
+        }
+        let client;
+        try {
+            client = await pool.connect();
+            await client.query("BEGIN");
+            await acquireAccountInvalidationLocks(client, userId);
+            await client.query(
+                `UPDATE auth_sessions SET revoked_at=NOW()
+                  WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`,
+                [sessionId, userId]
+            );
+            await client.query("COMMIT");
+            if (io) io.in("auth_session_" + sessionId).disconnectSockets(true);
+            return res.json({ success: true, revoked: true });
+        } catch (error) {
+            if (client) await client.query("ROLLBACK").catch(() => {});
+            console.error("Authentication logout failed:", error && error.message);
+            return res.status(503).json({ success: false, message: "Could not confirm server sign out." });
+        } finally {
+            if (client) client.release();
+        }
+    });
 
 
     // Signed-in users can update their username and/or password after
@@ -945,18 +981,34 @@ module.exports = function(pool, authenticateToken, io, options) {
                 return res.status(400).json({ success: false, message: "Choose Chess, eFootball, or Both games." });
             }
 
+            let client;
             try {
-                const current = await pool.query(
+                client = await pool.connect();
+                await client.query("BEGIN");
+                await acquireAccountInvalidationLocks(client, req.user.userId);
+                const activeSession = await client.query(
+                    `SELECT 1 FROM auth_sessions s JOIN users u ON u.id=s.user_id
+                      WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL
+                        AND s.expires_at>NOW() AND u.auth_version=$3`,
+                    [req.user.sessionId, req.user.userId, Number(req.user.authVersion || 0)]
+                );
+                if (!activeSession.rows.length) {
+                    await client.query("ROLLBACK");
+                    return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+                }
+                const current = await client.query(
                     `SELECT id,username,phone,password_hash,rating,game,role,auth_version
-                     FROM users WHERE id=$1 AND account_status='active'`,
+                     FROM users WHERE id=$1 AND account_status='active' FOR UPDATE`,
                     [req.user.userId]
                 );
                 if (!current.rows.length) {
+                    await client.query("ROLLBACK");
                     return res.status(404).json({ success: false, message: "Active account not found." });
                 }
 
                 const user = current.rows[0];
                 if (!(await bcrypt.compare(currentPassword, user.password_hash))) {
+                    await client.query("ROLLBACK");
                     return res.status(401).json({ success: false, message: "Current password is incorrect." });
                 }
 
@@ -964,16 +1016,23 @@ module.exports = function(pool, authenticateToken, io, options) {
                 const nextPhone = phoneProvided ? phone : user.phone;
                 const nextGame = gameProvided ? game : user.game;
                 if (nextUsername === user.username && nextPhone === user.phone && nextGame === user.game && !changesPassword) {
+                    await client.query("ROLLBACK");
                     return res.status(400).json({ success: false, message: "Enter a value that is different from your current account details." });
                 }
                 if (changesPassword && await bcrypt.compare(newPassword, user.password_hash)) {
+                    await client.query("ROLLBACK");
                     return res.status(400).json({ success: false, message: "Choose a password you have not used for this account." });
                 }
+
+                // Both account gates are held before any row locks. Lock the
+                // old sessions in stable order, revoke them, and retain all
+                // locks through version change and replacement-session commit.
+                await lockAndRevokeUserSessions(client, user.id);
 
                 const passwordHash = changesPassword
                     ? await bcrypt.hash(newPassword, 12)
                     : user.password_hash;
-                const updated = await pool.query(
+                const updated = await client.query(
                     `UPDATE users
                      SET username=$1,phone=$2,game=$3,password_hash=$4,auth_version=auth_version+1
                      WHERE id=$5 AND account_status='active'
@@ -981,11 +1040,13 @@ module.exports = function(pool, authenticateToken, io, options) {
                     [nextUsername, nextPhone, nextGame, passwordHash, user.id]
                 );
                 if (!updated.rows.length) {
+                    await client.query("ROLLBACK");
                     return res.status(404).json({ success: false, message: "Active account not found." });
                 }
 
                 const changedUser = updated.rows[0];
-                const token = createToken(changedUser);
+                const token = await createToken(changedUser, client, { accountMutationLockHeld: "exclusive" });
+                await client.query("COMMIT");
                 changedUser.role = publicAccountRole(changedUser);
                 if (io) io.in("user_" + changedUser.id).disconnectSockets(true);
                 return res.json({
@@ -995,6 +1056,7 @@ module.exports = function(pool, authenticateToken, io, options) {
                     user: changedUser
                 });
             } catch (error) {
+                if (client) await client.query("ROLLBACK").catch(() => {});
                 if (error && error.code === "23505") {
                     const constraint = String(error.constraint || "").toLowerCase();
                     return res.status(409).json({
@@ -1008,6 +1070,8 @@ module.exports = function(pool, authenticateToken, io, options) {
                 }
                 console.error("Account update error:", error && error.message);
                 return res.status(500).json({ success: false, message: "Could not update account. Please try again." });
+            } finally {
+                if (client) client.release();
             }
         };
 

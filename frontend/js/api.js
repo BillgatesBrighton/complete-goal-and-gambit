@@ -31,10 +31,13 @@
     var presenceScriptPending = false;
     var websitePresenceTimer = null;
     var presenceLifecycleInstalled = false;
+    var applicationActivityPending = false;
     var onlineUserIds = new Set();
     var companionNoticeCheckInFlight = false;
     var companionNoticeRefreshPending = false;
     var companionNoticeLastCheckedAt = 0;
+    var logoutInProgress = false;
+    var LOGOUT_TIMEOUT_MS = 8000;
 
     function getToken() {
         return localStorage.getItem(TOKEN_KEY);
@@ -126,8 +129,16 @@
             // Only the Chess page renders scheduled Chess game details. A
             // visible homepage or unrelated page must not suppress reminders.
             active: /\/pages\/chess\.html$/i.test(location.pathname) &&
-                document.visibilityState !== "hidden"
+                document.visibilityState !== "hidden",
+            activity: document.visibilityState !== "hidden" && applicationActivityPending
         });
+        applicationActivityPending = false;
+    }
+
+    function markApplicationActivity() {
+        if (!getToken() || document.visibilityState === "hidden") return;
+        applicationActivityPending = true;
+        emitWebsitePresence();
     }
 
     function startPresence() {
@@ -173,7 +184,14 @@
             document.addEventListener("visibilitychange", emitWebsitePresence);
             window.addEventListener("focus", emitWebsitePresence);
             window.addEventListener("blur", emitWebsitePresence);
+            ["pointerdown", "keydown", "touchstart", "wheel"].forEach(function(eventName) {
+                document.addEventListener(eventName, markApplicationActivity, { passive: true, capture: true });
+            });
         }
+
+        // A visible, authenticated page load is a real user session signal;
+        // later heartbeats never extend activity unless input actually occurs.
+        if (document.visibilityState !== "hidden") applicationActivityPending = true;
 
         if (window.io) {
             connect();
@@ -231,12 +249,45 @@
         sessionStorage.removeItem("goalGambitPushAlternativeAcknowledged");
     }
 
+    function clearSessionIfTokenMatches(expectedToken) {
+        if (getToken() !== expectedToken) return false;
+        clearSession();
+        return true;
+    }
+
     function logout() {
-        disablePushNotifications({ silent: true }).catch(function() {}).finally(function() {
-            clearSession();
+        if (logoutInProgress) return;
+        logoutInProgress = true;
+        var logoutToken = getToken();
+        var completed = false;
+        var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+        var timeout = window.setTimeout(function() { finishLogout(false); }, LOGOUT_TIMEOUT_MS);
+        function finishLogout(revoked) {
+            if (completed) return;
+            completed = true;
+            window.clearTimeout(timeout);
+            if (controller) controller.abort();
+            clearSessionIfTokenMatches(logoutToken);
             try { sessionStorage.removeItem(POST_LOGIN_PATH_KEY); } catch (_) {}
             location.replace(new URL("pages/index.html", frontendRootUrl).href);
-        });
+        }
+        (async function() {
+            try {
+                await disablePushNotifications({ silent: true, signal: controller && controller.signal, authToken: logoutToken });
+                if (completed) return;
+                if (!logoutToken) return finishLogout(false);
+                var result = await api("/api/auth/logout", {
+                    method: "POST",
+                    body: {},
+                    noRedirect: true,
+                    authToken: logoutToken,
+                    signal: controller && controller.signal
+                });
+                finishLogout(result.ok && result.data && result.data.revoked === true);
+            } catch (_) {
+                finishLogout(false);
+            }
+        })();
     }
 
     function showCompanionWelcomeGuide(statusData) {
@@ -255,6 +306,7 @@
             '<p style="margin:0 0 16px;color:#d5d0c2">Review these account and wallet reminders. Acknowledging this guide does not confirm app installation, notification permission, or wallet funding.</p>' +
             '<div style="display:grid;gap:12px">' +
             '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Match notifications</h2><p style="margin:0">Manage match alerts and review recent delivery activity under Notification Settings.</p></article>' +
+            '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">GOAL$GAMBIT Player App</h2><p style="margin:0 0 10px">Download the Android Player App to continue. Match notifications are optional.</p><a href="../downloads/goal-gambit-player-v1.3.2.apk" download="GOAL-GAMBIT-Player-v1.3.2.apk" style="display:inline-block;padding:10px 14px;border:1px solid #dfb82f;border-radius:9px;color:#f0cb4c;font-weight:800;text-decoration:none">Download Player App · v1.3.2</a></article>' +
             '<article style="padding:14px;border:1px solid #343331;border-radius:12px;background:#171819"><h2 style="margin:0 0 6px;color:#f0cb4c;font-size:18px">Wallet and competitions</h2><p style="margin:0 0 10px">Wait until deposits are confirmed and visible as available balance. Pending deposits and funds locked in another match are not available entry funds. Review the entry fee and prize rules, never pay an administrator personally, and only deposit what you can afford to lose.</p><a href="wallet.html" style="display:inline-block;padding:10px 14px;border:1px solid #dfb82f;border-radius:9px;color:#f0cb4c;font-weight:800;text-decoration:none">Open Wallet</a></article>' +
             '<p style="margin:0;color:#d5d0c2">Once setup is complete, follow the instructions in each match or competition and submit results honestly.</p>' +
             '<label style="display:flex;align-items:flex-start;gap:10px;padding:12px 0;color:#f5f1e4"><input id="gg-welcome-read" type="checkbox" style="width:20px;height:20px;flex:none;margin-top:2px">I have read this setup guide and understand that acknowledging it does not confirm app installation, notification permission, or wallet funding.</label>' +
@@ -308,8 +360,14 @@
         banner.setAttribute("role", "status");
         banner.style.cssText = "box-sizing:border-box;padding:12px 16px;border:1px solid #80671e;border-radius:10px;background:#171307;color:#f5e9bd;margin:12px auto;max-width:1100px;font:14px/1.5 Arial,sans-serif";
         var message = document.createElement("span");
-        message.textContent = "This account has no Android notification device registered yet. Existing registered Android apps can still enable match alerts and room-code replies.";
+        message.textContent = "Get the GOAL$GAMBIT Android Player App. Match notifications are optional.";
         banner.appendChild(message);
+        var download = document.createElement("a");
+        download.href = "../downloads/goal-gambit-player-v1.3.2.apk";
+        download.download = "GOAL-GAMBIT-Player-v1.3.2.apk";
+        download.textContent = " Download Player App · v1.3.2";
+        download.style.cssText = "display:inline-block;margin-left:8px;color:#f5d45a;font-weight:800";
+        banner.appendChild(download);
         document.body.insertBefore(banner, document.body.firstChild);
     }
 
@@ -357,7 +415,9 @@
         var headers = { "Accept": "application/json" };
         var isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
         if (options.body !== undefined && !isFormData) headers["Content-Type"] = "application/json";
-        var token = getToken();
+        var token = Object.prototype.hasOwnProperty.call(options, "authToken")
+            ? options.authToken
+            : getToken();
         if (token) headers["Authorization"] = "Bearer " + token;
 
         try {
@@ -366,6 +426,7 @@
                 headers: headers,
                 body: options.body === undefined ? undefined :
                     (isFormData ? options.body : JSON.stringify(options.body)),
+                signal: options.signal,
                 // Account history and wallet responses must never come back
                 // from a browser cache after a user clears a list.
                 cache: options.cache || "no-store"
@@ -515,7 +576,10 @@
 
     async function disablePushNotifications(options) {
         options = options || {};
-        if (!getToken()) return { disabled: false };
+        var authToken = Object.prototype.hasOwnProperty.call(options, "authToken")
+            ? options.authToken
+            : getToken();
+        if (!authToken) return { disabled: false };
         try {
             var registration = null;
             if ("serviceWorker" in navigator) {
@@ -527,7 +591,9 @@
             var response = await api("/api/push/subscriptions", {
                 method: "DELETE",
                 body: subscription ? { endpoint: subscription.endpoint } : {},
-                noRedirect: true
+                noRedirect: true,
+                authToken: authToken,
+                signal: options.signal
             });
             if (!response.ok) throw new Error(response.data.message || "Could not turn off alerts right now.");
             if (subscription) await subscription.unsubscribe();

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <link rel="stylesheet" href="gold-glow.css?v=20261115-ambient-gold-visibility">
+
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow,noarchive">
@@ -37,9 +38,15 @@
             return;
           }
           if (me.data.user.role !== "admin") {
-            showAccessMessage("Administrator access is required for this page. Sign in with an administrator account.", false);
+            showAccessMessage("The server did not authorize this account for the administrator page. Sign in with an administrator account.", false);
             return;
           }
+          var navEntries = performance.getEntriesByType ? performance.getEntriesByType("navigation") : [];
+          var navigationType = navEntries.length ? navEntries[0].type : "navigate";
+          try {
+            if (navigationType === "navigate") sessionStorage.setItem("ggAdminVaultEntryPending", "1");
+            else sessionStorage.removeItem("ggAdminVaultEntryPending");
+          } catch (_) {}
           var response = await fetch(GG.API_BASE + "/api/admin/dashboard-page", {
             headers: { Authorization: "Bearer " + GG.getToken() },
             cache: "no-store"
@@ -51,7 +58,7 @@
           if (response.status === 403) {
             var denial = {};
             try { denial = await response.json(); } catch (_) {}
-            showAccessMessage("Administrator access is required for this page. Sign in with an administrator account.", false);
+            showAccessMessage("The server did not authorize this account for the administrator page. Sign in with an administrator account.", false);
             return;
           }
           if (!response.ok) throw new Error("Could not load the administrator dashboard (HTTP " + response.status + ").");

@@ -12,6 +12,8 @@ const {
 } = require("../services/efootballtournament");
 const { getEfootballScheduleState } = require("../services/efootballScheduleRules");
 const { analyzeScreenshot, matchesExpected } = require("../services/imageverification");
+const { lockActiveAuthSession } = require("../services/authSession");
+const { getImageType, storePrivateImage } = require("../services/privateEvidence");
 
 module.exports = function (pool, authenticateToken, io, pushService, efootballScheduler) {
 
@@ -848,6 +850,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             await client.query("SELECT pg_advisory_xact_lock($1::integer)", [userId]);
 
             const account = await client.query("SELECT game, account_status FROM users WHERE id=$1", [userId]);
@@ -1158,6 +1164,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const locked = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!locked.rows.length) throw Object.assign(new Error("Match not found."), { status: 404 });
             const match = locked.rows[0];
@@ -1276,6 +1286,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const found = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!found.rows.length) throw Object.assign(new Error("Match not found."), { status: 404 });
             const match = found.rows[0];
@@ -1390,6 +1404,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             await client.query("SELECT pg_advisory_xact_lock($1::integer)", [userId]);
             const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!result.rows.length) throw Object.assign(new Error("Match not found."), { status: 404 });
@@ -1504,6 +1522,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
                     Number(req.user.userId);
 
                 await client.query("BEGIN");
+                if (!(await lockActiveAuthSession(client, req.user))) {
+                    await client.query("ROLLBACK");
+                    return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+                }
 
                 const matchResult =
                     await client.query(
@@ -1751,6 +1773,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!result.rows.length) {
                 await client.query("ROLLBACK");
@@ -1850,6 +1876,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!result.rows.length) {
                 await client.query("ROLLBACK");
@@ -2015,6 +2045,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!result.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Match not found." }); }
             const match = result.rows[0];
@@ -2076,6 +2110,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const result = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!result.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Match not found." }); }
             const match = result.rows[0];
@@ -2139,6 +2177,10 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const found = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!found.rows.length) {
                 await client.query("ROLLBACK");
@@ -2487,19 +2529,18 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
         if (!file) return res.status(400).json({ success: false, message: "Choose a match screenshot to upload." });
 
         const buffer = file.buffer;
-        let extension = null;
-        if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff && file.mimetype === "image/jpeg") extension = ".jpg";
-        if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && file.mimetype === "image/png") extension = ".png";
-        if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP" && file.mimetype === "image/webp") extension = ".webp";
-        if (!extension) return res.status(400).json({ success: false, message: "The uploaded file is not a valid JPEG, PNG or WebP image." });
+        const imageType=getImageType(buffer,file.mimetype);
+        if (!imageType) return res.status(400).json({ success: false, message: "The uploaded file is not a valid JPEG, PNG or WebP image." });
 
         const uploadDirectory = path.join(__dirname, "..", "uploads", "match-verification");
-        const storedName = randomUUID() + extension;
-        const storedPath = path.join(uploadDirectory, storedName);
-        let fileWritten = false;
+        let stored = null;
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const matchResult = await client.query("SELECT * FROM efootball_matches WHERE id=$1 FOR UPDATE", [matchId]);
             if (!matchResult.rows.length) {
                 await client.query("ROLLBACK");
@@ -2515,19 +2556,19 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
                 return res.status(409).json({ success: false, message: "Screenshot upload is only available while this match is active or under review." });
             }
             const verification = await ensureResultVerification(client, match);
-            if (!verification || Number(verification.selected_player_id) !== userId) {
+            if (!verification) {
                 await client.query("ROLLBACK");
-                return res.status(403).json({ success: false, message: "Only the player selected for this match can submit its screenshot." });
+                return res.status(409).json({ success: false, message: "Result verification is unavailable for this match." });
             }
-            if (verification.screenshot_path) {
+            const priorEvidence=await client.query("SELECT id FROM efootball_result_evidence WHERE verification_id=$1 AND uploader_id=$2",[verification.id,userId]);
+            const legacySubmitted=verification.screenshot_path&&Number(verification.selected_player_id)===userId;
+            if (priorEvidence.rows.length||legacySubmitted) {
                 await client.query("ROLLBACK");
-                return res.status(409).json({ success: false, message: "A screenshot has already been submitted for this match." });
+                return res.status(409).json({ success: false, message: "You have already submitted screenshot evidence for this match." });
             }
             await client.query("COMMIT");
 
-            await fs.promises.mkdir(uploadDirectory, { recursive: true });
-            await fs.promises.writeFile(storedPath, buffer, { flag: "wx" });
-            fileWritten = true;
+            stored=await storePrivateImage(uploadDirectory,buffer,imageType);
 
             let analysis = { text: "", candidates: [] };
             try {
@@ -2537,56 +2578,77 @@ module.exports = function (pool, authenticateToken, io, pushService, efootballSc
             }
 
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                if(stored)await fs.promises.unlink(stored.path).catch(() => {});
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
             const locked = await client.query(
-                "SELECT v.id AS verification_id,v.selected_player_id,v.screenshot_path,m.status AS match_status,m.settled_at,m.creator_id,m.opponent_id FROM efootball_result_verifications v JOIN efootball_matches m ON m.id=v.match_id WHERE v.match_id=$1 FOR UPDATE OF v,m",
+                "SELECT v.id AS verification_id,v.selected_player_id,v.screenshot_path,v.status AS verification_status,m.status AS match_status,m.settled_at,m.creator_id,m.opponent_id FROM efootball_result_verifications v JOIN efootball_matches m ON m.id=v.match_id WHERE v.match_id=$1 FOR UPDATE OF v,m",
                 [matchId]
             );
             if (!locked.rows.length) {
                 await client.query("ROLLBACK");
-                await fs.promises.unlink(storedPath).catch(() => {});
+                if(stored)await fs.promises.unlink(stored.path).catch(() => {});
                 return res.status(409).json({ success: false, message: "This match is no longer accepting screenshot evidence." });
             }
             const current = locked.rows[0];
-            if (Number(current.selected_player_id) !== userId ||
-                (Number(current.creator_id) !== userId && Number(current.opponent_id) !== userId)) {
+            if (Number(current.creator_id) !== userId && Number(current.opponent_id) !== userId) {
                 await client.query("ROLLBACK");
-                await fs.promises.unlink(storedPath).catch(() => {});
-                return res.status(403).json({ success: false, message: "Only the selected match participant can submit this screenshot." });
+                if(stored)await fs.promises.unlink(stored.path).catch(() => {});
+                return res.status(403).json({ success: false, message: "Only a participant in this match can submit screenshot evidence." });
             }
-            if (current.screenshot_path) {
+            const duplicate=await client.query("SELECT id FROM efootball_result_evidence WHERE verification_id=$1 AND uploader_id=$2 FOR UPDATE",[current.verification_id,userId]);
+            const legacyDuplicate=current.screenshot_path&&Number(current.selected_player_id)===userId;
+            if (duplicate.rows.length||legacyDuplicate) {
                 await client.query("ROLLBACK");
-                await fs.promises.unlink(storedPath).catch(() => {});
-                return res.status(409).json({ success: false, message: "A screenshot has already been submitted for this match." });
+                if(stored)await fs.promises.unlink(stored.path).catch(() => {});
+                return res.status(409).json({ success: false, message: "You have already submitted screenshot evidence for this match." });
             }
             if (!["playing", "awaiting_verification", "disputed"].includes(current.match_status) || current.settled_at) {
                 await client.query("ROLLBACK");
-                await fs.promises.unlink(storedPath).catch(() => {});
+                if(stored)await fs.promises.unlink(stored.path).catch(() => {});
                 return res.status(409).json({ success: false, message: "This match is no longer accepting screenshot evidence." });
             }
 
-            const underReview = current.match_status === "disputed" || current.match_status === "awaiting_verification";
+            const underReview = current.match_status === "disputed" || current.match_status === "awaiting_verification" || current.verification_status === "investigating";
             await client.query(
-                "UPDATE efootball_result_verifications SET screenshot_path=$1,submitted_at=NOW(),status=$2,screenshot_ocr_text=$3,detected_score_candidates=$4::jsonb,score_check=$5 WHERE id=$6",
-                [storedName, underReview ? "review_required" : "awaiting_scores", analysis.text, JSON.stringify(analysis.candidates), underReview ? "disputed" : "awaiting_scores", current.verification_id]
+                `INSERT INTO efootball_result_evidence(verification_id,uploader_id,storage_key,mime_type,byte_size)
+                 VALUES($1,$2,$3,$4,$5)`,
+                [current.verification_id,userId,stored.storageKey,stored.mimeType,stored.byteSize]
+            );
+            await client.query(
+                `UPDATE efootball_result_verifications
+                    SET screenshot_path=COALESCE(screenshot_path,$1),
+                        selected_player_id=CASE WHEN screenshot_path IS NULL THEN $2 ELSE selected_player_id END,
+                        submitted_at=CASE WHEN screenshot_path IS NULL THEN NOW() ELSE submitted_at END,
+                        status=CASE WHEN $3::boolean THEN 'review_required' WHEN screenshot_path IS NULL THEN 'awaiting_scores' ELSE status END,
+                        screenshot_ocr_text=CASE WHEN screenshot_path IS NULL THEN $4 ELSE screenshot_ocr_text END,
+                        detected_score_candidates=CASE WHEN screenshot_path IS NULL THEN $5::jsonb ELSE detected_score_candidates END,
+                        score_check=CASE WHEN $3::boolean THEN 'disputed' WHEN screenshot_path IS NULL THEN 'awaiting_scores' ELSE score_check END
+                  WHERE id=$6`,
+                [stored.storageKey,userId,underReview,analysis.text,JSON.stringify(analysis.candidates),current.verification_id]
             );
             const message = underReview
-                ? "Screenshot evidence was added to the open admin review. The result remains on hold."
-                : "Screenshot saved. It will be included if the two score rounds need admin review.";
+                ? "Your screenshot evidence was added to the open admin investigation. The result and locked stake remain on hold."
+                : "Your screenshot evidence was saved for this match.";
             await createSystemNotification(client, Number(current.creator_id), "match_screenshot_received", "Match Screenshot Saved", message, matchId);
             await createSystemNotification(client, Number(current.opponent_id), "match_screenshot_received", "Match Screenshot Saved", message, matchId);
             await client.query("COMMIT");
             return res.json({
                 success: true,
                 screenshotSubmitted: true,
+                uploaderId:userId,
                 pendingAdminReview: underReview,
                 scoreCandidates: analysis.candidates,
                 message
             });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
-            if (fileWritten) await fs.promises.unlink(storedPath).catch(() => {});
+            if (stored) await fs.promises.unlink(stored.path).catch(() => {});
             console.error("Screenshot verification error:", error.message);
-            return res.status(500).json({ success: false, message: "Unable to process the screenshot. Please try again." });
+            const encryptionUnavailable=error.code==="CHAT_ENCRYPTION_NOT_CONFIGURED";
+            return res.status(encryptionUnavailable?503:500).json({ success: false, message: encryptionUnavailable?"Secure evidence storage is not configured on the server. Please contact support; the image was not saved.":"Unable to process the screenshot. Please try again." });
         } finally {
             client.release();
         }

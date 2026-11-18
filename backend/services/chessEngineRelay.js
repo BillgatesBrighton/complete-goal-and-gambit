@@ -170,6 +170,7 @@ function createChessEngineRelay(pool, io, options) {
                         message: "Chess move verification is temporarily unavailable."
                     });
                 });
+            return socket.chessEngineRelayQueue;
         });
 
         socket.on("chess:engine:result", async function (data) {
@@ -309,7 +310,7 @@ function createChessEngineRelay(pool, io, options) {
         const authoritativeAtPly = getPositionAtPly(match.pgn || "", item.ply, true);
         if (!authoritativeAtPly || authoritativeAtPly.fen !== item.expectedFen) {
             pending.delete(requestId);
-            await reportStoredIntegrityFailure(match);
+            await reportStoredIntegrityFailure(match, socket.user);
             return;
         }
 
@@ -349,7 +350,7 @@ function createChessEngineRelay(pool, io, options) {
             agreesWithServer: data.legal === true && data.stale !== true && data.historyComplete === true &&
                 data.agreesWithExpectedPosition === true && resultingFen === item.expectedFen,
         };
-        if (!verifyStoredMatchState(match)) await reportStoredIntegrityFailure(match);
+        if (!verifyStoredMatchState(match)) await reportStoredIntegrityFailure(match, socket.user);
         io.to(item.browserSocketId).emit("chess:engine:result", response);
         if (response.predictionCacheHit) {
             io.to("chess_match_" + item.matchId).emit("chess:engine:prediction", {
@@ -378,10 +379,10 @@ function createChessEngineRelay(pool, io, options) {
             position.fen === match.fen && match.active_color === match.fen.split(/\s+/)[1]);
     }
 
-    async function reportStoredIntegrityFailure(match) {
+    async function reportStoredIntegrityFailure(match, actorUser) {
         if (!match || !verifyStoredMatchState(match)) {
             if (match && match.status === "active" && typeof pauseForIntegrity === "function") {
-                await pauseForIntegrity(Number(match.id));
+                await pauseForIntegrity(Number(match.id), actorUser);
             }
             return false;
         }
@@ -428,7 +429,7 @@ function createChessEngineRelay(pool, io, options) {
             localAndServerDigestsDiffer: localDigest !== serverDigest
         }));
 
-        if (!serverConsistent) await reportStoredIntegrityFailure(match);
+        if (!serverConsistent) await reportStoredIntegrityFailure(match, socket.user);
         const current = await readMatch(matchId);
         socket.emit("chess:engine:integrity_ack", {
             success: true,

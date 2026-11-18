@@ -6,6 +6,9 @@ const rateLimit = require("../middleware/rateLimit");
 const { creditPlatform } = require("../services/adminWalletAccounting");
 const { rankedMatchPayout } = require("../services/rankedMatchPayout");
 const { recordJournal } = require("../services/financialLedger");
+const { lockActiveAuthSession, beginAuthSessionLease } = require("../services/authSession");
+const { currentChessSeason, lockChessTournamentGroup, lockChessMatchGroup } = require("../services/chessTournamentSync");
+const { parseOptionalSchedule, processDueChessTournamentMatches } = require("../services/chessTournamentScheduling");
 
 // ======================================================
 // GOAL$GAMBIT CHESS ROUTES
@@ -884,6 +887,24 @@ return {
     finishedAt:
         match.finished_at,
 
+    seasonKey:
+        match.season_key || null,
+
+    scheduledAt:
+        match.scheduled_at || null,
+
+    deadlineAt:
+        match.deadline_at || null,
+
+    whiteReadyAt:
+        match.white_ready_at || null,
+
+    blackReadyAt:
+        match.black_ready_at || null,
+
+    myReady:
+        color === "w" ? Boolean(match.white_ready_at) : color === "b" ? Boolean(match.black_ready_at) : false,
+
     connectionPaused:
         Boolean(match.connection_paused_at),
 
@@ -926,6 +947,10 @@ function publicSocketMatchState(match, knownPosition, knownMove) {
         drawOfferUserId: state.drawOfferUserId,
         startedAt: state.startedAt,
         finishedAt: state.finishedAt,
+        scheduledAt: state.scheduledAt,
+        deadlineAt: state.deadlineAt,
+        whiteReadyAt: state.whiteReadyAt,
+        blackReadyAt: state.blackReadyAt,
         connectionPaused: state.connectionPaused,
         connectionPauseReason: state.connectionPauseReason
     };
@@ -940,7 +965,8 @@ pool,
 matchId,
 result,
 winnerId,
-adminAction = null
+adminAction = null,
+actorUser = null
 ) {
 
 const client =
@@ -949,6 +975,15 @@ const client =
 try {
 
     await client.query("BEGIN");
+
+    // User-initiated settlement joins the same mutation gate and session
+    // validation as the move transaction. Background/admin settlement has no
+    // player session and remains a server-authorized operation.
+    if (actorUser && !(await lockActiveAuthSession(client, actorUser))) {
+        throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+    }
+
+    await lockChessMatchGroup(client, matchId, "shared");
 
     const matchResult =
         await client.query(
@@ -1446,6 +1481,15 @@ try {
 module.exports = function (pool, authenticateToken, io, pushService, accountPresence) {
 
     const router = express.Router();
+    let tournamentScheduleBusy = false;
+    const tournamentScheduleTimer = setInterval(async function() {
+        if (tournamentScheduleBusy) return;
+        tournamentScheduleBusy = true;
+        try { await processDueChessTournamentMatches(pool); }
+        catch (error) { console.error("Chess tournament schedule processing paused:", error.message); }
+        finally { tournamentScheduleBusy = false; }
+    }, 5000);
+    if (typeof tournamentScheduleTimer.unref === "function") tournamentScheduleTimer.unref();
     let connectionMonitor = null;
     const chessMoveRateLimit = rateLimit({
         windowMs: 10_000,
@@ -1517,19 +1561,34 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             "Chess match finished", "Your chess match has ended. Open GOAL$GAMBIT to view the result.");
     }
 
-    async function registerTournamentEntry(client, userId, control, stake) {
+    async function registerTournamentEntry(client, userId, control, stake, seasonKey) {
         const entry = await client.query(
             `INSERT INTO chess_tournament_entries(season_key,time_control,stake_amount,user_id)
-             VALUES(TO_CHAR(date_trunc('month',NOW()),'YYYY-MM'),$1,$2,$3)
+             VALUES($1,$2,$3,$4)
              ON CONFLICT(season_key,time_control,stake_amount,user_id) DO UPDATE
                 SET cancelled_at=NULL
               WHERE chess_tournament_entries.forfeited_at IS NULL
              RETURNING id`,
-            [control.label, stake, userId]
+            [seasonKey, control.label, stake, userId]
         );
         if (!entry.rows.length) {
             throw Object.assign(new Error("You have forfeited this chess tournament for the current month."), { status: 409 });
         }
+    }
+
+    async function recordTournamentStake(client, matchId, userId, seasonKey, stake) {
+        if (Number(stake) <= 0) return;
+        await client.query(
+            `INSERT INTO chess_match_financial_dispositions(match_id,user_id,season_key,stake_amount,disposition)
+             VALUES($1,$2,$3,$4,'pending') ON CONFLICT(match_id,user_id) DO NOTHING`,
+            [matchId, userId, seasonKey, stake]
+        );
+        const recorded = await client.query(
+            `SELECT 1 FROM chess_match_financial_dispositions
+              WHERE match_id=$1 AND user_id=$2 AND season_key=$3 AND stake_amount=$4 AND disposition='pending'`,
+            [matchId, userId, seasonKey, stake]
+        );
+        if (!recorded.rows.length) throw new Error("The tournament player's stake obligation could not be recorded.");
     }
 
     async function settleExpiredClock(matchId) {
@@ -1541,6 +1600,7 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         try {
             await client.query("BEGIN");
             inTransaction = true;
+            await lockChessMatchGroup(client, matchId, "shared");
             const locked = await client.query(
                 "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE",
                 [matchId]
@@ -1615,7 +1675,7 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         }
     }
 
-    async function pauseChessMatch(matchId, disconnectedUserId, reason, options) {
+    async function pauseChessMatch(matchId, disconnectedUserId, reason, options, actorUser) {
         const id = Number(matchId);
         const userId = disconnectedUserId == null ? null : Number(disconnectedUserId);
         const pauseReason = reason === "integrity" ? "integrity" : "connection";
@@ -1627,6 +1687,10 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         try {
             await client.query("BEGIN");
             inTransaction = true;
+            if (actorUser && !(await lockActiveAuthSession(client, actorUser))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            await lockChessMatchGroup(client, id, "shared");
             const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [id]);
             if (!locked.rows.length) {
                 await client.query("COMMIT");
@@ -1686,7 +1750,7 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         return { paused: Boolean(match.connection_paused_at), match: match };
     }
 
-    async function resumeChessMatch(matchId, connectedUserIds) {
+    async function resumeChessMatch(matchId, connectedUserIds, actorUser) {
         const id = Number(matchId);
         const connected = connectedUserIds instanceof Set
             ? new Set(Array.from(connectedUserIds).map(Number))
@@ -1700,6 +1764,10 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         try {
             await client.query("BEGIN");
             inTransaction = true;
+            if (actorUser && !(await lockActiveAuthSession(client, actorUser))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            await lockChessMatchGroup(client, id, "shared");
             const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [id]);
             if (!locked.rows.length) {
                 await client.query("COMMIT");
@@ -1897,7 +1965,9 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                 pool,
                 matchId,
                 result,
-                getWinnerId(match, result)
+                getWinnerId(match, result),
+                null,
+                req.user
             );
 
             const updated = await getMatch(pool, matchId);
@@ -1947,9 +2017,21 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         const control = getControl(matchType, speed, req.body && req.body.timeControl);
         const stake = normalizeStake(req.body && req.body.stake, matchType);
         if (!matchType || !control || stake === null) return res.status(400).json({success:false,message:"Invalid chess match settings."});
+        let schedule = { scheduledAt: null, deadlineAt: null };
+        try {
+            if (matchType === "tournament") schedule = parseOptionalSchedule(req.body);
+            else if (req.body && (req.body.scheduledAt || req.body.deadlineAt)) {
+                return res.status(400).json({ success: false, message: "Optional scheduling is currently available for Chess tournament matchmaking only." });
+            }
+        } catch (error) {
+            return res.status(Number(error.status) || 400).json({ success: false, message: error.message });
+        }
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
 
             // A user may search from several tabs/settings at once. Serialize
             // by user first, then reconnect to any existing live match.
@@ -1957,6 +2039,14 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                 ["goal-gambit-chess-user:" + userId]
             );
+            let seasonKey = null;
+            if (matchType === "tournament") {
+                seasonKey = await currentChessSeason(client);
+                await lockChessTournamentGroup(client, seasonKey, control.label, stake, "shared");
+                if (await currentChessSeason(client) !== seasonKey) {
+                    throw Object.assign(new Error("This tournament season just changed. Please start a new search."), { status: 409 });
+                }
+            }
             const account = await client.query(
                 "SELECT rating, game, account_status FROM users WHERE id=$1 FOR UPDATE",
                 [userId]
@@ -2005,6 +2095,9 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                   WHERE waiting.status='waiting' AND waiting.player_black_id IS NULL
                     AND waiting.player_white_id<>$1 AND waiting.match_type=$2
                     AND waiting.stake_amount=$3 AND waiting.time_control=$4
+                    AND ($8::varchar IS NULL OR waiting.season_key=$8)
+                    AND waiting.scheduled_at IS NOT DISTINCT FROM $9::timestamptz
+                    AND waiting.deadline_at IS NOT DISTINCT FROM $10::timestamptz
                     AND waiting_player.account_status='active'
                     AND waiting_player.game IN ('chess','both')
                     AND ($5::boolean=FALSE OR
@@ -2017,28 +2110,39 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                                 OR other.player_black_id=waiting.player_white_id)
                     )
                   ORDER BY waiting.id ASC LIMIT 1 FOR UPDATE OF waiting`,
-                [userId, matchType, stake, control.label, matchType === "ranked", bracket.minimum, bracket.maximum]);
+                [userId, matchType, stake, control.label, matchType === "ranked", bracket.minimum, bracket.maximum,
+                    seasonKey, schedule.scheduledAt, schedule.deadlineAt]);
 
             if (open.rows.length) {
                 const id = open.rows[0].id;
                 if (stake > 0) await lockStake(client,userId,stake,`CHESS-LOCK-${Date.now()}-${userId}`);
-                if (matchType === "tournament") await registerTournamentEntry(client,userId,control,stake);
+                if (matchType === "tournament") {
+                    await registerTournamentEntry(client,userId,control,stake,seasonKey);
+                    await recordTournamentStake(client,id,userId,seasonKey,stake);
+                }
+                const scheduled = matchType === "tournament" && Boolean(schedule.scheduledAt);
                 await client.query(
                     `UPDATE chess_matches
-                        SET player_black_id=$1, status='active', started_at=NOW(), last_move_at=NOW(), active_color='w'
-                      WHERE id=$2`, [userId, id]);
+                        SET player_black_id=$1,
+                            status=CASE WHEN $3::boolean THEN 'waiting' ELSE 'active' END,
+                            started_at=CASE WHEN $3::boolean THEN NULL ELSE NOW() END,
+                            last_move_at=CASE WHEN $3::boolean THEN NULL ELSE NOW() END,
+                            active_color='w'
+                      WHERE id=$2`, [userId, id, scheduled]);
                 await client.query("COMMIT");
                 const m = await getMatch(pool, id);
-                if (io) io.to("chess_match_"+id).emit("chess:match_ready",{success:true,matchId:Number(id)});
+                if (io) io.to("chess_match_"+id).emit(scheduled ? "chess:match_scheduled" : "chess:match_ready",{success:true,matchId:Number(id)});
                 return res.status(201).json({success:true, matched:true, match:publicMatchState(m,userId)});
             }
 
             if (stake > 0) await lockStake(client,userId,stake,`CHESS-LOCK-${Date.now()}-${userId}`);
-            if (matchType === "tournament") await registerTournamentEntry(client,userId,control,stake);
+            if (matchType === "tournament") await registerTournamentEntry(client,userId,control,stake,seasonKey);
             const r = await client.query(
-                `INSERT INTO chess_matches(player_white_id,status,fen,white_time_ms,black_time_ms,time_control,match_type,stake_amount,active_color)
-                 VALUES($1,'waiting',$2,$3,$3,$4,$5,$6,'w') RETURNING id`,
-                [userId,new Chess().fen(),control.minutes*60000,control.label,matchType,stake]);
+                `INSERT INTO chess_matches(player_white_id,status,fen,white_time_ms,black_time_ms,time_control,match_type,stake_amount,active_color,
+                                           season_key,scheduled_at,deadline_at)
+                 VALUES($1,'waiting',$2,$3,$3,$4,$5,$6,'w',$7,$8,$9) RETURNING id`,
+                [userId,new Chess().fen(),control.minutes*60000,control.label,matchType,stake,seasonKey,schedule.scheduledAt,schedule.deadlineAt]);
+            if (matchType === "tournament") await recordTournamentStake(client,r.rows[0].id,userId,seasonKey,stake);
             await client.query("COMMIT");
             const match = await getMatch(pool,r.rows[0].id);
             res.status(201).json({success:true, matched:false, match:publicMatchState(match,userId)});
@@ -2069,7 +2173,9 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                   LIMIT 100`, [uid]);
             const games = r.rows.map(function (m) {
                 let outcome = "Draw";
-                if (m.result !== "draw") {
+                if (m.result === "no_contest") {
+                    outcome = "No contest";
+                } else if (m.result !== "draw") {
                     outcome = Number(m.winner_id) === uid ? "Win" : "Loss";
                 }
                 return {
@@ -2094,13 +2200,33 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            await lockChessMatchGroup(client, matchId, "shared");
             const r = await client.query(`SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE`, [matchId]);
             if (!r.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
             const m = r.rows[0];
             if (Number(m.player_white_id) !== userId) throw Object.assign(new Error("Only the player who opened the search can cancel it."), { status: 403 });
             if (m.status !== "waiting") throw Object.assign(new Error("This match has already started."), { status: 409 });
             const stake = Number(m.stake_amount || 0);
-            if (stake > 0) await unlockStake(client, userId, stake, `CHESS-CANCEL-${matchId}-${userId}`, "Chess search cancelled - stake refunded");
+            const refundPlayers = m.match_type === "tournament"
+                ? [Number(m.player_white_id),Number(m.player_black_id)].filter(id=>Number.isSafeInteger(id)&&id>0).sort((a,b)=>a-b)
+                : [userId];
+            if (stake > 0) {
+                await client.query("SELECT user_id FROM wallets WHERE user_id=ANY($1::int[]) ORDER BY user_id FOR UPDATE", [refundPlayers]);
+                for (const playerId of refundPlayers) {
+                    await unlockStake(client, playerId, stake, `CHESS-CANCEL-${matchId}-${playerId}`, "Chess search cancelled - stake refunded");
+                    if (m.match_type === "tournament" && m.season_key) {
+                        await client.query(
+                            `UPDATE chess_match_financial_dispositions
+                                SET disposition='refunded',reference=$3,settled_at=NOW()
+                              WHERE match_id=$1 AND user_id=$2 AND disposition='pending'`,
+                            [matchId,playerId,`CHESS-CANCEL-${matchId}-${playerId}`]
+                        );
+                    }
+                }
+            }
             await client.query(`UPDATE chess_matches SET status='cancelled', finished_at=NOW(), settled_at=NOW(), payout_status='refunded' WHERE id=$1`, [matchId]);
             await client.query("COMMIT");
             res.json({success:true, message:"Search cancelled."});
@@ -2123,10 +2249,21 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
             await client.query(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                 ["goal-gambit-chess-user:" + userId]
             );
+            const preview = await client.query(
+                "SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1",
+                [matchId]
+            );
+            if (!preview.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
+            if (preview.rows[0].match_type === "tournament" && preview.rows[0].season_key) {
+                await lockChessTournamentGroup(client, preview.rows[0].season_key, preview.rows[0].time_control, preview.rows[0].stake_amount, "shared");
+            }
             const account = await client.query(
                 "SELECT rating, game, account_status FROM users WHERE id=$1 FOR UPDATE",
                 [userId]
@@ -2166,6 +2303,15 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             if (match.status !== "waiting" || match.player_black_id) {
                 throw Object.assign(new Error("Chess match is no longer available."), { status: 409 });
             }
+            if (match.match_type === "tournament" && match.scheduled_at && match.deadline_at) {
+                const deadline = await client.query(
+                    "SELECT deadline_at<=clock_timestamp() AS expired FROM chess_matches WHERE id=$1",
+                    [matchId]
+                );
+                if (deadline.rows[0] && deadline.rows[0].expired) {
+                    throw Object.assign(new Error("The scheduled match's joining deadline has expired."), { status: 409 });
+                }
+            }
             if (Number(match.player_white_id) === userId) {
                 throw Object.assign(new Error("You cannot join your own match."), { status: 400 });
             }
@@ -2201,18 +2347,23 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             if (stake > 0) {
                 await lockStake(client, userId, stake, `CHESS-LOCK-${Date.now()}-${userId}`);
             }
-            if (match.match_type === "tournament") {
-                await registerTournamentEntry(client,userId,{label:match.time_control},stake);
+            if (match.match_type === "tournament" && match.season_key) {
+                await registerTournamentEntry(client,userId,{label:match.time_control},stake,match.season_key);
+                await recordTournamentStake(client,matchId,userId,match.season_key,stake);
             }
+            const scheduled = match.match_type === "tournament" && Boolean(match.scheduled_at);
             await client.query(
                 `UPDATE chess_matches
-                    SET player_black_id=$1,status='active',started_at=NOW(),last_move_at=NOW()
+                    SET player_black_id=$1,
+                        status=CASE WHEN $3::boolean THEN 'waiting' ELSE 'active' END,
+                        started_at=CASE WHEN $3::boolean THEN NULL ELSE NOW() END,
+                        last_move_at=CASE WHEN $3::boolean THEN NULL ELSE NOW() END
                   WHERE id=$2`,
-                [userId, matchId]
+                [userId, matchId, scheduled]
             );
             await client.query("COMMIT");
             const updated = await getMatch(pool, matchId);
-            if (io) io.to("chess_match_" + matchId).emit("chess:match_ready", {
+            if (io) io.to("chess_match_" + matchId).emit(scheduled ? "chess:match_scheduled" : "chess:match_ready", {
                 success: true,
                 matchId: Number(matchId)
             });
@@ -2223,6 +2374,79 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             if (status >= 400 && status < 500) return res.status(status).json({ success: false, message: error.message });
             console.error("Chess match join failed:", error && error.message);
             return res.status(500).json({ success: false, message: "Unable to join this Chess match. Try again." });
+        } finally {
+            client.release();
+        }
+    });
+
+    // Scheduled tournament players mark their attendance explicitly. This
+    // endpoint is never required for unscheduled Chess matches.
+    router.post("/:id/ready", authenticateToken, async function(req, res) {
+        const matchId = Number(req.params.id);
+        const userId = Number(req.user.userId);
+        if (!Number.isSafeInteger(matchId) || matchId <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid chess match ID." });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
+            const preview = await client.query(
+                "SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1",
+                [matchId]
+            );
+            if (!preview.rows.length) throw Object.assign(new Error("Chess match not found."), { status: 404 });
+            if (preview.rows[0].match_type !== "tournament" || !preview.rows[0].season_key) {
+                throw Object.assign(new Error("Ready status is only available for assigned Chess tournament matches."), { status: 409 });
+            }
+            await lockChessTournamentGroup(client, preview.rows[0].season_key, preview.rows[0].time_control, preview.rows[0].stake_amount, "shared");
+            const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            const match = locked.rows[0];
+            const color = getPlayerColor(match, userId);
+            if (!color) throw Object.assign(new Error("You are not a player in this match."), { status: 403 });
+            if (!match.scheduled_at) throw Object.assign(new Error("This unscheduled tournament match does not require Ready confirmation."), { status: 409 });
+            if (match.status !== "waiting" || !match.player_black_id) {
+                throw Object.assign(new Error("This scheduled match is no longer waiting for players."), { status: 409 });
+            }
+            const readyColumn = color === "w" ? "white_ready_at" : "black_ready_at";
+            const readyUpdate = await client.query(
+                `UPDATE chess_matches SET ${readyColumn}=COALESCE(${readyColumn},clock_timestamp())
+                  WHERE id=$1 AND status='waiting'
+                    AND (deadline_at IS NULL OR deadline_at>clock_timestamp()) RETURNING *`,
+                [matchId]
+            );
+            if (!readyUpdate.rows.length) {
+                throw Object.assign(new Error("The attendance deadline has passed. The scheduled result is being finalized."), { status: 409 });
+            }
+            let updated = readyUpdate.rows[0];
+            const bothReady = Boolean(updated.white_ready_at && updated.black_ready_at);
+            const activated = await client.query(
+                `UPDATE chess_matches SET status='active',started_at=clock_timestamp(),last_move_at=clock_timestamp(),active_color='w'
+                  WHERE id=$1 AND status='waiting' AND scheduled_at<=clock_timestamp()
+                    AND white_ready_at IS NOT NULL AND black_ready_at IS NOT NULL
+                    AND (deadline_at IS NULL OR (white_ready_at<=deadline_at AND black_ready_at<=deadline_at))
+                  RETURNING *`, [matchId]
+            );
+            if (activated.rows.length) updated = activated.rows[0];
+            await client.query("COMMIT");
+            const publicMatch = await getMatch(pool, matchId);
+            if (updated.status === "active" && io) io.to("chess_match_" + matchId).emit("chess:match_ready", { success: true, matchId });
+            return res.json({
+                success: true,
+                started: updated.status === "active",
+                ready: true,
+                waitingForOpponent: !bothReady,
+                match: publicMatchState(publicMatch, userId)
+            });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            if (Number(error.status) >= 400 && Number(error.status) < 500) {
+                return res.status(error.status).json({ success: false, message: error.message });
+            }
+            console.error("Chess tournament attendance failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not confirm your Chess tournament attendance." });
         } finally {
             client.release();
         }
@@ -2285,8 +2509,9 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             return res.status(400).json({ success: false, message: "Invalid expected chess position." });
         }
 
-        const client = await pool.connect();
+        let client;
         let inTransaction = false;
+        let settlementSessionLease = null;
         async function reject(status, message, authoritativeMatch) {
             if (inTransaction) {
                 await client.query("ROLLBACK");
@@ -2301,8 +2526,20 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         }
 
         try {
+            // Acquire the operation lease before the game-row lock and retain
+            // it through any post-commit financial settlement. The mutation
+            // transaction below independently takes its own mutation gate.
+            settlementSessionLease = await beginAuthSessionLease(pool, req.user);
+            if (!settlementSessionLease) {
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
+            client = await pool.connect();
             await client.query("BEGIN");
             inTransaction = true;
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                return reject(401, "Authentication session is no longer active.");
+            }
+            await lockChessMatchGroup(client, matchId, "shared");
             const locked = await client.query(
                 "SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE",
                 [matchId]
@@ -2333,7 +2570,7 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
                 );
                 await client.query("COMMIT");
                 inTransaction = false;
-                const settled = await settleMatch(pool, matchId, result, winnerId);
+                const settled = await settleMatch(pool, matchId, result, winnerId, null, req.user);
                 const updated = await getMatch(pool, matchId);
                 queueChessFinishedNotifications(matchId, match, settled.result);
                 if (io) io.to("chess_match_" + matchId).emit("chess:game_over", {
@@ -2377,7 +2614,7 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             inTransaction = false;
 
             if (result) {
-                const settled = await settleMatch(pool, matchId, result, winnerId);
+                const settled = await settleMatch(pool, matchId, result, winnerId, null, req.user);
                 queueChessFinishedNotifications(matchId, match, settled.result);
             } else {
                 queueChessTurnNotification(matchId, match, chess.turn(), chess.history().length);
@@ -2406,27 +2643,45 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
             console.error("Chess move error:", error.message);
             return res.status(500).json({ success: false, message: "Failed to process move." });
         } finally {
-            client.release();
+            if (client) client.release();
+            if (settlementSessionLease) {
+                await settlementSessionLease.release().catch(error => {
+                    console.error("Chess settlement session lock release failed:", error.message);
+                });
+            }
         }
     });
     router.post("/:id/draw", authenticateToken, async function(req, res) {
         const matchId = Number(req.params.id), userId = Number(req.user.userId);
-        const match = await getMatch(pool, matchId);
-        if (!match) return res.status(404).json({ success: false, message: "Chess match not found." });
-        if (!getPlayerColor(match, userId)) return res.status(403).json({ success: false, message: "You are not a player in this match." });
-        if (match.status !== "active" || match.connection_paused_at) {
-            return res.status(409).json({ success: false, message: "This match is paused or inactive." });
-        }
-        if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
-            return res.status(409).json({ success: false, message: "Both players must reconnect to the live match before play can resume." });
-        }
-        const changed = await pool.query(
-            "UPDATE chess_matches SET draw_offer_user_id=$1 WHERE id=$2 AND connection_paused_at IS NULL AND status='active' RETURNING id",
-            [userId, matchId]
-        );
-        if (!changed.rows.length) return res.status(409).json({ success: false, message: "The match paused before the draw offer could be sent." });
-        if (io) io.to("chess_match_" + matchId).emit("chess:draw_offer", { success: true, matchId, userId });
-        return res.json({ success: true, message: "Draw offer sent." });
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                await client.query("ROLLBACK");
+                return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+            }
+            await lockChessMatchGroup(client, matchId, "shared");
+            const locked = await client.query("SELECT * FROM chess_matches WHERE id=$1 FOR UPDATE", [matchId]);
+            const match = locked.rows[0];
+            if (!match) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Chess match not found." }); }
+            if (!getPlayerColor(match, userId)) { await client.query("ROLLBACK"); return res.status(403).json({ success: false, message: "You are not a player in this match." }); }
+            if (match.status !== "active" || match.connection_paused_at) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "This match is paused or inactive." });
+            }
+            if (connectionMonitor && !connectionMonitor.isMatchReady(matchId)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({ success: false, message: "Both players must reconnect to the live match before play can resume." });
+            }
+            await client.query("UPDATE chess_matches SET draw_offer_user_id=$1 WHERE id=$2", [userId, matchId]);
+            await client.query("COMMIT");
+            if (io) io.to("chess_match_" + matchId).emit("chess:draw_offer", { success: true, matchId, userId });
+            return res.json({ success: true, message: "Draw offer sent." });
+        } catch (error) {
+            await client.query("ROLLBACK").catch(() => {});
+            console.error("Chess draw offer failed:", error && error.message);
+            return res.status(error && error.status || 500).json({ success: false, message: error && error.status === 401 ? error.message : "Could not send the draw offer." });
+        } finally { client.release(); }
     });
 
     router.post("/:id/draw/respond", authenticateToken, async function(req, res) {
@@ -2442,22 +2697,40 @@ module.exports = function (pool, authenticateToken, io, pushService, accountPres
         if (Number(match.draw_offer_user_id) === userId) return res.status(400).json({ success: false, message: "You cannot accept your own draw offer." });
         if (!match.draw_offer_user_id) return res.status(400).json({ success: false, message: "No draw offer is pending." });
         if (!accept) {
-            await pool.query("UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1 AND connection_paused_at IS NULL", [matchId]);
+            const client = await pool.connect();
+            try {
+                await client.query("BEGIN");
+                if (!(await lockActiveAuthSession(client, req.user))) {
+                    await client.query("ROLLBACK");
+                    return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+                }
+                await lockChessMatchGroup(client, matchId, "shared");
+                const current = await client.query("SELECT draw_offer_user_id,connection_paused_at FROM chess_matches WHERE id=$1 FOR UPDATE", [matchId]);
+                if (!current.rows.length || !current.rows[0].draw_offer_user_id || current.rows[0].connection_paused_at) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({ success: false, message: "The draw offer is no longer available." });
+                }
+                await client.query("UPDATE chess_matches SET draw_offer_user_id=NULL WHERE id=$1", [matchId]);
+                await client.query("COMMIT");
+            } catch (error) {
+                await client.query("ROLLBACK").catch(() => {});
+                return res.status(500).json({ success: false, message: "Could not decline the draw offer." });
+            } finally { client.release(); }
             if (io) io.to("chess_match_" + matchId).emit("chess:draw_declined", { success: true, matchId });
             return res.json({ success: true, message: "Draw declined." });
         }
-        const settled = await settleMatch(pool, matchId, "draw", null);
+        const settled = await settleMatch(pool, matchId, "draw", null, null, req.user);
         queueChessFinishedNotifications(matchId, match, settled.result);
         const updated = await getMatch(pool, matchId);
         if (io) io.to("chess_match_" + matchId).emit("chess:game_over", { success: true, matchId, result: settled.result, winnerId: null, reason: "agreed_draw" });
         return res.json({ success: true, match: publicMatchState(updated, userId) });
     });
 
-    router.pauseForConnectionLoss = function(matchId, userId, options) {
-        return pauseChessMatch(matchId, userId, "connection", options);
+    router.pauseForConnectionLoss = function(matchId, userId, options, actorUser) {
+        return pauseChessMatch(matchId, userId, "connection", options, actorUser);
     };
-    router.pauseForIntegrity = function(matchId) {
-        return pauseChessMatch(matchId, null, "integrity");
+    router.pauseForIntegrity = function(matchId, actorUser) {
+        return pauseChessMatch(matchId, null, "integrity", null, actorUser);
     };
     router.resumeAfterConnection = resumeChessMatch;
     router.setConnectionMonitor = function(monitor) {

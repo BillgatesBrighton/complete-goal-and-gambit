@@ -2,9 +2,11 @@
 .env
 .env.*
 !.env.example
+!.env.security-test.example
 **/.env
 **/.env.*
 !**/.env.example
+!**/.env.security-test.example
 
 # Installed dependencies
 node_modules/

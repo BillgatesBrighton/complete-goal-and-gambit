@@ -4,6 +4,7 @@ const express = require("express");
 const { randomUUID } = require("crypto");
 const { recordJournal } = require("../services/financialLedger");
 const financialRateLimit = require("../middleware/financialRateLimit");
+const { lockActiveAuthSession } = require("../services/authSession");
 
 
 // ======================================================
@@ -303,6 +304,10 @@ const routerFactory = function(
             try {
                 client = await pool.connect();
                 await client.query("BEGIN");
+                if (!(await lockActiveAuthSession(client, req.user))) {
+                    await client.query("ROLLBACK");
+                    return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+                }
                 const walletResult = await client.query(
                     "SELECT id, balance, locked_balance, withdrawal_reserved_balance, currency FROM wallets WHERE user_id=$1 FOR UPDATE",
                     [userId]
@@ -382,6 +387,10 @@ const routerFactory = function(
             try {
                 client = await pool.connect();
                 await client.query("BEGIN");
+                if (!(await lockActiveAuthSession(client, req.user))) {
+                    await client.query("ROLLBACK");
+                    return res.status(401).json({ success: false, message: "Authentication session is no longer active." });
+                }
                 const walletResult = await client.query(
                     "SELECT balance,withdrawal_reserved_balance FROM wallets WHERE user_id=$1 FOR UPDATE",
                     [userId]

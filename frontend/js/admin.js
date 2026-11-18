@@ -5,8 +5,47 @@ var $ = function (id) { return document.getElementById(id); };
 var esc = GG.escapeHTML;
 var adminId = null, selectedUser = null, selectedName = "", messageSig = null, urls = [], complaintUrls = [], busy = false, timer = null, walletAdjustTimer = null, users = [], walletAdjustmentUsers = [], includeCleared = false, includeClearedComplaints = false, includeClearedResults = false, includeClearedMatches = false, includeInactiveAnnouncements = false, complaintPage = 1, complaintPages = 1, complaintQuery = "", currentComplaintId = null, adminAuthorized = false, authorizePending = false, authorizeAgain = false, accessTimer = null;
 var companionPage = 1, companionPages = 1, companionSearch = "", companionTrackerBusy = false;
+var userPage = 1, userPages = 1, userTotal = 0, playerDashboard = null, chatHistoryCursor = null, chatHistoryBusy = false;
 
 function say(message, type) { $("notice").textContent = message || ""; $("notice").className = "notice" + (type ? " " + type : ""); }
+var vaultTimer=null,vaultAudioContext=null,vaultMasterGain=null,vaultMuted=false,vaultCompletion=null;
+function stopVaultSound(){if(vaultAudioContext){var context=vaultAudioContext;vaultAudioContext=null;vaultMasterGain=null;context.close().catch(function(){});}}
+function endVaultEntrance(){
+    if(vaultTimer){clearTimeout(vaultTimer);vaultTimer=null;}
+    var overlay=$("vaultEntrance");if(overlay){overlay.classList.remove("vault-opening");overlay.hidden=true;overlay.setAttribute("aria-hidden","true");}
+    stopVaultSound();
+    if(vaultCompletion){var done=vaultCompletion;vaultCompletion=null;done();}
+}
+function playVaultMechanicalSound(){
+    if(vaultMuted)return;
+    var AudioEngine=window.AudioContext||window.webkitAudioContext;if(!AudioEngine)return;
+    try{
+        var context=new AudioEngine(),master=context.createGain();vaultAudioContext=context;vaultMasterGain=master;
+        master.gain.setValueAtTime(0.38,context.currentTime);master.connect(context.destination);
+        context.resume().catch(function(){});
+        function tone(freq,endFreq,offset,duration,volume,type){var osc=context.createOscillator(),gain=context.createGain();osc.type=type||"sine";osc.frequency.setValueAtTime(freq,context.currentTime+offset);if(endFreq)osc.frequency.exponentialRampToValueAtTime(endFreq,context.currentTime+offset+duration);gain.gain.setValueAtTime(0.001,context.currentTime+offset);gain.gain.exponentialRampToValueAtTime(volume,context.currentTime+offset+0.025);gain.gain.exponentialRampToValueAtTime(0.001,context.currentTime+offset+duration);osc.connect(gain);gain.connect(master);osc.start(context.currentTime+offset);osc.stop(context.currentTime+offset+duration+0.03);}
+        tone(78,42,0,2.5,0.42,"sawtooth");tone(54,35,0.07,1.1,0.24,"sine");tone(180,75,1.1,2.1,0.11,"triangle");tone(490,385,4.2,1.4,0.17,"triangle");tone(735,620,4.24,1.1,0.08,"sine");
+        var length=Math.floor(context.sampleRate*1.7),noise=context.createBuffer(1,length,context.sampleRate),samples=noise.getChannelData(0);
+        for(var i=0;i<length;i++)samples[i]=(Math.random()*2-1)*(1-i/length);
+        var source=context.createBufferSource(),filter=context.createBiquadFilter(),noiseGain=context.createGain();source.buffer=noise;filter.type="lowpass";filter.frequency.setValueAtTime(900,context.currentTime+0.35);filter.frequency.exponentialRampToValueAtTime(180,context.currentTime+1.9);noiseGain.gain.setValueAtTime(0.001,context.currentTime+0.35);noiseGain.gain.exponentialRampToValueAtTime(0.22,context.currentTime+0.5);noiseGain.gain.exponentialRampToValueAtTime(0.001,context.currentTime+2.0);source.connect(filter);filter.connect(noiseGain);noiseGain.connect(master);source.start(context.currentTime+0.35);source.stop(context.currentTime+2.05);
+    }catch(_){stopVaultSound();}
+}
+function runVaultEntrance(){
+    var requested=false;try{requested=sessionStorage.getItem("ggAdminVaultEntryPending")==="1";sessionStorage.removeItem("ggAdminVaultEntryPending");}catch(_){}
+    var overlay=$("vaultEntrance");
+    if(!requested||!overlay||window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches)return Promise.resolve();
+    var mute=$("muteVault"),skip=$("skipVault");
+    vaultMuted=false;mute.textContent="Mute sound";mute.setAttribute("aria-pressed","false");
+    overlay.hidden=false;overlay.setAttribute("aria-hidden","false");
+    return new Promise(function(resolve){
+        vaultCompletion=resolve;
+        skip.onclick=endVaultEntrance;
+        mute.onclick=function(){vaultMuted=!vaultMuted;mute.textContent=vaultMuted?"Enable sound":"Mute sound";mute.setAttribute("aria-pressed",String(vaultMuted));if(vaultMasterGain)vaultMasterGain.gain.setTargetAtTime(vaultMuted?0:0.38,vaultAudioContext.currentTime,0.08);};
+        window.requestAnimationFrame(function(){window.requestAnimationFrame(function(){overlay.classList.add("vault-opening");});});
+        playVaultMechanicalSound();
+        vaultTimer=setTimeout(endVaultEntrance,6500);
+    });
+}
 function updateAccountPresence(ids) {
     var online = new Set((Array.isArray(ids) ? ids : []).map(function(id) { return String(Number(id)); }));
     document.querySelectorAll("[data-account-presence]").forEach(function(badge) {
@@ -54,6 +93,7 @@ async function clearByLegacyRoutes(records, pathFor, label) {
 }
 function concealDashboard(message, clearData) {
     adminAuthorized = false;
+    endVaultEntrance();
     var app = $("app"), gate = $("gate");
     if (app) app.hidden = true;
     if (gate) { gate.textContent = message || "Checking administrator access…"; gate.hidden = false; }
@@ -80,13 +120,14 @@ function agree(c) {
     var ok=Number(a)===Number(y)&&Number(b)===Number(x);
     return {text:ok?"Player reports agree":"Score reports disagree",kind:ok?"good":"alert",bad:!ok};
 }
-function openResult(c) { return ["pending_screenshot","submitted","review_required","rejected"].indexOf(String(c.status).toLowerCase())>=0&&!c.settled_at&&!["completed","cancelled"].includes(c.match_status); }
+function openResult(c) { return ["pending_screenshot","submitted","review_required","rejected","investigating"].indexOf(String(c.status).toLowerCase())>=0&&!c.settled_at&&!["completed","cancelled"].includes(c.match_status); }
 
 async function loadShots() {
     urls.forEach(URL.revokeObjectURL); urls=[];
-    await Promise.all(Array.from(document.querySelectorAll("#resultList img[data-id]")).map(async function(img) {
+    await Promise.all(Array.from(document.querySelectorAll("#resultList img[data-id],#resultList img[data-evidence-id]")).map(async function(img) {
         try {
-            var r=await fetch(GG.API_BASE+"/api/admin/result-verifications/"+encodeURIComponent(img.dataset.id)+"/screenshot",{headers:{Authorization:"Bearer "+GG.getToken()},cache:"no-store"});
+            var route=img.dataset.evidenceId?"/api/admin/result-verifications/"+encodeURIComponent(img.dataset.verificationId)+"/evidence/"+encodeURIComponent(img.dataset.evidenceId):"/api/admin/result-verifications/"+encodeURIComponent(img.dataset.id)+"/screenshot";
+            var r=await fetch(GG.API_BASE+route,{headers:{Authorization:"Bearer "+GG.getToken()},cache:"no-store"});
             if(!r.ok)throw new Error("Screenshot unavailable");
             var u=URL.createObjectURL(await r.blob()); urls.push(u); if(img.isConnected)img.src=u;
         } catch(e) { if(img.isConnected){var p=document.createElement("div");p.className="empty";p.textContent=e.message;img.replaceWith(p);} }
@@ -95,21 +136,27 @@ async function loadShots() {
 function renderResult(c) {
     var id=Number(c.id), status=openResult(c), resolved=!!c.settled_at&&["completed","cancelled"].includes(c.match_status), cleared=!!c.admin_cleared_at, a=agree(c), title="Match #"+c.match_id+" · "+(c.mode||"eFootball");
     var creatorName=c.creator_username||"Creator", opponentName=c.opponent_username||"Opponent";
-    var players=creatorName+" vs "+opponentName;
-    var h='<article class="card'+(a.bad?" mismatch":"")+'" data-case="'+id+'"><div class="card-top"><div><h3>'+esc(title)+'</h3><div class="meta">'+esc(players)+" · submitted by "+esc(c.selected_username||"player")+" · "+esc(date(c.submitted_at||c.created_at))+'</div></div><span class="badge '+a.kind+'">'+esc(a.text)+'</span></div>';
+    var playerA=c.player_a_username||creatorName,playerB=c.player_b_username||opponentName,aCreator=Number(c.player_a_id||c.creator_id)===Number(c.creator_id);
+    var players="Player A · "+playerA+" vs Player B · "+playerB;
+    var h='<article class="card'+(a.bad?" mismatch":"")+'" data-case="'+id+'" data-player-a-creator="'+aCreator+'"><div class="card-top"><div><h3>'+esc(title)+'</h3><div class="meta">'+esc(players)+" · submitted by "+esc(c.selected_username||"player")+" · "+esc(date(c.submitted_at||c.created_at))+'</div></div><span class="badge '+a.kind+'">'+esc(a.text)+'</span></div>';
     h+='<div class="meta">Review: <strong>'+esc(String(c.status||"unknown").replace(/_/g," "))+'</strong> · Match: '+esc(c.match_status||"unknown")+(c.league?" · "+esc(c.league)+" league":"")+(c.tournament_id?" · Tournament #"+esc(c.tournament_id):"")+'</div>';
+    h+='<div class="reports"><div class="report"><span>Player A · code sender</span><strong>'+esc(playerA)+' · '+esc(c.player_a_phone||"No phone on file")+'</strong></div><div class="report"><span>Player B</span><strong>'+esc(playerB)+' · '+esc(c.player_b_phone||"No phone on file")+'</strong></div></div>';
     var history=Array.isArray(c.reports)?c.reports:[];
     if(history.length){
         h+='<div class="reports round-history">'+history.map(function(report){var other=report.username===creatorName?opponentName:creatorName;return '<div class="report"><span>Round '+esc(report.roundNo)+' · '+esc(report.username)+' reported</span><strong>'+esc(namedScoreReport(report.username,report.scoreFor,other,report.scoreAgainst))+'</strong></div>';}).join("")+'</div>';
     } else {
         h+='<div class="reports"><div class="report"><span>'+esc(creatorName)+' reported</span><strong>'+esc(creatorName)+': '+esc(c.creator_submitted_score==null?"—":String(c.creator_submitted_score))+' · '+esc(opponentName)+': '+esc(c.creator_submitted_opponent_score==null?"—":String(c.creator_submitted_opponent_score))+'</strong></div><div class="report"><span>'+esc(opponentName)+' reported</span><strong>'+esc(opponentName)+': '+esc(c.opponent_submitted_score==null?"—":String(c.opponent_submitted_score))+' · '+esc(creatorName)+': '+esc(c.opponent_submitted_opponent_score==null?"—":String(c.opponent_submitted_opponent_score))+'</strong></div></div>';
     }
-    h+='<div class="evidence"><div class="shotbox">'+(c.screenshot_available?'<img class="shot" data-id="'+id+'" alt="Private game screenshot loading">':'No screenshot uploaded yet')+'</div><div class="meta">'+(c.screenshot_available?'Screenshot evidence is attached for manual admin review.':'Waiting for the selected player to upload screenshot evidence.')+'</div></div>';
+    var evidence=Array.isArray(c.evidence)?c.evidence:[];
+    if(evidence.length){h+='<div class="evidence">'+evidence.map(function(item){return '<div class="shotbox"><img class="shot" data-verification-id="'+id+'" data-evidence-id="'+Number(item.id)+'" alt="Evidence from '+esc(item.username||"player")+' loading"><div class="meta">Uploaded by '+esc(item.username||"Player")+' · '+esc(item.phone||"No phone")+' · '+esc(String(item.mimeType||"image").toUpperCase())+' · '+esc(date(item.createdAt))+' · '+Number(item.byteSize||0)+' bytes</div></div>';}).join("")+'</div>';}else if(c.screenshot_available){h+='<div class="evidence"><div class="shotbox"><img class="shot" data-id="'+id+'" alt="Legacy match screenshot loading"><div class="meta">Legacy evidence · uploaded by '+esc(c.selected_username||"Unknown player")+' · '+esc(c.selected_phone||"No phone")+' · '+esc(date(c.submitted_at||c.created_at))+'</div></div></div>';}else h+='<div class="evidence"><div class="shotbox">Waiting for participant evidence.</div></div>';
     if(status&&c.screenshot_available){
-        h+='<div class="form"><label>'+esc(creatorName)+' verified goals<input class="score" data-creator type="number" min="0" max="99" step="1" inputmode="numeric"></label><label>'+esc(opponentName)+' verified goals<input class="score" data-opponent type="number" min="0" max="99" step="1" inputmode="numeric"></label><label class="wide">Optional admin note<textarea class="note" data-review-note maxlength="1000" placeholder="Record what the screenshot shows, including player-name or side differences."></textarea></label></div>';
-        h+='<div class="actions"><button class="btn gold" data-review="resolve" data-id="'+id+'" type="button">Resolve result and settle</button><button class="btn red" data-review="reject" data-id="'+id+'" type="button">Reject evidence · keep funds held</button></div><div class="foot">Resolving updates the match, wallet settlement, standings, and player notices.</div>';
+        h+='<div class="form"><label>Player A · '+esc(playerA)+' verified goals<input class="score" data-player-a type="number" min="0" max="99" step="1" inputmode="numeric"></label><label>Player B · '+esc(playerB)+' verified goals<input class="score" data-player-b type="number" min="0" max="99" step="1" inputmode="numeric"></label><label class="wide">Review note / mandatory rejection reason<textarea class="note" data-review-note maxlength="1000" placeholder="For rejection, explain why evidence is unreliable. Funds remain locked during investigation."></textarea></label></div>';
+        h+='<div class="actions"><button class="btn gold" data-review="resolve" data-id="'+id+'" type="button">Resolve result and settle</button><button class="btn red" data-review="reject" data-id="'+id+'" type="button">Reject · keep funds locked</button></div><div class="foot">Resolution uses verified Player A and B scores and the existing secure settlement. Rejection opens investigation without moving money.</div>';
     } else if(status) h+='<div class="warn">Waiting for screenshot evidence. Keep this case open until the image is available.</div>';
     else if(c.review_note) h+='<div class="meta">Admin note: '+esc(c.review_note)+'</div>';
+    var eventHistory=Array.isArray(c.event_history)?c.event_history:[];
+    if(eventHistory.length)h+='<h3>Admin event history</h3>'+eventHistory.map(function(event){return '<div class="activity-item"><strong>'+esc(String(event.type||"event").replace(/_/g," "))+'</strong> · '+esc(date(event.createdAt))+(event.reason?'<div class="bodytext">Reason: '+esc(event.reason)+'</div>':"")+(event.note?'<div class="bodytext">'+esc(event.note)+'</div>':"")+'</div>';}).join("");
+    if(!resolved)h+='<div class="form"><label class="wide">Investigation follow-up note<textarea class="note" data-investigation-note maxlength="1000" placeholder="Add an evidence review update or player follow-up record."></textarea></label><div class="wide"><button class="btn" type="button" data-add-result-note="'+id+'">Record investigation note</button></div></div>';
     if(resolved)h+='<div class="actions"><button class="btn '+(cleared?'':'gold')+'" type="button" data-result-visibility="'+(cleared?'restore':'clear')+'" data-id="'+id+'">'+(cleared?'Restore to list':'Clear from list')+'</button></div>';
     return h+'</article>';
 }
@@ -291,31 +338,26 @@ async function updateSupportStatus(button) {
     await loadThreads();
 }
 async function loadUsers() {
-    var query=$("userSearch").value.trim(), r=await GG.api("/api/admin/users?search="+encodeURIComponent(query));
-    if(!r.ok){$("userList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load accounts.")+'</div>';return;}
+    var query=$("userSearch").value.trim(), status=$("userStatusFilter").value, game=$("userGameFilter").value;
+    var params=new URLSearchParams({search:query,page:String(userPage),limit:"40",status:status,game:game});
+    var r=await GG.api("/api/admin/users?"+params.toString());
+    if(!r.ok){$("userList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not load players.")+'</div>';return;}
     users=r.data.users||[];
-
-
-    $("userList").innerHTML=users.length?users.map(function(u,index){
-        var id=Number(u.id), self=id===Number(adminId), status=String(u.account_status||"active"), cls=status==="active"?"active-status":status==="suspended"?"suspended-status":"closed-status";
-        var h='<article class="userrow" data-user="'+id+'"><div><span class="account-number">Account #'+(index+1)+'</span><br><strong>'+esc(u.username)+(self?' <span class="badge good">You</span>':"")+'</strong><span class="account-presence'+(u.online?' is-online':'')+'" data-account-presence="'+id+'" role="status" aria-label="'+(u.online?'Online':'Offline')+'">'+(u.online?'Online':'Offline')+'</span><div class="user-meta">'+esc(u.game||"both")+" · "+esc(u.role||"user")+" · Rating "+esc(u.rating)+"<br>Available "+esc(GG.formatMoney(u.balance||0))+" · Locked "+esc(GG.formatMoney(u.locked_balance||0))+'</div></div><strong class="'+cls+'">'+esc(status)+'</strong><div class="user-actions">';
-        h+='<label class="sr-only" for="un'+id+'">Optional action note</label><input id="un'+id+'" class="note" data-user-note maxlength="1000" placeholder="Optional note">';
-        h+='<button class="btn" type="button" data-view-dashboard="'+id+'">View dashboard</button>';
-        if(self)h+='<span class="foot">Your admin access is protected.</span>';
-        else {
-            if(status!=="active")h+='<button class="btn" data-status="active" data-id="'+id+'">Reactivate</button>';
-            if(status!=="suspended")h+='<button class="btn" data-status="suspended" data-id="'+id+'">Suspend</button>';
-            if(status!=="closed")h+='<button class="btn red" data-status="closed" data-id="'+id+'">Close account</button>';
-            if(u.role!=="admin")h+='<button class="btn red" type="button" data-delete-account="'+id+'">Delete permanently</button>';
-        }
-        return h+'</div></article>';
-    }).join(""):'<div class="empty">No accounts match that search.</div>';
-    updateAccountPresence(GG.getOnlineUserIds());
+    userTotal=Number(r.data.total||0);userPages=Math.max(1,Math.ceil(userTotal/Number(r.data.pageSize||40)));userPage=Number(r.data.page)||1;
+    $("userList").innerHTML=users.length?users.map(function(u){
+        var id=Number(u.id), presence=String(u.presence||"unavailable"), stateLabel={online:"Online",away:"Away · idle",offline:"Offline",unavailable:"Unavailable"}[presence]||"Unavailable";
+        var ticker="Chess completed: "+Number(u.chess_completed||0)+" · eFootball completed: "+Number(u.efootball_completed||0);
+        ticker+=u.last_game_at?" · Last completed game "+date(u.last_game_at):" · No completed games recorded";
+        var status=String(u.account_status||"active");
+        return '<button class="player-card" type="button" data-view-dashboard="'+id+'"><span><span class="player-card-head"><span><h3>'+esc(u.username||"Player")+'</h3><span class="player-card-meta">'+esc(u.game||"both")+' · Rating '+esc(u.rating==null?"—":u.rating)+'</span></span><span class="badge '+(status==="active"?"good":status==="suspended"?"wait":"alert")+'">'+esc(status)+'</span></span><span class="player-card-meta">Account #'+id+' · joined '+esc(date(u.created_at))+'</span></span><span><span class="presence-dot '+esc(presence)+'" role="status">'+esc(stateLabel)+'</span><span class="player-ticker"><span>'+esc(ticker)+' · '+esc(ticker)+'</span></span></span></button>';
+    }).join(""):'<div class="empty">No players match these filters.</div>';
+    $("usersPageLabel").textContent="Page "+userPage+" of "+userPages+" · "+userTotal.toLocaleString()+" players";
+    $("usersPrev").disabled=userPage<=1;$("usersNext").disabled=userPage>=userPages;
 }
 async function loadWalletAdjustmentUsers() {
     var query=$("walletAdjustmentSearch").value.trim();
     if(!query){walletAdjustmentUsers=[];$("walletAdjustmentList").innerHTML='<div class="empty">Search for a username or phone to adjust an available wallet balance.</div>';return;}
-    var r=await GG.api("/api/admin/users?search="+encodeURIComponent(query));
+    var r=await GG.api("/api/admin/users/wallet-lookup?search="+encodeURIComponent(query));
     if(!r.ok){$("walletAdjustmentList").innerHTML='<div class="empty">'+esc(r.data.message||"Could not find player accounts.")+'</div>';return;}
     walletAdjustmentUsers=r.data.users||[];
     $("walletAdjustmentList").innerHTML=walletAdjustmentUsers.length?walletAdjustmentUsers.map(function(u){
@@ -590,6 +632,20 @@ async function loadAdminWallet() {
         return '<article class="activity-item"><strong>'+esc(String(t.transaction_type||"wallet activity").replace(/_/g," "))+' · '+esc(GG.formatMoney(t.amount))+'</strong><br>'+esc(t.status||"completed")+' · '+esc(date(t.created_at))+(t.reference?'<br>Ref: '+esc(t.reference):"")+(t.description?'<br>'+esc(t.description):"")+'</article>';
     }).join(""):'<div class="empty">No administrator wallet activity is visible.</div>';
 }
+async function loadFinanceAnalytics() {
+    var period=$("financePeriod").value||"daily";
+    var result=await GG.api("/api/admin/finance/summary?period="+encodeURIComponent(period),{noRedirect:true});
+    if(!result.ok){$("financeTotals").innerHTML='<div class="empty">'+esc(result.data.message||"Financial analytics unavailable.")+'</div>';$("financeChart").innerHTML='<div class="empty">Could not load period activity.</div>';return;}
+    var data=result.data||{},summary=data.summary||{},funds=data.platformFunds||{};
+    var labels={daily:"Daily",weekly:"Weekly",monthly:"Monthly",yearly:"Yearly"};
+    $("financePeriodLabel").textContent=(labels[data.period]||"Daily")+" · "+String(data.timeZone||"Africa/Nairobi")+" · KES";
+    var metrics=[["Deposits",summary.deposits],["Prizes paid",summary.prizes_paid],["Withdrawals",summary.withdrawals],["Refunds",summary.refunds],["Retained revenue",summary.retained_revenue],["Actual recorded expenses",summary.actual_expenses],["Provider payouts",summary.provider_payouts],["Available funds now",funds.available],["Reserved funds now",funds.reserved]];
+    $("financeTotals").innerHTML=metrics.map(function(item){return '<div class="stat">'+esc(item[0])+'<strong>'+esc(GG.formatMoney(item[1]||0))+'</strong></div>';}).join("");
+    var series=data.series||[],volumes=series.map(function(item){return Number(item.deposits||0)+Number(item.prizes_paid||0)+Number(item.withdrawals||0)+Number(item.refunds||0);}),max=Math.max(1,...volumes);
+    $("financeChart").setAttribute("aria-label","Gross recorded deposits, prize payments, withdrawals, and refunds by time bucket; not profit");
+    $("financeChart").innerHTML=series.length?series.map(function(item,index){var stamp=new Date(String(item.bucket_local||"").replace(" ","T")+"Z"),fmt=data.period==="daily"?{hour:"2-digit"}:data.period==="yearly"?{month:"short"}:{day:"numeric"};var label=isNaN(stamp.getTime())?"—":stamp.toLocaleString("en-KE",Object.assign({timeZone:data.timeZone||"Africa/Nairobi"},fmt));var height=Math.max(2,Math.round(130*volumes[index]/max));var breakdown="Deposits "+GG.formatMoney(item.deposits)+" · Prizes "+GG.formatMoney(item.prizes_paid)+" · Withdrawals "+GG.formatMoney(item.withdrawals)+" · Refunds "+GG.formatMoney(item.refunds);return '<div class="finance-column" title="'+esc(label+" · "+breakdown)+'"><span class="finance-bar" style="height:'+height+'px" aria-hidden="true"></span><span class="finance-label">'+esc(label)+'</span></div>';}).join(""):'<div class="empty">No posted ledger activity in this '+esc(period)+" period."+'</div>';
+    $("financeAnalyticsMessage").textContent="Chart shows gross recorded flow volume, not net income or profit. Expense totals include only ledger accounts explicitly classified as expenses; no unclassified activity is estimated. Periods use "+String(data.timeZone||"Africa/Nairobi")+".";
+}
 async function loadManualWithdrawals() {
     var list=$("manualWithdrawalsList");
     if(!list)return;
@@ -744,19 +800,20 @@ function editing(id) { var r=$(id),a=document.activeElement;return !!(r&&a&&r.co
 async function refresh(force) {
     if(!adminAuthorized||busy||document.hidden)return; busy=true; $("live").textContent="Updating…";
     try {
-        var tasks=[loadOverview(),loadManualWithdrawals()];
-        if(force||!editing("resultList"))tasks.push(loadResults());
-        if(force||!editing("matchManagement"))tasks.push(loadMatchManagement());
-        if(force||!editing("complaintSearch"))tasks.push(loadComplaints());
-        if(force||!editing("adminWalletWithdrawForm"))tasks.push(loadAdminWallet());
-        if(force||!editing("accounts"))tasks.push(loadUsers());
-        if(force||!editing("adminWallet")){if($("walletAdjustmentSearch").value.trim())tasks.push(loadWalletAdjustmentUsers());}
-        if(force||!editing("competitionSelect"))tasks.push(loadCompetitionList());
-        if(force||!editing("announcementForm"))tasks.push(loadAnnouncements());
-        if(location.hash==="#companionTracker"&&(force||!editing("companionTracker")))tasks.push(loadCompanionTracker());
-        if(location.hash==="#efootballScheduler")tasks.push(loadEfootballScheduler());
-        if(location.hash==="#passwordRecovery"&&(force||!editing("passwordRecoveryList")))tasks.push(loadPasswordRecoveryRequests());
-        tasks.push(loadThreads()); await Promise.all(tasks); if(selectedUser!=null)await loadMessages(force);
+        var page=String(location.hash||"#overview").slice(1),tasks=[loadOverview()];
+        if(force||page==="manualWithdrawals")tasks.push(loadManualWithdrawals());
+        if(force||page==="results")tasks.push(loadResults());
+        if(force||page==="matchManagement")tasks.push(loadMatchManagement());
+        if(force||page==="complaints")tasks.push(loadComplaints());
+        if(force||page==="adminWallet"){tasks.push(loadAdminWallet(),loadFinanceAnalytics());if($("walletAdjustmentSearch").value.trim())tasks.push(loadWalletAdjustmentUsers());}
+        if(force||page==="accounts")tasks.push(loadUsers());
+        if(force||page==="competitions")tasks.push(loadCompetitionList());
+        if(force||page==="announcements")tasks.push(loadAnnouncements());
+        if(page==="companionTracker")tasks.push(loadCompanionTracker());
+        if(page==="efootballScheduler")tasks.push(loadEfootballScheduler());
+        if(page==="passwordRecovery")tasks.push(loadPasswordRecoveryRequests());
+        if(page==="support")tasks.push(loadThreads());
+        await Promise.all(tasks); if(page==="support"&&selectedUser!=null)await loadMessages(force);
         $("live").textContent="Live · "+new Date().toLocaleTimeString();
     } catch(_){$("live").textContent="Some data could not refresh.";}
     finally{busy=false;}
@@ -777,15 +834,27 @@ async function complaintVisibilityAction(btn) {
 async function resultAction(btn) {
     var card=btn.closest("[data-case]"), decision=btn.dataset.review, body={decision:decision,note:card.querySelector("[data-review-note]")?.value.trim()||""};
     if(decision==="resolve"){
-        var a=card.querySelector("[data-creator]"),b=card.querySelector("[data-opponent]");
-        if(a.value===""||b.value===""){say("Enter both verified scores from the screenshot.","error");return;}
-        body.creatorScore=Number(a.value);body.opponentScore=Number(b.value);
+        var a=card.querySelector("[data-player-a]"),b=card.querySelector("[data-player-b]");
+        if(a.value===""||b.value===""){say("Enter verified scores for Player A and Player B from the evidence.","error");return;}
+        var scoreA=Number(a.value),scoreB=Number(b.value),aIsCreator=card.dataset.playerACreator==="true";
+        body.creatorScore=aIsCreator?scoreA:scoreB;body.opponentScore=aIsCreator?scoreB:scoreA;
         if(!Number.isInteger(body.creatorScore)||!Number.isInteger(body.opponentScore)||body.creatorScore<0||body.opponentScore<0||body.creatorScore>99||body.opponentScore>99){say("Scores must be whole numbers from 0 to 99.","error");return;}
-        if(!confirm("Settle this match using "+body.creatorScore+"–"+body.opponentScore+"? Wallet settlement, standings and player notices will update."))return;
-    } else if(!confirm("Reject this evidence? Match funds will remain held for another admin decision."))return;
+        if(!confirm("Settle using Player A "+scoreA+"–"+scoreB+" Player B? Wallet settlement, standings and player notices will update."))return;
+    } else {
+        if(body.note.length<5){say("Enter a rejection reason of at least 5 characters. The stakes stay locked while this case is investigated.","error");return;}
+        body.reason=body.note;
+        if(!confirm("Reject this evidence and open an investigation? Match funds will remain locked; no refund or forfeiture will happen."))return;
+    }
     btn.disabled=true;var r=await GG.api("/api/admin/result-verifications/"+encodeURIComponent(btn.dataset.id)+"/review",{method:"POST",body:body});
     if(!r.ok){btn.disabled=false;say(r.data.message||"Could not save result review.","error");return;}
     say(r.data.message||"Result decision saved.","ok");await refresh(true);
+}
+async function addResultInvestigationNote(button){
+    var card=button.closest("[data-case]"),field=card&&card.querySelector("[data-investigation-note]"),note=field?field.value.trim():"";
+    if(note.length<5){say("Enter an investigation note of at least 5 characters.","error");return;}
+    button.disabled=true;var result=await GG.api("/api/admin/result-verifications/"+encodeURIComponent(button.dataset.addResultNote)+"/notes",{method:"POST",body:{note:note}});
+    if(!result.ok){button.disabled=false;say(result.data.message||"Could not record the investigation note.","error");return;}
+    say(result.data.message||"Investigation note recorded.","ok");await loadResults();
 }
 async function resultVisibilityAction(btn) {
     var action=btn.dataset.resultVisibility,clear=action==="clear";
@@ -846,17 +915,58 @@ async function walletAdjustment(btn) {
 
 function tile(label,value) { return '<div class="account-tile"><span>'+esc(label)+'</span><strong>'+esc(value==null||value===""?"—":value)+'</strong></div>'; }
 function renderAccountDashboard(d) {
-    var u=d.user||{}, tx=d.transactions||[], chess=d.chess||{}, ef=d.efootball||{};
-    function items(list, render, empty) { return list.length?list.map(function(x){return '<div class="activity-item">'+render(x)+'</div>';}).join(""):'<div class="empty">'+empty+'</div>'; }
-    var out='<div class="account-grid">'+tile("Username",u.username)+tile("Phone",u.phone)+tile("Game",u.game)+tile("Rating",u.rating)+tile("Account",u.account_status)+tile("Joined",date(u.created_at))+tile("Wallet",GG.formatMoney(u.balance))+tile("Locked",GG.formatMoney(u.locked_balance))+tile("Role",u.role)+'</div>';
-    out+='<div class="account-grid">'+tile("Chess played",chess.stats&&chess.stats.played)+tile("Chess wins",chess.stats&&chess.stats.wins)+tile("Chess draws",chess.stats&&chess.stats.draws)+tile("eFootball matches",ef.stats&&ef.stats.played)+tile("eFootball completed",ef.stats&&ef.stats.completed)+'</div>';
-    out+='<div class="activity-grid"><section class="activity-block"><h3>Recent wallet activity</h3>'+items(tx,function(x){return '<strong>'+esc(x.transaction_type)+' · '+esc(GG.formatMoney(x.amount))+'</strong><br>'+esc(x.status)+' · '+esc(date(x.created_at))+(x.reference?'<br>Ref: '+esc(x.reference):'')+(x.description?'<br>'+esc(x.description):'');},"No wallet activity.")+'</section>';
-    out+='<section class="activity-block"><h3>Recent chess</h3>'+items(chess.recent||[],function(x){return '<strong>Game #'+esc(x.id)+' · '+esc(x.status)+' · '+esc(x.result||"in progress")+'</strong><br>'+esc(x.match_type)+' · '+esc(x.time_control)+' · '+esc(GG.formatMoney(x.stake_amount))+' · '+esc(date(x.finished_at));},"No chess matches.")+'</section>';
-    out+='<section class="activity-block"><h3>Recent eFootball</h3>'+items(ef.recent||[],function(x){return '<strong>Match #'+esc(x.id)+' · '+esc(x.status)+'</strong><br>'+esc(x.mode||"Match")+(x.league?' · '+esc(x.league):'')+(x.creator_score!=null?' · '+esc(x.creator_score)+"–"+esc(x.opponent_score):'')+' · '+esc(GG.formatMoney(x.stake_amount))+' · '+esc(date(x.finished_at||x.created_at));},"No eFootball matches.")+'</section></div>';
+    var u=d.user||{},tx=d.transactions||[],chess=d.chess||{},ef=d.efootball||{},wallet=d.walletActivity||{},id=Number(u.id);
+    var tabs=[["account","Account"],["chess","Chess"],["efootball","eFootball"],["wallet","Wallet Activity"],["history","Financial History"],["chat","Chat History"]];
+    function items(list,render,empty){return list.length?list.map(function(x){return '<div class="activity-item">'+render(x)+'</div>';}).join(""):'<div class="empty">'+empty+'</div>';}
+    function recentChess(x){return '<strong>Game #'+esc(x.id)+' · '+esc(x.status)+'</strong><br>'+esc(x.match_type||"Chess")+' · '+esc(x.time_control||"Time control unavailable")+' · '+esc(x.result||"Result not recorded")+' · '+esc(date(x.finished_at));}
+    function recentEfootball(x){return '<strong>Match #'+esc(x.id)+' · '+esc(x.status)+'</strong><br>'+esc(x.mode||"eFootball")+(x.league?' · '+esc(x.league):'')+(x.creator_score!=null?' · score '+esc(x.creator_score)+"–"+esc(x.opponent_score):'')+' · '+esc(date(x.finished_at||x.created_at));}
+    var out='<div class="account-tabs" role="tablist" aria-label="Player details">'+tabs.map(function(t,i){return '<button class="account-tab" type="button" role="tab" id="accountTab-'+t[0]+'" aria-controls="accountPanel-'+t[0]+'" aria-selected="'+(i===0?'true':'false')+'" data-account-tab="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>';
+    out+='<div class="account-pane" id="accountPanel-account" role="tabpanel" aria-labelledby="accountTab-account" data-account-panel="account" data-user="'+id+'"><div class="account-grid">'+tile("Username",u.username)+tile("Phone",u.phone)+tile("Game",u.game)+tile("Rating",u.rating)+tile("Account status",u.account_status)+tile("Joined",date(u.created_at))+tile("Role",u.role)+tile("Active usage duration","Not measured by current session telemetry")+'</div><h3>Account access</h3><label class="help">Admin note for an account action<input class="note" data-user-note maxlength="1000" placeholder="Optional context"></label><div class="actions">';
+    if(id===Number(adminId))out+='<span class="badge good">Your administrator access is protected</span>';
+    else {if(u.account_status!=="active")out+='<button class="btn" type="button" data-status="active" data-id="'+id+'">Reactivate</button>';if(u.account_status!=="suspended")out+='<button class="btn" type="button" data-status="suspended" data-id="'+id+'">Suspend</button>';if(u.account_status!=="closed")out+='<button class="btn red" type="button" data-status="closed" data-id="'+id+'">Close account</button>';out+='<button class="btn red" type="button" data-delete-account="'+id+'">Delete permanently</button>';}
+    out+='</div></div>';
+    out+='<div class="account-pane" id="accountPanel-chess" role="tabpanel" aria-labelledby="accountTab-chess" data-account-panel="chess" hidden><div class="account-grid">'+tile("Completed games",chess.stats&&chess.stats.completed)+tile("Wins",chess.stats&&chess.stats.wins)+tile("Draws",chess.stats&&chess.stats.draws)+tile("In progress",chess.stats&&chess.stats.in_progress)+tile("Disputed",chess.stats&&chess.stats.disputed)+tile("Abandoned / cancelled / forfeited",chess.stats&&chess.stats.abandoned_or_cancelled)+'</div><h3>Recent Chess games</h3>'+items(chess.recent||[],recentChess,"No Chess matches recorded.")+'</div>';
+    out+='<div class="account-pane" id="accountPanel-efootball" role="tabpanel" aria-labelledby="accountTab-efootball" data-account-panel="efootball" hidden><div class="account-grid">'+tile("Completed matches",ef.stats&&ef.stats.completed)+tile("In progress / awaiting verification",ef.stats&&ef.stats.in_progress)+tile("Disputed",ef.stats&&ef.stats.disputed)+tile("Cancelled / forfeited",ef.stats&&ef.stats.cancelled_or_forfeited)+'</div><h3>Recent eFootball matches</h3>'+items(ef.recent||[],recentEfootball,"No eFootball matches recorded.")+'</div>';
+    out+='<div class="account-pane" id="accountPanel-wallet" role="tabpanel" aria-labelledby="accountTab-wallet" data-account-panel="wallet" hidden><div class="account-grid">'+tile("Spendable balance",GG.formatMoney(u.available_balance))+tile("Locked funds",GG.formatMoney(u.locked_balance))+tile("Withdrawal reserved",GG.formatMoney(u.withdrawal_reserved_balance))+'</div><p class="help">Spendable balance uses wallet balance minus withdrawal reservations. Locked match and competition funds are shown separately.</p><div class="account-grid">'+tile("Deposits made by player",GG.formatMoney(wallet.deposits))+tile("Competition prize credits",GG.formatMoney(wallet.prizes))+tile("Withdrawals and fees",GG.formatMoney(wallet.withdrawals))+tile("Refunds recorded",GG.formatMoney(wallet.refunds))+'</div></div>';
+    out+='<div class="account-pane" id="accountPanel-history" role="tabpanel" aria-labelledby="accountTab-history" data-account-panel="history" hidden><h3>Financial history</h3><p class="help">Deposits and prize credits are separate wallet flows; neither is labelled profit. Most recent records first.</p>'+items(tx,function(x){return '<strong>'+esc(String(x.transaction_type||"transaction").replace(/_/g," "))+' · '+esc(GG.formatMoney(x.amount))+'</strong><br>'+esc(x.status)+' · '+esc(date(x.created_at))+(x.reference?'<br>Reference '+esc(x.reference):'')+(x.description?'<br>'+esc(x.description):'');},"No financial records are available.")+'</div>';
+    out+='<div class="account-pane" id="accountPanel-chat" role="tabpanel" aria-labelledby="accountTab-chat" data-account-panel="chat" hidden><div class="panel-head"><div><h3>Support conversation history</h3><p class="help">Read-only investigator view. Opening this history does not mark player messages as read.</p></div><div class="actions"><button class="btn" type="button" data-chat-export="json" data-user="'+id+'">Export JSON</button><button class="btn gold" type="button" data-chat-export="pdf" data-user="'+id+'">Export PDF</button></div></div><div class="actions"><button class="btn" type="button" data-chat-older data-user="'+id+'" hidden>Load older messages</button></div><div class="chat-history" id="chatHistory-'+id+'"><div class="empty">Opening private support history…</div></div><p id="chatHistoryMessage-'+id+'" class="notice" role="status" aria-live="polite"></p></div>';
     return out;
+}
+function selectAccountTab(name) {
+    document.querySelectorAll("[data-account-tab]").forEach(function(tab){var selected=tab.dataset.accountTab===name;tab.setAttribute("aria-selected",String(selected));tab.tabIndex=selected?0:-1;});
+    document.querySelectorAll("[data-account-panel]").forEach(function(panel){panel.hidden=panel.dataset.accountPanel!==name;});
+    if(name==="chat"&&playerDashboard!=null)loadChatHistory(playerDashboard,false);
+}
+async function loadChatHistory(userId,older) {
+    if(chatHistoryBusy)return;chatHistoryBusy=true;
+    var pane=$("chatHistory-"+userId),message=$("chatHistoryMessage-"+userId),button=document.querySelector('[data-chat-older][data-user="'+userId+'"]');
+    if(!pane){chatHistoryBusy=false;return;}
+    var before=older?chatHistoryCursor:"";
+    var params=new URLSearchParams({limit:"50"});if(before)params.set("before",before);
+    var response=await GG.api("/api/admin/users/"+encodeURIComponent(userId)+"/chat-history?"+params.toString(),{noRedirect:true});
+    chatHistoryBusy=false;
+    if(!response.ok){message.textContent=response.data.message||"Could not load support history.";message.className="notice error";return;}
+    var rows=response.data.messages||[];
+    if(!older)pane.innerHTML="";
+    var markup=rows.map(function(item){var support=Number(item.sender_id)!==Number(userId);return '<article class="history-message '+(support?'support':'')+'" data-message-id="'+Number(item.id)+'"><span>'+esc(item.message||"")+'</span><small>'+esc(support?(item.username||"GOAL$GAMBIT support"):(item.username||"Player"))+' · '+esc(date(item.created_at))+'</small></article>';}).join("");
+    if(older&&markup)pane.insertAdjacentHTML("afterbegin",markup);else if(markup)pane.innerHTML=markup;
+    if(!rows.length&&!older)pane.innerHTML='<div class="empty">No support conversation exists for this player.</div>';
+    chatHistoryCursor=response.data.nextBeforeId||null;
+    if(button){button.hidden=!response.data.hasOlder;button.disabled=false;}
+    message.textContent=response.data.threadId?"Read-only history · "+Number(response.data.total||rows.length).toLocaleString()+" messages in this conversation":"No support conversation exists for this player.";message.className="notice";
+}
+async function exportChatHistory(button) {
+    var userId=Number(button.dataset.user),format=button.dataset.chatExport;button.disabled=true;
+    try{
+        var response=await fetch(GG.API_BASE+"/api/admin/users/"+encodeURIComponent(userId)+"/chat-history/export?format="+encodeURIComponent(format),{headers:{Authorization:"Bearer "+GG.getToken()},cache:"no-store"});
+        if(!response.ok){var error={};try{error=await response.json();}catch(_){}throw new Error(error.message||"Evidence export could not be created.");}
+        var blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="goal-gambit-support-"+userId+"-"+new Date().toISOString().replace(/[:.]/g,"-")+"."+(format==="pdf"?"pdf":"json");document.body.appendChild(link);link.click();link.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);
+    }catch(error){var note=$("chatHistoryMessage-"+userId);if(note){note.textContent=error.message;note.className="notice error";}}
+    finally{button.disabled=false;}
 }
 async function viewUserDashboard(btn) {
     var id=Number(btn.dataset.viewDashboard); btn.disabled=true;
+    playerDashboard=id;chatHistoryCursor=null;
     $("accountDialogTitle").textContent="Player dashboard";
     $("accountView").innerHTML='<div class="empty">Loading account activity…</div>';
     $("accountDialog").showModal();
@@ -938,10 +1048,14 @@ $("clearAllMatches").addEventListener("click",clearAllMatches);
 $("refresh").addEventListener("click",function(){refresh(true);});
 $("refreshEfootballScheduler").addEventListener("click",loadEfootballScheduler);
 $("logout").addEventListener("click",function(){GG.logout();});
-$("searchUsers").addEventListener("click",loadUsers);
-$("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();loadUsers();}});
-$("userSearch").addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(loadUsers,250);});
-$("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b){resultAction(b);return;}b=e.target.closest("[data-result-visibility]");if(b)resultVisibilityAction(b);});
+$("searchUsers").addEventListener("click",function(){userPage=1;loadUsers();});
+$("userSearch").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();userPage=1;loadUsers();}});
+$("userSearch").addEventListener("input",function(){clearTimeout(timer);userPage=1;timer=setTimeout(loadUsers,250);});
+$("userStatusFilter").addEventListener("change",function(){userPage=1;loadUsers();});
+$("userGameFilter").addEventListener("change",function(){userPage=1;loadUsers();});
+$("usersPrev").addEventListener("click",function(){if(userPage>1){userPage--;loadUsers();}});
+$("usersNext").addEventListener("click",function(){if(userPage<userPages){userPage++;loadUsers();}});
+$("resultList").addEventListener("click",function(e){var b=e.target.closest("[data-review]");if(b){resultAction(b);return;}b=e.target.closest("[data-add-result-note]");if(b){addResultInvestigationNote(b);return;}b=e.target.closest("[data-result-visibility]");if(b)resultVisibilityAction(b);});
 $("matchManagementList").addEventListener("click",function(e){var b=e.target.closest("[data-match-cancel-refund]");if(b){cancelManagedMatch(b);return;}b=e.target.closest("[data-match-visibility]");if(b){matchVisibilityAction(b);return;}b=e.target.closest("[data-match-wallet]");if(b)focusMatchPlayerWallet(b);});
 $("matchManagementList").addEventListener("submit",function(e){var chess=e.target.closest("[data-chess-result-form]");if(chess){e.preventDefault();saveManagedChessResult(chess);return;}var form=e.target.closest("[data-match-score-form]");if(!form)return;e.preventDefault();saveManagedScore(form);});
 $("complaints").addEventListener("click",function(e){var open=e.target.closest("[data-open-complaint]");if(open){openComplaint(open.dataset.openComplaint);return;}var b=e.target.closest("[data-complaint-visibility]");if(b)complaintVisibilityAction(b);});
@@ -953,6 +1067,7 @@ $("walletAdjustmentSearch").addEventListener("keydown",function(e){if(e.key==="E
 $("clearAdminWalletHistory").addEventListener("click",clearAdminWalletHistory);
 $("manualWithdrawalsList").addEventListener("click",function(e){var complete=e.target.closest("[data-manual-withdrawal-complete]");if(complete){manualWithdrawalAction(complete);return;}var cancel=e.target.closest("[data-manual-withdrawal-cancel]");if(cancel){manualWithdrawalAction(cancel);return;}var clear=e.target.closest("[data-manual-withdrawal-clear]");if(clear)manualWithdrawalAction(clear);});
 if($("adminFinanceSearchButton"))$("adminFinanceSearchButton").addEventListener("click",loadAdminWallet);
+$("financePeriod").addEventListener("change",loadFinanceAnalytics);
 $("competitionSelect").addEventListener("change",loadCompetitionTable);
 $("competitionTable").addEventListener("submit",function(e){var form=e.target.closest("[data-competition-type]");if(!form)return;e.preventDefault();saveCompetitionEdit(form);});
 $("announcementList").addEventListener("click",function(e){var b=e.target.closest("[data-deactivate-announcement]");if(b)deactivateAnnouncement(b);});
@@ -968,7 +1083,7 @@ $("companionTrackerList").addEventListener("click",function(e){var button=e.targ
 $("companionDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-companion]"))this.close();});
 $("announcementForm").addEventListener("submit",async function(e){e.preventDefault();var input=$("announcementMessage"),message=input.value.trim(),eventName=$("announcementEventName").value.trim(),eventValue=$("announcementEventAt").value,publishValue=$("announcementPublishAt").value;if(!message)return;if(Boolean(eventName)!==Boolean(eventValue)){say("Enter both the event name and its date and start time.","error");return;}function toIso(value){return value?new Date(value).toISOString():null;}$("sendAnnouncement").disabled=true;var r=await GG.api("/api/admin/announcements",{method:"POST",body:{message:message,eventName:eventName,eventAt:toIso(eventValue),eventTimeZone:Intl.DateTimeFormat().resolvedOptions().timeZone||"Africa/Nairobi",publishAt:toIso(publishValue),audience:$("announcementAudience").value}});$("sendAnnouncement").disabled=false;if(!r.ok){say(r.data.message||"Announcement was not published.","error");return;}input.value="";$("announcementEventName").value="";$("announcementEventAt").value="";$("announcementPublishAt").value="";$("announcementAudience").value="all";say(r.data.message||"Announcement published.","ok");await loadAnnouncements();});
 $("adminWalletWithdrawForm").addEventListener("submit",async function(e){e.preventDefault();var form=this,amount=Number(form.elements.amount.value),phone=form.elements.phone.value.trim();if(!Number.isSafeInteger(amount)||amount<1||amount>1000000||!phone){$("adminWalletMessage").textContent="Enter a whole KSh amount and valid M-Pesa number.";return;}var fee=Math.round(amount*0.05),payout=amount-fee;if(payout<1){$("adminWalletMessage").textContent="Withdrawal amount is too small after the 5% fee.";return;}if(!confirm("Withdraw KSh "+amount+" from your administrator wallet to "+phone+"? The 5% fee is KSh "+fee+"; estimated payout is KSh "+payout+"."))return;var button=$("adminWalletWithdrawButton");button.disabled=true;$("adminWalletMessage").textContent="Submitting withdrawal to Daraja…";var r=await GG.api("/api/admin/wallet/withdraw",{method:"POST",body:{amount:amount,phone:phone}});button.disabled=false;$("adminWalletMessage").textContent=r.data.message||(r.ok?"Withdrawal submitted.":"Withdrawal was not submitted.");$("adminWalletMessage").className="notice "+(r.ok?"ok":"error");if(r.ok){form.elements.amount.value="";await loadAdminWallet();}});
-$("accountDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-account]"))this.close();});
+$("accountDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-account]")){this.close();return;}var tab=e.target.closest("[data-account-tab]");if(tab){selectAccountTab(tab.dataset.accountTab);return;}var older=e.target.closest("[data-chat-older]");if(older){older.disabled=true;loadChatHistory(Number(older.dataset.user),true);return;}var exportButton=e.target.closest("[data-chat-export]");if(exportButton){exportChatHistory(exportButton);return;}var status=e.target.closest("[data-status]");if(status){statusAction(status);return;}var remove=e.target.closest("[data-delete-account]");if(remove)deleteAccount(remove);});
 $("complaintDialog").addEventListener("click",function(e){if(e.target===this||e.target.closest("[data-close-complaint]"))this.close();});
 $("complaintDialog").addEventListener("close",function(){complaintUrls.forEach(URL.revokeObjectURL);complaintUrls=[];currentComplaintId=null;});
 $("complaintView").addEventListener("submit",function(e){e.preventDefault();var f=e.target.closest("[data-case-status-form]");if(f){complaintCaseStatus(f);return;}f=e.target.closest("[data-case-note-form]");if(f){complaintPrivateNote(f);return;}f=e.target.closest("[data-case-request-form]");if(f)complaintPlayerRequest(f);});
@@ -997,6 +1112,13 @@ function updateAdminPage() {
     if(page==="companionTracker"&&adminAuthorized)loadCompanionTracker();
     if(page==="efootballScheduler"&&adminAuthorized)loadEfootballScheduler();
     if(page==="passwordRecovery"&&adminAuthorized)loadPasswordRecoveryRequests();
+    if(page==="accounts"&&adminAuthorized)loadUsers();
+    if(page==="adminWallet"&&adminAuthorized){loadAdminWallet();loadFinanceAnalytics();}
+    if(page==="manualWithdrawals"&&adminAuthorized)loadManualWithdrawals();
+    if(page==="results"&&adminAuthorized)loadResults();
+    if(page==="matchManagement"&&adminAuthorized)loadMatchManagement();
+    if(page==="complaints"&&adminAuthorized)loadComplaints();
+    if(page==="support"&&adminAuthorized)loadThreads();
 }
 window.addEventListener("hashchange",updateAdminPage);
 updateAdminPage();
@@ -1017,11 +1139,13 @@ async function authorize() {
         if(!GG.getToken()){concealDashboard("Please sign in with an administrator account.",true);return;}
         if(!await verifyAdminAccess()||document.hidden)return;
         $("app").hidden=false;$("gate").hidden=true;say("Admin-only workspace connected.");
+        await runVaultEntrance();
+        if(document.hidden||!adminAuthorized)return;
         await refresh(true);
         if(!accessTimer)accessTimer=setInterval(async function(){
             if(document.hidden||authorizePending)return;
             if(await verifyAdminAccess())await refresh(false);
-        },12000);
+        },30000);
     } finally {
         authorizePending=false;
         if(authorizeAgain){authorizeAgain=false;if(!document.hidden)authorize();}

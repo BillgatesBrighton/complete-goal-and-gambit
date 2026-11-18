@@ -1,4 +1,4 @@
-/* Quiet, animated gold illumination shared across GOAL$GAMBIT pages. */
+/* Slow, visible gold light shared across GOAL$GAMBIT pages. */
 body {
     isolation: isolate;
 }
@@ -10,13 +10,35 @@ body::before {
     z-index: 500;
     pointer-events: none;
     background:
-        radial-gradient(ellipse 36% 29% at 13% 17%, rgba(244, 189, 32, 0.22), transparent 74%),
-        radial-gradient(ellipse 34% 31% at 86% 78%, rgba(255, 215, 90, 0.18), transparent 72%),
-        radial-gradient(ellipse 23% 21% at 52% 48%, rgba(244, 189, 32, 0.10), transparent 78%);
+        radial-gradient(ellipse 36% 29% at 13% 17%, rgba(244, 189, 32, 0.24), transparent 74%),
+        radial-gradient(ellipse 34% 31% at 86% 78%, rgba(255, 215, 90, 0.21), transparent 72%),
+        radial-gradient(ellipse 23% 21% at 52% 48%, rgba(244, 189, 32, 0.12), transparent 78%);
     opacity: 0.82;
     mix-blend-mode: screen;
-    transform: translate3d(-1.1%, -0.4%, 0) scale(0.985);
+    transform: translate3d(-3.8%, -1.8%, 0) scale(0.98);
     animation: gg-ambient-gold 22s ease-in-out infinite alternate;
+    will-change: transform, opacity;
+}
+
+/* A faint light pass makes the gold atmosphere easier to notice. */
+body::after {
+    content: "";
+    position: fixed;
+    inset: -35% -70%;
+    z-index: 500;
+    pointer-events: none;
+    background: linear-gradient(
+        108deg,
+        transparent 46%,
+        rgba(255, 215, 90, 0.025) 49%,
+        rgba(255, 215, 90, 0.11) 50%,
+        rgba(244, 189, 32, 0.035) 52%,
+        transparent 55%
+    );
+    opacity: 0;
+    mix-blend-mode: screen;
+    transform: translate3d(-38%, 0, 0) rotate(-7deg);
+    animation: gg-gold-sweep 26s ease-in-out infinite;
     will-change: transform, opacity;
 }
 
@@ -28,11 +50,11 @@ body.gg-homepage .hero::before {
     z-index: 3;
     pointer-events: none;
     background:
-        radial-gradient(ellipse 34% 43% at 20% 43%, rgba(255, 203, 66, 0.24), transparent 73%),
-        radial-gradient(ellipse 27% 38% at 82% 58%, rgba(244, 189, 32, 0.18), transparent 74%);
-    opacity: 0.48;
+        radial-gradient(ellipse 34% 43% at 20% 43%, rgba(255, 203, 66, 0.27), transparent 73%),
+        radial-gradient(ellipse 27% 38% at 82% 58%, rgba(244, 189, 32, 0.22), transparent 74%);
+    opacity: 0.52;
     mix-blend-mode: screen;
-    transform: translate3d(-1.2%, 0, 0);
+    transform: translate3d(-2.8%, -0.4%, 0) scale(0.99);
     animation: gg-hero-gold 18s ease-in-out infinite alternate;
     will-change: transform, opacity;
 }
@@ -43,27 +65,50 @@ body.gg-homepage .hero-content {
 
 @keyframes gg-ambient-gold {
     0% {
-        opacity: 0.56;
-        transform: translate3d(-1.2%, -0.4%, 0) scale(0.985);
+        opacity: 0.62;
+        transform: translate3d(-3.8%, -1.8%, 0) scale(0.98);
     }
     50% {
-        opacity: 0.88;
-        transform: translate3d(0.7%, 0.5%, 0) scale(1.01);
+        opacity: 0.92;
+        transform: translate3d(1.4%, 1.9%, 0) scale(1.045);
     }
     100% {
         opacity: 0.68;
-        transform: translate3d(1.1%, -0.3%, 0) scale(0.995);
+        transform: translate3d(3.8%, -1.3%, 0) scale(1.005);
+    }
+}
+
+@keyframes gg-gold-sweep {
+    0%, 18% {
+        opacity: 0;
+        transform: translate3d(-38%, 0, 0) rotate(-7deg);
+    }
+    46% {
+        opacity: 0.16;
+        transform: translate3d(-8%, 0, 0) rotate(-7deg);
+    }
+    58% {
+        opacity: 0.2;
+        transform: translate3d(4%, 0, 0) rotate(-7deg);
+    }
+    82%, 100% {
+        opacity: 0;
+        transform: translate3d(38%, 0, 0) rotate(-7deg);
     }
 }
 
 @keyframes gg-hero-gold {
     0% {
-        opacity: 0.32;
-        transform: translate3d(-1.2%, -0.3%, 0) scale(0.99);
+        opacity: 0.36;
+        transform: translate3d(-2.8%, -0.4%, 0) scale(0.99);
+    }
+    50% {
+        opacity: 0.7;
+        transform: translate3d(0.8%, 0.8%, 0) scale(1.035);
     }
     100% {
-        opacity: 0.58;
-        transform: translate3d(1.2%, 0.5%, 0) scale(1.02);
+        opacity: 0.48;
+        transform: translate3d(2.8%, 0.5%, 0) scale(1.01);
     }
 }
 
@@ -72,6 +117,13 @@ body.gg-homepage .hero-content {
     body.gg-homepage .hero::before {
         animation: none;
         opacity: 0.68;
+        transform: none;
+        will-change: auto;
+    }
+
+    body::after {
+        animation: none;
+        opacity: 0;
         transform: none;
         will-change: auto;
     }

@@ -42,6 +42,14 @@ async function startWorkflowServer(userId, fixture, t, now = eatDateTimeToUtc(20
     const queries = [];
     const query = async (sql, values) => {
         queries.push({ sql, values });
+        const statement = String(sql).replace(/\s+/g, " ").trim();
+        if (statement.startsWith("SET LOCAL ") ||
+            /^SELECT pg_advisory_xact_lock(?:_shared)?\(\$1::integer,\$2::integer\)$/i.test(statement)) {
+            return { rows: [], rowCount: 0 };
+        }
+        if (statement.includes("FROM auth_sessions s") && statement.includes("JOIN users u")) {
+            return { rows: [{ "1": 1 }], rowCount: 1 };
+        }
         if (sql.includes("FROM efootball_matches m") && sql.includes("creator.username AS creator_username")) {
             if (![Number(fixture.creator_id), Number(fixture.opponent_id)].includes(Number(values[1]))) return { rows: [] };
             return { rows: [{ ...fixture }] };
@@ -116,7 +124,11 @@ async function startWorkflowServer(userId, fixture, t, now = eatDateTimeToUtc(20
     const app = express();
     app.use(express.json());
     app.use("/api/efootball", createEfootballRoutes(pool, (req, _res, next) => {
-        req.user = { userId };
+        req.user = {
+            userId,
+            sessionId: "00000000-0000-4000-8000-" + String(userId).padStart(12, "0"),
+            authVersion: 0
+        };
         next();
     }, io, pushService));
     const server = http.createServer(app);

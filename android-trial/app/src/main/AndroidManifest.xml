@@ -22,5 +22,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".PlayerChatActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".PlayerWebPageActivity" android:exported="false" />
+        <service android:name=".PlayerFirebaseMessagingService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <receiver android:name=".RoomCodeReplyReceiver" android:exported="false" />
+        <receiver android:name=".ConfirmRoomCodeReceiver" android:exported="false" />
     </application>
 </manifest>

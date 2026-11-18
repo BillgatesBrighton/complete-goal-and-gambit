@@ -13,7 +13,9 @@ test("ranked matchmaking rejects a direct API request at the 12:50 AM EAT cutoff
     const query = async (sql, values) => {
         const statement = String(sql).trim();
         if (["BEGIN", "COMMIT", "ROLLBACK"].includes(statement)) return { rows: [], rowCount: 0 };
+        if (/^SET LOCAL lock_timeout = '10s'$/i.test(statement)) return { rows: [], rowCount: 0 };
         if (statement === "SELECT NOW() AS now") return { rows: [{ now }] };
+        if (/FROM auth_sessions s\s+JOIN users u/i.test(statement) && statement.includes("FOR SHARE OF s")) return { rows: [{ "1": 1 }] };
         if (statement.includes("FROM efootball_matches") && statement.includes("WHERE status='waiting'") && statement.includes("search_last_seen_at")) {
             return { rows: [] };
         }
@@ -32,7 +34,7 @@ test("ranked matchmaking rejects a direct API request at the 12:50 AM EAT cutoff
     const app = express();
     app.use(express.json());
     app.use("/api/efootball", createEfootballRoutes(pool, (req, _res, next) => {
-        req.user = { userId: 7 };
+        req.user = { userId: 7, sessionId: "c0bdb75e-bf14-4e78-bd15-39d8c2a8e6b7", authVersion: 0 };
         next();
     }));
     const server = http.createServer(app);

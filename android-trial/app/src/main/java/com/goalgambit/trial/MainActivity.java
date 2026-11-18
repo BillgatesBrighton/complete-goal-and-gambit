@@ -60,6 +60,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.lang.ref.WeakReference;
 
 public final class MainActivity extends Activity implements ChessRealtimeClient.Listener {
     private static final int BG = Color.rgb(8, 8, 8);
@@ -77,7 +78,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private final ExecutorService requests = Executors.newFixedThreadPool(3);
     private final Set<String> legalDestinations = new HashSet<>();
     private final Set<String> shownNotificationKeys = new HashSet<>();
-    private LinearLayout root;
+    private AuthRevealLayout root;
     private FrameLayout sceneHost;
     private AuthExperienceView authExperience;
     private View appBrandHeader;
@@ -91,6 +92,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private String currentScreen = "home";
     private JSONObject currentUser = new JSONObject();
     private boolean registering;
+    private boolean signingOut;
     private boolean openingSequencePlayed;
     private boolean requestBusy;
     private boolean moveBusy;
@@ -167,6 +169,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private View efootballTournamentSection;
     private LinearLayout notificationList;
     private ChessRealtimeClient chessSocket;
+    private ChessEngineSocket nativeChessEngineSocket;
     private Spinner registrationGame;
     private EditText registrationRating;
     private EditText supportSubject;
@@ -181,6 +184,18 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
         buildShell();
+        if (SessionStore.isLogoutPending(this)) {
+            SessionStore.LogoutOperation pending = SessionStore.pendingLogout(this);
+            boolean requestStillRunning = pending != null && AuthLogoutCoordinator.isRunning(pending.id);
+            if (!requestStillRunning && pending != null) SessionStore.completeLogout(this, pending);
+            if (!requestStillRunning && pending == null) SessionStore.clear(this);
+            token = null;
+            renderAuth();
+            showMessage(requestStillRunning
+                ? "Signed out here. The previous server sign-out is still being completed."
+                : "Signed out on this device. The previous server sign-out could not be confirmed and the session may remain valid until it expires.", false);
+            return;
+        }
         token = SessionStore.read(this);
         if (token == null || token.trim().isEmpty()) {
             token = null;
@@ -195,6 +210,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         homeDashboardHandler.removeCallbacks(homeDashboardRefresh);
         chessTournamentRefreshHandler.removeCallbacks(chessTournamentAutoRefresh);
         if (chessSocket != null) chessSocket.close();
+        if (nativeChessEngineSocket != null) nativeChessEngineSocket.close();
         requests.shutdownNow();
         super.onDestroy();
     }
@@ -230,7 +246,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void buildShell() {
-        root = new LinearLayout(this);
+        root = new AuthRevealLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
         root.setPadding(dp(18), dp(16), dp(18), dp(8));
@@ -283,6 +299,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     private void renderAuth() {
         boolean playOpening = !registering && !openingSequencePlayed;
         currentScreen = "auth";
+        pageScroll.setAlpha(1f);
         navigation.setVisibility(View.GONE);
         root.setBackgroundColor(Color.TRANSPARENT);
         appBrandHeader.setVisibility(View.GONE);
@@ -291,24 +308,25 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         authExperience.setVisibility(View.VISIBLE);
         authExperience.setRevealTarget(root);
         root.setClipBounds(null);
+        root.clearBeamReveal();
         authExperience.clearTargets();
         authExperience.setMode(registering ? AuthExperienceView.Mode.REGISTRATION : AuthExperienceView.Mode.LOGIN);
         content.removeAllViews();
         View spacer = new View(this);
-        int heroSpace = Math.max(dp(220), Math.min(dp(300), (int) (getResources().getDisplayMetrics().heightPixels * .32f)));
+        int heroSpace = Math.max(dp(96), Math.min(dp(170), (int) (getResources().getDisplayMetrics().heightPixels * .20f)));
         content.addView(spacer, new LinearLayout.LayoutParams(1, heroSpace));
         addHeading(registering ? "Join the arena" : "Welcome back", registering ? "Create your GOAL$GAMBIT player account." : "Sign in to continue to your games.");
 
         LinearLayout authForm = new LinearLayout(this);
         authForm.setOrientation(LinearLayout.VERTICAL);
-        authForm.setPadding(dp(14), dp(12), dp(14), dp(14));
+        authForm.setPadding(dp(18), dp(16), dp(18), dp(16));
         authForm.setBackground(round(Color.argb(246, 12, 12, 12), dp(18), Color.argb(210, 143, 111, 36), dp(1)));
         content.addView(authForm, margins(-1, -2, 0, dp(8), 0, dp(16)));
 
         EditText username = input("Username", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         configureAutofill(username, View.AUTOFILL_HINT_USERNAME);
         authExperience.watch(username, "Username");
-        authForm.addView(username, margins(-1, dp(52), 0, dp(14), 0, 0));
+        authForm.addView(username, margins(-1, dp(50), 0, dp(10), 0, 0));
         EditText phone = null;
         EditText email = null;
         EditText confirmPassword = null;
@@ -316,11 +334,11 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             phone = input("Phone number", InputType.TYPE_CLASS_PHONE);
             configureAutofill(phone, View.AUTOFILL_HINT_PHONE);
             authExperience.watch(phone, "Phone number");
-            authForm.addView(phone, margins(-1, dp(52), 0, dp(10), 0, 0));
+            authForm.addView(phone, margins(-1, dp(50), 0, dp(10), 0, 0));
             email = input("Email address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
             configureAutofill(email, View.AUTOFILL_HINT_EMAIL_ADDRESS);
             authExperience.watch(email, "Email address");
-            authForm.addView(email, margins(-1, dp(52), 0, dp(10), 0, 0));
+            authForm.addView(email, margins(-1, dp(50), 0, dp(10), 0, 0));
 
             TextView gameLabel = text("GAME ACCESS", 12, MUTED_GOLD, true);
             authForm.addView(gameLabel, margins(-1, -2, 0, dp(10), 0, dp(5)));
@@ -336,7 +354,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             registrationRating = input("Chess rating (100–3000)", InputType.TYPE_CLASS_NUMBER);
             registrationRating.setText("1200");
             authExperience.watch(registrationRating, "Chess rating");
-            authForm.addView(registrationRating, margins(-1, dp(52), 0, 0, 0, dp(8)));
+            authForm.addView(registrationRating, margins(-1, dp(50), 0, 0, 0, dp(8)));
         } else {
             registrationGame = null;
             registrationRating = null;
@@ -345,12 +363,12 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         EditText password = input("Password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         configureAutofill(password, View.AUTOFILL_HINT_PASSWORD);
         authExperience.watch(password, "Password");
-        authForm.addView(passwordVisibilityRow(password), margins(-1, dp(52), 0, dp(8), 0, 0));
+        authForm.addView(passwordVisibilityRow(password), margins(-1, dp(50), 0, dp(10), 0, 0));
         if (registering) {
             confirmPassword = input("Confirm password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
             configureAutofill(confirmPassword, View.AUTOFILL_HINT_PASSWORD);
             authExperience.watch(confirmPassword, "Confirm password");
-            authForm.addView(passwordVisibilityRow(confirmPassword), margins(-1, dp(52), 0, dp(8), 0, 0));
+            authForm.addView(passwordVisibilityRow(confirmPassword), margins(-1, dp(50), 0, dp(10), 0, 0));
             TextView emailNotice = text("A verified email address is required. GOAL$GAMBIT will send the verification email using its existing account flow.", 12, SUBTLE, false);
             authForm.addView(emailNotice, margins(-1, -2, 0, dp(10), 0, 0));
             CheckBox savePassword = new CheckBox(this);
@@ -369,7 +387,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
 
             Button create = primaryButton("CREATE PLAYER ACCOUNT");
             authExperience.watch(create, "Create Account");
-            authForm.addView(create, margins(-1, dp(54), 0, 0, 0, dp(8)));
+            authForm.addView(create, margins(-1, dp(50), 0, 0, 0, dp(8)));
             EditText finalPhone = phone;
             EditText finalEmail = email;
             EditText finalConfirmPassword = confirmPassword;
@@ -384,10 +402,14 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             savePassword.setButtonTintList(android.content.res.ColorStateList.valueOf(GOLD));
             authForm.addView(savePassword, margins(-1, -2, 0, dp(3), 0, 0));
             Button forgot = secondaryButton("FORGOT PASSWORD?");
-            forgot.setOnClickListener(v -> openUrl("https://billgatesbrighton.github.io/complete-goal-and-gambit/frontend/pages/password-recovery.html"));
+            forgot.setOnClickListener(v -> {
+                Intent recovery = new Intent(this, PlayerWebPageActivity.class);
+                recovery.putExtra(PlayerWebPageActivity.EXTRA_PAGE, "password-recovery");
+                startActivity(recovery);
+            });
             authForm.addView(forgot, margins(-1, dp(42), 0, 0, 0, dp(5)));
             Button signIn = primaryButton("SIGN IN");
-            authForm.addView(signIn, margins(-1, dp(54), 0, dp(12), 0, dp(8)));
+            authForm.addView(signIn, margins(-1, dp(50), 0, dp(12), 0, dp(8)));
             signIn.setOnClickListener(v -> submitLogin(username, password, savePassword, signIn));
         }
 
@@ -395,6 +417,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         authForm.addView(switchMode, margins(-1, dp(48), 0, 0, 0, dp(14)));
         switchMode.setOnClickListener(v -> {
             if (!registering) {
+                pageScroll.animate().alpha(0f).setDuration(260).start();
                 authExperience.startRegistrationJourney(() -> {
                     registering = true;
                     renderAuth();
@@ -595,9 +618,20 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         if (chessSocket != null) chessSocket.close();
         chessSocket = new ChessRealtimeClient(this);
         chessSocket.connect(token, hasChessAccess());
+        if (nativeChessEngineSocket != null) nativeChessEngineSocket.close();
+        nativeChessEngineSocket = null;
+        if (hasChessAccess()) {
+            nativeChessEngineSocket = new ChessEngineSocket(token, message -> { },
+                (matchId, ply, flags, captured, check, checkmate) -> { });
+            nativeChessEngineSocket.connect();
+        }
         boolean openNotifications = getIntent() != null && getIntent().getBooleanExtra(OPEN_NOTIFICATIONS_EXTRA, false);
+        String notificationEvent = getIntent() == null ? "" : getIntent().getStringExtra(RoomCodeReplyReceiver.EXTRA_EVENT_KEY);
+        if (notificationEvent == null) notificationEvent = "";
+        long notificationMatchId = getIntent() == null ? 0 : getIntent().getLongExtra(RoomCodeReplyReceiver.EXTRA_MATCH_ID, 0);
         if (openNotifications) getIntent().removeExtra(OPEN_NOTIFICATIONS_EXTRA);
-        navigate(openNotifications ? "notifications" : "home");
+        if (openNotifications && notificationMatchId > 0 && notificationEvent.startsWith("efootball-match:")) openEfootballMatchFromNotification(notificationMatchId);
+        else navigate(openNotifications ? "notifications" : "home");
         if (authExperience.takePendingRegistrationReveal()) {
             root.setBackgroundColor(Color.TRANSPARENT);
             authExperience.setRevealTarget(root);
@@ -617,11 +651,27 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         setIntent(intent);
         if (intent != null && intent.getBooleanExtra(OPEN_NOTIFICATIONS_EXTRA, false) && token != null) {
             intent.removeExtra(OPEN_NOTIFICATIONS_EXTRA);
-            navigate("notifications");
+            long matchId = intent.getLongExtra(RoomCodeReplyReceiver.EXTRA_MATCH_ID, 0);
+            String eventKey = intent.getStringExtra(RoomCodeReplyReceiver.EXTRA_EVENT_KEY);
+            if (matchId > 0 && eventKey != null && eventKey.startsWith("efootball-match:")) openEfootballMatchFromNotification(matchId);
+            else navigate("notifications");
         }
     }
 
+    private void openEfootballMatchFromNotification(long matchId) {
+        if (!hasEfootballAccess()) { navigate("notifications"); return; }
+        request("GET", "/api/efootball/matches/active", token, null, result -> {
+            JSONArray matches = result.ok() ? result.object.optJSONArray("matches") : null;
+            if (matches != null) for (int i = 0; i < matches.length(); i++) {
+                JSONObject match = matches.optJSONObject(i);
+                if (match != null && match.optLong("id", 0) == matchId) { openEfootballMatch(match); return; }
+            }
+            navigate("notifications");
+        });
+    }
+
     private void preparePlayerNotifications() {
+        PlayerPushRegistration.register(this);
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -657,6 +707,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
             ? payload.optString("type", "alert") + "|" + payload.optString("created_at", "") + "|" + title + "|" + message
             : "event:" + eventId;
         if (!shownNotificationKeys.add(uniqueKey)) return;
+        if (!PlayerPushNotifications.claimNotification(this, uniqueKey)) return;
         if (shownNotificationKeys.size() > 150) shownNotificationKeys.clear();
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
 
@@ -712,7 +763,19 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         else if ("profile".equals(screen)) renderProfile();
         else if ("leaderboard".equals(screen)) renderLeaderboard();
         else if ("notifications".equals(screen)) renderNotifications();
+        else if ("notificationSettings".equals(screen)) renderNotificationSettings();
         else if ("support".equals(screen)) renderSupport();
+        else if ("playerChat".equals(screen)) {
+            Intent chat = new Intent(this, PlayerChatActivity.class);
+            chat.putExtra(PlayerChatActivity.EXTRA_TOKEN, token);
+            chat.putExtra(PlayerChatActivity.EXTRA_USER_ID, currentUser.optLong("id", 0));
+            startActivity(chat);
+        }
+        else if (screen.startsWith("web:")) {
+            Intent page = new Intent(this, PlayerWebPageActivity.class);
+            page.putExtra(PlayerWebPageActivity.EXTRA_PAGE, screen.substring(4));
+            startActivity(page);
+        }
         if ("chessTournament".equals(screen)) chessTournamentRefreshHandler.postDelayed(chessTournamentAutoRefresh, 10_000L);
         if (navigation != null && token != null) buildNavigation();
     }
@@ -1019,8 +1082,14 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         addHeading("Player services", "Your account tools and updates.");
         addHomeAction("LEADERBOARD", "Compare player rankings.", "leaderboard");
         addHomeAction("NOTIFICATIONS", "Review notifications attached to your account.", "notifications");
+        addHomeAction("NOTIFICATION SETTINGS", "Choose which match and account alerts you receive.", "notificationSettings");
+        addHomeAction("PLAYER CHAT", "Message other GOAL$GAMBIT players and see who is online.", "playerChat");
         addHomeAction("PLAYER PROFILE", "View your registered details.", "profile");
         addHomeAction("SUPPORT CHATBOX", "Send a message to the GOAL$GAMBIT support team.", "support");
+        addHomeAction("HOW IT WORKS", "Learn how player matches and competitions work.", "web:how-it-works");
+        addHomeAction("TERMS & CONDITIONS", "Review the current GOAL$GAMBIT terms.", "web:terms");
+        addHomeAction("PRIVACY POLICY", "Read how GOAL$GAMBIT handles account information.", "web:privacy");
+        addHomeAction("CONTACT", "View GOAL$GAMBIT contact information.", "web:contact");
         Button signOut = secondaryButton("SIGN OUT");
         content.addView(signOut, margins(-1, dp(50), 0, dp(12), 0, 0));
         signOut.setOnClickListener(v -> signOut());
@@ -2572,7 +2641,7 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         if ("efootballRanked".equals(tab)) return "efootballRanked".equals(currentScreen);
         if ("efootballLeagues".equals(tab)) return "leagues".equals(currentScreen);
         if ("efootballTournaments".equals(tab)) return "efootballTournaments".equals(currentScreen) || "tournament".equals(currentScreen);
-        if ("more".equals(tab)) return "more".equals(currentScreen) || "profile".equals(currentScreen) || "leaderboard".equals(currentScreen) || "support".equals(currentScreen);
+        if ("more".equals(tab)) return "more".equals(currentScreen) || "profile".equals(currentScreen) || "leaderboard".equals(currentScreen) || "support".equals(currentScreen) || "playerChat".equals(currentScreen) || "notificationSettings".equals(currentScreen) || currentScreen.startsWith("web:");
         return tab.equals(currentScreen);
     }
 
@@ -2595,11 +2664,59 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
     }
 
     private void signOut() {
+        if (signingOut) return;
+        signingOut = true;
+        android.content.Context appContext = getApplicationContext();
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+        setConnection("Signing out…", false);
+        SessionStore.LogoutOperation operation = SessionStore.beginLogout(appContext);
+        if (operation == null) {
+            // A durable pending marker is required before sending the old
+            // bearer token. If persistence fails, force local sign-out and
+            // report that server revocation could not be confirmed.
+            boolean localCredentialsRemoved = SessionStore.clear(appContext);
+            token = null;
+            currentUser = new JSONObject();
+            signingOut = false;
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+            renderAuth();
+            showMessage(localCredentialsRemoved
+                ? "Signed out on this device. Sign-out protection could not be saved, so server revocation was not attempted and the session may remain valid until it expires."
+                : "Sign-out could not be secured because device storage rejected both the pending marker and local credential removal. Server logout was not attempted; close the app and retry.", true);
+            return;
+        }
+        scheduleLogoutOperation(operation, this);
+    }
+
+    private void scheduleLogoutOperation(SessionStore.LogoutOperation operation, MainActivity callbackActivity) {
+        WeakReference<MainActivity> activityReference = new WeakReference<>(callbackActivity);
+        android.content.Context appContext = getApplicationContext();
+        AuthLogoutCoordinator.run(operation.id, () -> {
+            if (operation.token == null || operation.token.isEmpty()) return false;
+            PlayerPushRegistration.unregister(appContext, operation.token);
+            ApiClient.Result result = ApiClient.request("POST", "/api/auth/logout", operation.token, new JSONObject());
+            return result.ok() && result.object.optBoolean("revoked", false);
+        }, () -> SessionStore.completeLogout(appContext, operation), serverRevoked -> {
+            MainActivity activity = activityReference.get();
+            if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+            runOnUiThread(() -> {
+                if (!activity.isFinishing() && !activity.isDestroyed() &&
+                    operation.token.equals(activity.token) && SessionStore.read(activity) == null) {
+                    activity.finishLocalSignOut(serverRevoked);
+                }
+            });
+        });
+    }
+
+    private void finishLocalSignOut(boolean serverRevoked) {
         if (chessSocket != null) {
             chessSocket.close();
             chessSocket = null;
         }
-        SessionStore.clear(this);
+        if (nativeChessEngineSocket != null) {
+            nativeChessEngineSocket.close();
+            nativeChessEngineSocket = null;
+        }
         token = null;
         currentUser = new JSONObject();
         currentChessMatchId = 0;
@@ -2607,8 +2724,13 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         legalDestinations.clear();
         chessBoard = null;
         registering = false;
+        signingOut = false;
+        getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
         setConnection("Signed out", false);
         renderAuth();
+        showMessage(serverRevoked
+            ? "Signed out. The server session was revoked."
+            : "Signed out on this device. The server could not confirm revocation, so this session may remain valid until it expires.", false);
     }
 
     private void expireSession() {
@@ -2616,6 +2738,8 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         token = null;
         if (chessSocket != null) chessSocket.close();
         chessSocket = null;
+        if (nativeChessEngineSocket != null) nativeChessEngineSocket.close();
+        nativeChessEngineSocket = null;
         currentUser = new JSONObject();
         currentChessMatchId = 0;
         currentChessState = null;
@@ -3716,6 +3840,63 @@ public final class MainActivity extends Activity implements ChessRealtimeClient.
         content.addView(notificationList, matchWrap());
         refresh.setOnClickListener(v -> loadNotifications(notificationList));
         loadNotifications(notificationList);
+    }
+
+    private void renderNotificationSettings() {
+        content.removeAllViews();
+        addHeading("Notification preferences", "Choose the GOAL$GAMBIT alerts you want delivered to this account.");
+        addNotice("Android notification permission and device settings still control whether alerts can appear.", MUTED_GOLD);
+        pageStatus = text("Loading your preferences…", 13, SUBTLE, false);
+        content.addView(pageStatus, margins(-1, -2, 0, dp(10), 0, 0));
+        String[] keys = { "matchReminders", "competitionReminders", "roomCodeRequests", "adminAnnouncements", "supportReplies", "generalUpdates" };
+        String[] labels = { "Match reminders", "Competition reminders", "eFootball room-code requests", "GOAL$GAMBIT announcements", "Support replies", "General account updates" };
+        CheckBox[] choices = new CheckBox[keys.length];
+        LinearLayout panel = card();
+        panel.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < keys.length; i++) {
+            CheckBox choice = new CheckBox(this);
+            choice.setText(labels[i]);
+            choice.setTextColor(TEXT);
+            choice.setTextSize(14);
+            choice.setButtonTintList(ColorStateList.valueOf(GOLD));
+            choice.setEnabled(false);
+            choices[i] = choice;
+            panel.addView(choice, margins(-1, -2, 0, 0, 0, dp(5)));
+        }
+        content.addView(panel, margins(-1, -2, 0, 0, 0, dp(10)));
+        Button save = primaryButton("SAVE PREFERENCES");
+        save.setEnabled(false);
+        content.addView(save, margins(-1, dp(48), 0, 0, 0, dp(10)));
+        request("GET", "/api/companion/notification-preferences", token, null, result -> {
+            if (!"notificationSettings".equals(currentScreen)) return;
+            if (!result.ok()) { pageStatus.setText(result.message("Notification preferences are unavailable.")); return; }
+            JSONObject preferences = result.object.optJSONObject("preferences");
+            if (preferences == null) preferences = new JSONObject();
+            for (int i = 0; i < keys.length; i++) {
+                choices[i].setChecked(preferences.optBoolean(keys[i], true));
+                choices[i].setEnabled(true);
+            }
+            save.setEnabled(true);
+            pageStatus.setText("Preferences are linked to your GOAL$GAMBIT account.");
+        });
+        save.setOnClickListener(v -> {
+            JSONObject preferences = new JSONObject();
+            try { for (int i = 0; i < keys.length; i++) preferences.put(keys[i], choices[i].isChecked()); }
+            catch (Exception ignored) { showMessage("Could not prepare your notification preferences.", true); return; }
+            JSONObject body = new JSONObject();
+            try { body.put("preferences", preferences); }
+            catch (Exception ignored) { showMessage("Could not prepare your notification preferences.", true); return; }
+            save.setEnabled(false);
+            request("PUT", "/api/companion/notification-preferences", token,
+                body, result -> {
+                    if (!"notificationSettings".equals(currentScreen)) return;
+                    save.setEnabled(true);
+                    pageStatus.setText(result.message(result.ok()
+                        ? "Your notification preferences were saved."
+                        : "Notification preferences could not be saved."));
+                    if (!result.ok()) showMessage(pageStatus.getText().toString(), true);
+                });
+        });
     }
 
     private void openNotificationSettings() {

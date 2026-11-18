@@ -28,4 +28,15 @@ presence.setWebsitePresence(40, "stale-tab", true);
 now += 101;
 assert.equal(presence.isWebsitePresent(40), false, "silent sessions expire after the heartbeat lease");
 
-console.log("Account presence lease tests passed.");
+presence.setApplicationSocket(50, "companion-only", "android-companion", true);
+assert.equal(presence.getAdminPresence(50), "unavailable", "a companion socket alone does not claim website presence");
+presence.setApplicationSocket(51, "website-session", "website", true);
+assert.equal(presence.getAdminPresence(51), "unavailable", "a website connection without observed activity is unavailable");
+presence.recordApplicationActivity(51, "website-session");
+assert.equal(presence.getAdminPresence(51), "online", "recent website interaction is online");
+now += 5 * 60 * 1000 + 1;
+assert.equal(presence.getAdminPresence(51), "away", "website interaction older than five minutes is away");
+presence.clearSocket("website-session");
+assert.equal(presence.getAdminPresence(51), "offline", "disconnected sessions are offline");
+
+console.log("Account presence and five-minute activity tests passed.");

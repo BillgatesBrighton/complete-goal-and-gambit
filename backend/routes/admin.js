@@ -9,10 +9,19 @@ const { recordJournal } = require("../services/financialLedger");
 const { enqueueAnnouncementToAudience } = require("../services/adminAnnouncementReminders");
 const financialRateLimit = require("../middleware/financialRateLimit");
 const { createAdminOnly } = require("../middleware/adminAuthorization");
+const { acquireAccountInvalidationLocks, lockAndRevokeUserSessions } = require("../services/authSession");
+const { readPrivateImage } = require("../services/privateEvidence");
+const { encryptMessage, decryptMessage, decryptMessageRows } = require("../services/chatEncryption");
+const { buildJsonExport, buildPdfExport, sha256 } = require("../services/chatEvidenceExport");
+
+function encryptedMessageValues(message) {
+    const record=encryptMessage(message);
+    return [record.message,record.message_ciphertext,record.message_iv,record.message_auth_tag,record.encryption_key_id];
+}
 const companionGuideVersion = require("./companion").GUIDE_VERSION;
 const companionTermsVersion = require("./companion").TERMS_VERSION;
 
-module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler) {
+module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler, accountPresence) {
     const router = express.Router();
     const walletAdjustmentLimit = financialRateLimit("admin-wallet-adjustment", { windowMs: 10 * 60 * 1000, max: 30 });
     async function getOrCreateSupportThread(userId, queryable) {
@@ -82,6 +91,73 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         });
     });
 
+    router.get("/finance/summary", authenticateToken, adminOnly, async (req, res) => {
+        const period = String(req.query.period || "daily").toLowerCase();
+        const periods = { daily:"day", weekly:"week", monthly:"month", yearly:"year" };
+        if (!periods[period]) return res.status(400).json({ success:false, message:"Choose daily, weekly, monthly, or yearly." });
+        const timeZone = String(process.env.BUSINESS_TIME_ZONE || "Africa/Nairobi");
+        try { new Intl.DateTimeFormat("en", { timeZone }).format(new Date()); }
+        catch (_) { return res.status(500).json({ success:false, message:"The configured business timezone is invalid." }); }
+        const bucket = period === "daily" ? "hour" : period === "yearly" ? "month" : "day";
+        try {
+            const [summary, series, available] = await Promise.all([
+                pool.query(
+                    `WITH bounds AS (
+                         SELECT date_trunc($1,NOW() AT TIME ZONE $2) AS local_start,
+                                date_trunc($1,NOW() AT TIME ZONE $2) +
+                                  CASE $1 WHEN 'day' THEN INTERVAL '1 day' WHEN 'week' THEN INTERVAL '1 week'
+                                          WHEN 'month' THEN INTERVAL '1 month' ELSE INTERVAL '1 year' END AS local_end
+                     ), flow AS (
+                         SELECT t.transaction_type,t.amount,
+                                COALESCE(SUM(e.debit) FILTER (WHERE e.account_type ILIKE '%expense%'),0) AS expense_debit,
+                                COALESCE(SUM(e.credit) FILTER (WHERE e.account_type ILIKE '%expense%'),0) AS expense_credit,
+                                COALESCE(SUM(e.credit) FILTER (WHERE e.account_type IN ('external_mpesa_payout','external_competition_payout')),0) AS payouts
+                           FROM financial_ledger_transactions t
+                           JOIN bounds b ON t.posted_at >= (b.local_start AT TIME ZONE $2) AND t.posted_at < (b.local_end AT TIME ZONE $2)
+                           LEFT JOIN financial_ledger_entries e ON e.transaction_id=t.id
+                          WHERE t.posted_at IS NOT NULL GROUP BY t.id,t.transaction_type,t.amount
+                     )
+                     SELECT
+                       COALESCE(SUM(amount) FILTER (WHERE transaction_type IN ('verified_mpesa_deposit','verified_mpesa_stk_deposit','development_deposit')),0)::numeric(14,2) AS deposits,
+                       COALESCE(SUM(amount) FILTER (WHERE transaction_type IN ('competition_prize_paid','chess_competition_prize_pool_settlement')),0)::numeric(14,2) AS prizes_paid,
+                       COALESCE(SUM(amount) FILTER (WHERE transaction_type IN ('player_withdrawal_paid','admin_mpesa_payout')),0)::numeric(14,2) AS withdrawals,
+                       COALESCE(SUM(amount) FILTER (WHERE transaction_type IN ('league_entry_refund','tournament_entry_refund','chess_tournament_search_refund','match_refund')),0)::numeric(14,2) AS refunds,
+                       COALESCE(SUM(amount) FILTER (WHERE transaction_type IN ('player_withdrawal_fee','league_forfeit_stake','tournament_forfeit_stake','chess_tournament_forfeit_stake','efootball_competition_retained_revenue','chess_competition_retained_revenue')),0)::numeric(14,2) AS retained_revenue,
+                       COALESCE(SUM(expense_debit-expense_credit),0)::numeric(14,2) AS actual_expenses,
+                       COALESCE(SUM(payouts),0)::numeric(14,2) AS provider_payouts,
+                       COUNT(*)::int AS journal_count
+                     FROM flow`, [periods[period], timeZone]
+                ),
+                pool.query(
+                    `WITH bounds AS (
+                         SELECT date_trunc($1,NOW() AT TIME ZONE $2) AS local_start,
+                                date_trunc($1,NOW() AT TIME ZONE $2) +
+                                  CASE $1 WHEN 'day' THEN INTERVAL '1 day' WHEN 'week' THEN INTERVAL '1 week'
+                                          WHEN 'month' THEN INTERVAL '1 month' ELSE INTERVAL '1 year' END AS local_end
+                     )
+                     SELECT date_trunc($3,t.posted_at AT TIME ZONE $2) AS bucket_local,
+                            COALESCE(SUM(t.amount) FILTER (WHERE t.transaction_type IN ('verified_mpesa_deposit','verified_mpesa_stk_deposit','development_deposit')),0)::numeric(14,2) AS deposits,
+                            COALESCE(SUM(t.amount) FILTER (WHERE t.transaction_type IN ('competition_prize_paid','chess_competition_prize_pool_settlement')),0)::numeric(14,2) AS prizes_paid,
+                            COALESCE(SUM(t.amount) FILTER (WHERE t.transaction_type IN ('player_withdrawal_paid','admin_mpesa_payout')),0)::numeric(14,2) AS withdrawals,
+                            COALESCE(SUM(t.amount) FILTER (WHERE t.transaction_type IN ('league_entry_refund','tournament_entry_refund','chess_tournament_search_refund','match_refund')),0)::numeric(14,2) AS refunds
+                       FROM financial_ledger_transactions t CROSS JOIN bounds b
+                      WHERE t.posted_at >= (b.local_start AT TIME ZONE $2) AND t.posted_at < (b.local_end AT TIME ZONE $2)
+                      GROUP BY bucket_local ORDER BY bucket_local`, [periods[period], timeZone, bucket]
+                ),
+                pool.query(`SELECT COALESCE(SUM(balance-reserved_balance),0)::numeric(14,2) AS available,
+                                   COALESCE(SUM(reserved_balance),0)::numeric(14,2) AS reserved
+                              FROM admin_wallets`)
+            ]);
+            const row = summary.rows[0] || {};
+            const total = available.rows[0] || {};
+            return res.json({ success:true, period, timeZone, currency:"KES", summary:row,
+                series:series.rows, platformFunds:{ available:Number(total.available||0), reserved:Number(total.reserved||0) } });
+        } catch (error) {
+            console.error("Admin finance analytics read failed:", error.message);
+            return res.status(500).json({ success:false, message:"Could not load the financial analytics." });
+        }
+    });
+
     const verificationDirectory = path.join(__dirname, "..", "uploads", "match-verification");
 
     router.get("/result-verifications", authenticateToken, adminOnly, async (req, res) => {
@@ -91,18 +167,27 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 `SELECT v.id,v.match_id,v.selected_player_id,v.status,v.submitted_at,v.created_at,
                         v.admin_cleared_at,v.admin_cleared_by,
                         v.screenshot_ocr_text,v.detected_score_candidates,v.score_check,v.review_note,v.reviewed_at,
-                        (v.screenshot_path IS NOT NULL) AS screenshot_available,
+                        (v.screenshot_path IS NOT NULL OR COALESCE(evidence.evidence,'[]'::jsonb)<>'[]'::jsonb) AS screenshot_available,
                         m.status AS match_status,m.settled_at,m.mode,m.league,m.tournament_id,
-                        m.creator_id,m.opponent_id,m.creator_submitted_score,m.creator_submitted_opponent_score,
+                        m.creator_id,m.opponent_id,COALESCE(m.code_sender_id,m.creator_id) AS player_a_id,
+                        CASE WHEN COALESCE(m.code_sender_id,m.creator_id)=m.creator_id THEN m.opponent_id ELSE m.creator_id END AS player_b_id,
+                        m.creator_submitted_score,m.creator_submitted_opponent_score,
                         m.opponent_submitted_score,m.opponent_submitted_opponent_score,
-                        creator.username AS creator_username,opponent.username AS opponent_username,
+                        creator.username AS creator_username,creator.phone AS creator_phone,
+                        opponent.username AS opponent_username,opponent.phone AS opponent_phone,
+                        player_a.username AS player_a_username,player_a.phone AS player_a_phone,
+                        player_b.username AS player_b_username,player_b.phone AS player_b_phone,
                         selected.username AS selected_username,
-                        COALESCE(report_history.reports,'[]'::jsonb) AS reports
+                        COALESCE(report_history.reports,'[]'::jsonb) AS reports,
+                        COALESCE(evidence.evidence,'[]'::jsonb) AS evidence,
+                        COALESCE(event_history.events,'[]'::jsonb) AS event_history
                  FROM efootball_result_verifications v
                  JOIN efootball_matches m ON m.id=v.match_id
                  JOIN users creator ON creator.id=m.creator_id
                  LEFT JOIN users opponent ON opponent.id=m.opponent_id
                  JOIN users selected ON selected.id=v.selected_player_id
+                 JOIN users player_a ON player_a.id=COALESCE(m.code_sender_id,m.creator_id)
+                 LEFT JOIN users player_b ON player_b.id=CASE WHEN COALESCE(m.code_sender_id,m.creator_id)=m.creator_id THEN m.opponent_id ELSE m.creator_id END
                  LEFT JOIN LATERAL (
                      SELECT jsonb_agg(jsonb_build_object(
                          'roundNo',r.round_no,'username',u.username,
@@ -113,6 +198,21 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                      JOIN users u ON u.id=r.user_id
                      WHERE r.match_id=m.id
                  ) report_history ON TRUE
+                 LEFT JOIN LATERAL (
+                     SELECT jsonb_agg(jsonb_build_object(
+                         'id',e.id,'uploaderId',e.uploader_id,'username',u.username,'phone',u.phone,
+                         'storageKey',e.storage_key,'mimeType',e.mime_type,'byteSize',e.byte_size,'createdAt',e.created_at
+                     ) ORDER BY e.created_at,e.id) AS evidence
+                       FROM efootball_result_evidence e JOIN users u ON u.id=e.uploader_id
+                      WHERE e.verification_id=v.id
+                 ) evidence ON TRUE
+                 LEFT JOIN LATERAL (
+                     SELECT jsonb_agg(jsonb_build_object(
+                         'type',a.event_type,'fromStatus',a.from_status,'toStatus',a.to_status,
+                         'reason',a.reason,'note',a.note,'createdAt',a.created_at,'adminId',a.admin_id
+                     ) ORDER BY a.created_at,a.id) AS events
+                       FROM efootball_result_admin_events a WHERE a.verification_id=v.id
+                 ) event_history ON TRUE
                  WHERE ($1::boolean OR v.admin_cleared_at IS NULL)
                  ORDER BY CASE WHEN v.status IN ('pending_screenshot','submitted','review_required') THEN 0 ELSE 1 END,
                           v.created_at DESC
@@ -217,10 +317,39 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             const filePath = path.join(verificationDirectory, path.basename(name));
             if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, message: "Screenshot file is missing." });
             res.setHeader("Cache-Control", "private, no-store");
-            return res.sendFile(filePath);
+            const image=await readPrivateImage(filePath);
+            res.setHeader("Content-Length",image.length);
+            return res.end(image);
         } catch (error) {
             console.error("Admin screenshot read error:", error.message);
             return res.status(500).json({ success: false, message: "Could not open screenshot." });
+        }
+    });
+
+    router.get("/result-verifications/:id/evidence/:evidenceId", authenticateToken, adminOnly, async (req, res) => {
+        const verificationId = Number(req.params.id), evidenceId = Number(req.params.evidenceId);
+        if (!Number.isSafeInteger(verificationId) || verificationId < 1 || !Number.isSafeInteger(evidenceId) || evidenceId < 1) {
+            return res.status(400).json({ success:false, message:"Invalid evidence reference." });
+        }
+        try {
+            const result = await pool.query(
+                `SELECT e.storage_key,e.mime_type FROM efootball_result_evidence e
+                  WHERE e.verification_id=$1 AND e.id=$2`, [verificationId,evidenceId]
+            );
+            const name = result.rows[0] && result.rows[0].storage_key;
+            if (!name || !/^[a-f0-9-]+\.(jpg|png|webp)$/i.test(name)) return res.status(404).json({ success:false, message:"Evidence not found." });
+            const filePath = path.join(verificationDirectory,path.basename(name));
+            if (!fs.existsSync(filePath)) return res.status(404).json({ success:false, message:"Evidence file is missing." });
+            res.setHeader("Content-Type",result.rows[0].mime_type);
+            res.setHeader("Content-Disposition","inline");
+            res.setHeader("X-Content-Type-Options","nosniff");
+            res.setHeader("Cache-Control","private, no-store");
+            const image=await readPrivateImage(filePath);
+            res.setHeader("Content-Length",image.length);
+            return res.end(image);
+        } catch (error) {
+            console.error("Admin result evidence read failed:",error.message);
+            return res.status(500).json({ success:false, message:"Could not open evidence." });
         }
     });
 
@@ -228,6 +357,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         const verificationId = Number(req.params.id);
         const decision = String(req.body && req.body.decision || "").toLowerCase();
         const note = String(req.body && req.body.note || "").trim().slice(0, 1000);
+        const reason = String(req.body && req.body.reason || "").trim().slice(0, 1000);
         const creatorScore = Number(req.body && req.body.creatorScore);
         const opponentScore = Number(req.body && req.body.opponentScore);
         if (!Number.isSafeInteger(verificationId) || verificationId <= 0 || !["resolve", "reject"].includes(decision)) {
@@ -235,6 +365,9 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         }
         if (decision === "resolve" && (!Number.isInteger(creatorScore) || !Number.isInteger(opponentScore) || creatorScore < 0 || opponentScore < 0 || creatorScore > 99 || opponentScore > 99)) {
             return res.status(400).json({ success: false, message: "Enter both verified scores from 0 to 99." });
+        }
+        if (decision === "reject" && reason.length < 5) {
+            return res.status(400).json({ success:false, message:"A rejection reason of at least 5 characters is required. Funds will remain locked while the case is investigated." });
         }
 
         const client = await pool.connect();
@@ -274,6 +407,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                     "UPDATE efootball_result_verifications SET status='verified',score_check='admin_override',reviewed_by=$1,review_note=$2,reviewed_at=NOW() WHERE id=$3",
                     [req.user.userId, note || "Resolved from screenshot by admin.", verificationId]
                 );
+                await client.query(
+                    `INSERT INTO efootball_result_admin_events(verification_id,admin_id,event_type,from_status,to_status,note)
+                     VALUES($1,$2,'resolved',$3,'verified',$4)`,
+                    [verificationId,req.user.userId,record.verification_status,note||"Verified score recorded and settled."]
+                );
                 const message = "An admin reviewed the screenshot and resolved the match result. The result and standings are updated.";
                 await client.query(
                     "INSERT INTO system_notifications(user_id,type,title,message,match_id) VALUES ($1,'match_verified','Admin Resolved Result',$2,$3),($4,'match_verified','Admin Resolved Result',$5,$6)",
@@ -284,12 +422,23 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             }
 
             await client.query(
-                "UPDATE efootball_result_verifications SET status='rejected',reviewed_by=$1,review_note=$2,reviewed_at=NOW() WHERE id=$3",
-                [req.user.userId, note || "Screenshot did not establish a reliable score.", verificationId]
+                "UPDATE efootball_result_verifications SET status='investigating',score_check='rejected_pending_investigation',reviewed_by=$1,review_note=$2,reviewed_at=NOW() WHERE id=$3",
+                [req.user.userId,reason,verificationId]
             );
             await client.query("UPDATE efootball_matches SET status='disputed',result_status='disputed' WHERE id=$1", [record.match_id]);
+            const existingCase=await client.query("SELECT id,status FROM complaints WHERE match_id=$1 AND source='efootball_result_dispute' ORDER BY id DESC LIMIT 1 FOR UPDATE",[record.match_id]);
+            let complaintId=existingCase.rows[0]&&existingCase.rows[0].id;
+            if(complaintId){
+                await client.query("UPDATE complaints SET status='investigating',updated_at=NOW(),admin_id=$2 WHERE id=$1",[complaintId,req.user.userId]);
+                await client.query("INSERT INTO complaint_case_events(complaint_id,actor_id,actor_role,event_type,from_status,to_status,message,metadata) VALUES($1,$2,'admin','result_evidence_rejected',$3,'investigating',$4,$5::jsonb)",[complaintId,req.user.userId,existingCase.rows[0].status,reason,JSON.stringify({verificationId})]);
+            }
+            await client.query(
+                `INSERT INTO efootball_result_admin_events(verification_id,admin_id,event_type,from_status,to_status,reason,metadata)
+                 VALUES($1,$2,'rejected',$3,'investigating',$4,$5::jsonb)`,
+                [verificationId,req.user.userId,record.verification_status,reason,JSON.stringify({complaintId:complaintId||null,financialDisposition:"unchanged_locked"})]
+            );
             await client.query("COMMIT");
-            return res.json({ success: true, message: "Evidence was rejected. Match funds remain locked until another admin decision." });
+            return res.json({ success: true, complaintId:complaintId||null, message: "Evidence was rejected and the case is marked for investigation. Match funds remain locked; no refund or forfeiture was applied." });
         } catch (error) {
             try { await client.query("ROLLBACK"); } catch (_) {}
             console.error("Admin result review error:", error.message);
@@ -297,6 +446,17 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         } finally {
             client.release();
         }
+    });
+
+    router.post("/result-verifications/:id/notes", authenticateToken, adminOnly, async (req,res) => {
+        const verificationId=Number(req.params.id),note=String(req.body&&req.body.note||"").trim().slice(0,1000);
+        if(!Number.isSafeInteger(verificationId)||verificationId<=0||note.length<5)return res.status(400).json({success:false,message:"Enter an investigation note of at least 5 characters."});
+        try{
+            const current=await pool.query("SELECT status FROM efootball_result_verifications WHERE id=$1",[verificationId]);
+            if(!current.rows.length)return res.status(404).json({success:false,message:"Result review not found."});
+            await pool.query("INSERT INTO efootball_result_admin_events(verification_id,admin_id,event_type,from_status,to_status,note) VALUES($1,$2,'investigation_note',$3,$3,$4)",[verificationId,req.user.userId,current.rows[0].status,note]);
+            return res.json({success:true,message:"Investigation note recorded."});
+        }catch(error){console.error("Admin result investigation note failed:",error.message);return res.status(500).json({success:false,message:"Could not record the investigation note."});}
     });
 
     // =========================================================
@@ -442,30 +602,69 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
     // =========================================================
     router.get("/users", authenticateToken, adminOnly, async (req, res) => {
         try {
-            const q = String(req.query.search || "").trim().toLowerCase();
-            const r = await pool.query(
-                `SELECT u.id, u.username, u.phone, u.game, u.rating, u.role, u.account_status,
-                        u.suspended_until, u.moderation_reason, u.created_at,
-                        COALESCE(w.balance,0)::numeric(12,2) AS balance,
-                        COALESCE(w.locked_balance,0)::numeric(12,2) AS locked_balance
-                 FROM users u LEFT JOIN wallets w ON w.user_id=u.id
-                 WHERE ($1 = '' OR LOWER(u.username) LIKE '%' || $1 || '%' OR u.phone LIKE '%' || $1 || '%')
-                 ORDER BY u.created_at DESC LIMIT 200`,
-                [q]
+            const q = String(req.query.search || "").trim().toLowerCase().slice(0, 80);
+            const status = ["active", "suspended", "closed"].includes(String(req.query.status || "all")) ? String(req.query.status) : "all";
+            const game = ["chess", "konami", "both"].includes(String(req.query.game || "all")) ? String(req.query.game) : "all";
+            const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
+            const pageSize = Math.max(1, Math.min(60, Number.parseInt(req.query.limit, 10) || 40));
+            const filters = [q, status, game];
+            const count = await pool.query(
+                `SELECT COUNT(*)::int AS total FROM users u
+                 WHERE ($1='' OR LOWER(u.username) LIKE '%'||$1||'%' OR u.phone LIKE '%'||$1||'%')
+                   AND ($2='all' OR u.account_status=$2) AND ($3='all' OR u.game=$3)`, filters
             );
-            const onlineIds = new Set(
-                (typeof getOnlineUserIds === "function" ? getOnlineUserIds() : [])
-                    .map(function(id) { return String(Number(id)); })
+            const r = await pool.query(
+                `SELECT u.id,u.username,u.game,u.rating,u.account_status,u.created_at,
+                        COALESCE(cs.completed,0)::int AS chess_completed,
+                        COALESCE(es.completed,0)::int AS efootball_completed,
+                        GREATEST(cs.last_played,es.last_played) AS last_game_at
+                   FROM users u
+                   LEFT JOIN LATERAL (
+                       SELECT COUNT(*)::int AS completed,MAX(finished_at) AS last_played
+                         FROM chess_matches WHERE (player_white_id=u.id OR player_black_id=u.id) AND status='completed'
+                   ) cs ON TRUE
+                   LEFT JOIN LATERAL (
+                       SELECT COUNT(*)::int AS completed,MAX(COALESCE(finished_at,created_at)) AS last_played
+                         FROM efootball_matches WHERE (creator_id=u.id OR opponent_id=u.id) AND status='completed'
+                   ) es ON TRUE
+                  WHERE ($1='' OR LOWER(u.username) LIKE '%'||$1||'%' OR u.phone LIKE '%'||$1||'%')
+                    AND ($2='all' OR u.account_status=$2) AND ($3='all' OR u.game=$3)
+                  ORDER BY u.created_at DESC,u.id DESC LIMIT $4 OFFSET $5`,
+                filters.concat([pageSize, (page - 1) * pageSize])
             );
             res.json({
-                success:true,
+                success:true, page, pageSize, total:Number(count.rows[0] && count.rows[0].total || 0),
                 users:r.rows.map(function(user) {
-                    return Object.assign({}, user, { online: onlineIds.has(String(Number(user.id))) });
+                    const presence = accountPresence && typeof accountPresence.getAdminPresence === "function"
+                        ? accountPresence.getAdminPresence(user.id) : "unavailable";
+                    return Object.assign({}, user, { presence:presence });
                 })
             });
         } catch (e) {
-            console.error(e);
+            console.error("Admin player directory could not be loaded:", e.message);
             res.status(500).json({success:false,message:"Failed to load users."});
+        }
+    });
+
+    // Finance-only lookup keeps phone search and authoritative spendable
+    // amounts out of the player directory response.
+    router.get("/users/wallet-lookup", authenticateToken, adminOnly, async (req, res) => {
+        const q = String(req.query.search || "").trim().toLowerCase().slice(0, 80);
+        if (!q) return res.json({ success:true, users:[] });
+        try {
+            const result = await pool.query(
+                `SELECT u.id,u.username,u.game,
+                        COALESCE(w.balance-w.withdrawal_reserved_balance,0)::numeric(12,2) AS balance,
+                        COALESCE(w.locked_balance,0)::numeric(12,2) AS locked_balance
+                   FROM users u LEFT JOIN wallets w ON w.user_id=u.id
+                  WHERE u.account_status='active'
+                    AND (LOWER(u.username) LIKE '%'||$1||'%' OR u.phone LIKE '%'||$1||'%')
+                  ORDER BY u.username,u.id LIMIT 30`, [q]
+            );
+            return res.json({ success:true, users:result.rows });
+        } catch (error) {
+            console.error("Admin wallet player lookup failed:", error.message);
+            return res.status(500).json({ success:false, message:"Could not find player accounts." });
         }
     });
 
@@ -649,23 +848,33 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             return res.status(400).json({success:false,message:"Invalid account."});
         }
         try {
-            const [profile, transactions, chess, efootball] = await Promise.all([
+            const [profile, transactions, walletActivity, chess, efootball] = await Promise.all([
                 pool.query(
                     `SELECT u.id,u.username,u.phone,u.game,u.rating,u.role,u.account_status,u.created_at,
-                            COALESCE(w.balance,0)::numeric(12,2) AS balance,
-                            COALESCE(w.locked_balance,0)::numeric(12,2) AS locked_balance
+                            COALESCE(w.balance-w.withdrawal_reserved_balance,0)::numeric(12,2) AS available_balance,
+                            COALESCE(w.locked_balance,0)::numeric(12,2) AS locked_balance,
+                            COALESCE(w.withdrawal_reserved_balance,0)::numeric(12,2) AS withdrawal_reserved_balance
                      FROM users u LEFT JOIN wallets w ON w.user_id=u.id WHERE u.id=$1`, [id]),
                 pool.query(
                     `SELECT transaction_type,amount,currency,status,reference,description,created_at
-                     FROM transactions WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 10`, [id]),
+                     FROM transactions WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 50`, [id]),
                 pool.query(
-                    `SELECT COUNT(*)::int AS played,
-                            COUNT(*) FILTER (WHERE winner_id=$1)::int AS wins,
-                            COUNT(*) FILTER (WHERE result='draw')::int AS draws
-                     FROM chess_matches WHERE (player_white_id=$1 OR player_black_id=$1) AND status='completed'`, [id]),
+                    `SELECT transaction_type,COALESCE(SUM(amount),0)::numeric(14,2) AS amount
+                       FROM transactions WHERE user_id=$1 AND status='completed'
+                      GROUP BY transaction_type ORDER BY transaction_type`, [id]),
                 pool.query(
-                    `SELECT COUNT(*)::int AS played,
-                            COUNT(*) FILTER (WHERE status='completed')::int AS completed
+                    `SELECT COUNT(*) FILTER (WHERE status='completed')::int AS completed,
+                            COUNT(*) FILTER (WHERE winner_id=$1 AND status='completed')::int AS wins,
+                            COUNT(*) FILTER (WHERE result='draw' AND status='completed')::int AS draws,
+                            COUNT(*) FILTER (WHERE status IN ('active','playing','in_progress'))::int AS in_progress,
+                            COUNT(*) FILTER (WHERE status IN ('abandoned','cancelled','forfeited'))::int AS abandoned_or_cancelled,
+                            COUNT(*) FILTER (WHERE status='disputed')::int AS disputed
+                     FROM chess_matches WHERE player_white_id=$1 OR player_black_id=$1`, [id]),
+                pool.query(
+                    `SELECT COUNT(*) FILTER (WHERE status='completed')::int AS completed,
+                            COUNT(*) FILTER (WHERE status IN ('scheduled','waiting','playing','awaiting_verification'))::int AS in_progress,
+                            COUNT(*) FILTER (WHERE status='disputed')::int AS disputed,
+                            COUNT(*) FILTER (WHERE status IN ('cancelled','abandoned','forfeited'))::int AS cancelled_or_forfeited
                      FROM efootball_matches WHERE creator_id=$1 OR opponent_id=$1`, [id])
             ]);
             if (!profile.rows.length) return res.status(404).json({success:false,message:"User not found."});
@@ -677,14 +886,143 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 pool.query(
                     `SELECT id,mode,league,round_name,stake_amount,status,creator_score,opponent_score,created_at,finished_at
                      FROM efootball_matches WHERE creator_id=$1 OR opponent_id=$1
-                     ORDER BY COALESCE(finished_at,created_at) DESC,id DESC LIMIT 8`, [id])
+                     ORDER BY COALESCE(finished_at,created_at) DESC,id DESC LIMIT 12`, [id])
             ]);
+            const activityTotals = Object.fromEntries(walletActivity.rows.map((row) => [row.transaction_type, Number(row.amount || 0)]));
             res.json({success:true,dashboard:{user:profile.rows[0],transactions:transactions.rows,
+                walletActivity:{
+                    deposits:(activityTotals.deposit||0)+(activityTotals.development_deposit||0),
+                    prizes:activityTotals.competition_prize||0,
+                    withdrawals:(activityTotals.withdrawal||0)+(activityTotals.withdrawal_fee||0),
+                    refunds:(activityTotals.match_refund||0)+(activityTotals.league_entry_refund||0)+(activityTotals.tournament_entry_refund||0),
+                    totalsByType:activityTotals
+                },
                 chess:{stats:chess.rows[0],recent:chessRecent.rows},
-                efootball:{stats:efootball.rows[0],recent:efootballRecent.rows}}});
+                efootball:{stats:efootball.rows[0],recent:efootballRecent.rows},
+                usageDuration:{available:false,reason:"The current sign-in/session records do not measure active use duration."}}});
         } catch (e) {
             console.error("Admin user dashboard error:", e.message);
             res.status(500).json({success:false,message:"Failed to load the account dashboard."});
+        }
+    });
+
+    async function readSupportHistory(playerId) {
+        const [player,threads]=await Promise.all([
+            pool.query("SELECT id,username FROM users WHERE id=$1",[playerId]),
+            pool.query(`SELECT id,created_at,support_category,support_subject,support_status
+                          FROM chat_threads WHERE thread_type='support' AND user_one_id=$1 AND user_two_id IS NULL
+                         ORDER BY id`,[playerId])
+        ]);
+        if(!player.rows.length)return null;
+        return {player:player.rows[0],threads:threads.rows};
+    }
+
+    function decodeChatCursor(value) {
+        if(!value)return null;
+        if(typeof value!=="string"||value.length>300)throw new Error("Invalid message cursor.");
+        let cursor;
+        try{cursor=JSON.parse(Buffer.from(value,"base64url").toString("utf8"));}catch(_){throw new Error("Invalid message cursor.");}
+        const id=Number(cursor&&cursor.id),createdAt=new Date(cursor&&cursor.createdAt);
+        if(!Number.isSafeInteger(id)||id<=0||Number.isNaN(createdAt.getTime()))throw new Error("Invalid message cursor.");
+        return {id,createdAt};
+    }
+
+    async function recordChatHistoryAudit(adminId,playerId,threads,action,format,hash) {
+        const client=await pool.connect();
+        try{
+            await client.query("BEGIN");
+            const ids=(threads||[]).map((thread)=>Number(thread.id));
+            if(!ids.length)ids.push(null);
+            for(const threadId of ids){
+                await client.query(
+                    `INSERT INTO admin_chat_history_audit_events(admin_id,player_user_id,thread_id,action,export_format,evidence_sha256)
+                     VALUES($1,$2,$3,$4,$5,$6)`,[adminId,playerId,threadId,action,format,hash]
+                );
+            }
+            await client.query("COMMIT");
+        }catch(error){await client.query("ROLLBACK").catch(()=>{});throw error;}
+        finally{client.release();}
+    }
+
+    router.get("/users/:id/chat-history",authenticateToken,adminOnly,async(req,res)=>{
+        const playerId=Number(req.params.id),limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit,10)||50));
+        if(!Number.isSafeInteger(playerId)||playerId<=0)return res.status(400).json({success:false,message:"Invalid player account."});
+        let cursor;
+        try{cursor=decodeChatCursor(req.query.before||"");}catch(_){return res.status(400).json({success:false,message:"Invalid message cursor."});}
+        try{
+            const history=await readSupportHistory(playerId);
+            if(!history)return res.status(404).json({success:false,message:"Player account not found."});
+            const threadIds=history.threads.map((thread)=>Number(thread.id));
+            let rows=[],total=0,hasOlder=false;
+            if(threadIds.length){
+                const count=await pool.query("SELECT COUNT(*)::int AS total FROM chat_messages WHERE thread_id=ANY($1::bigint[])",[threadIds]);
+                total=Number(count.rows[0]&&count.rows[0].total||0);
+                const result=await pool.query(
+                    `SELECT m.id,m.thread_id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,
+                            m.encryption_key_id,m.created_at,m.read_at,m.client_message_id,u.username
+                       FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                      WHERE m.thread_id=ANY($1::bigint[])
+                        AND ($2::timestamptz IS NULL OR m.created_at<$2 OR (m.created_at=$2 AND m.id<$3))
+                      ORDER BY m.created_at DESC,m.id DESC LIMIT $4`,
+                    [threadIds,cursor?cursor.createdAt:null,cursor?cursor.id:null,limit]
+                );
+                rows=result.rows;
+                if(rows.length){
+                    const oldest=rows[rows.length-1];
+                    const more=await pool.query(
+                        `SELECT EXISTS(SELECT 1 FROM chat_messages m WHERE m.thread_id=ANY($1::bigint[])
+                           AND (m.created_at<$2 OR (m.created_at=$2 AND m.id<$3))) AS has_older`,
+                        [threadIds,oldest.created_at,oldest.id]
+                    );
+                    hasOlder=Boolean(more.rows[0]&&more.rows[0].has_older);
+                }
+            }
+            await recordChatHistoryAudit(Number(req.user.userId),playerId,history.threads,"view",null,null);
+            const messages=decryptMessageRows(rows).reverse().map((row)=>Object.assign({},row,{attachments:[]}));
+            const oldest=rows.length?rows[rows.length-1]:null;
+            const nextBeforeId=oldest?Buffer.from(JSON.stringify({id:Number(oldest.id),createdAt:oldest.created_at}),"utf8").toString("base64url"):null;
+            res.set("Cache-Control","private, no-store");
+            return res.json({success:true,player:history.player,threadId:history.threads[0]?Number(history.threads[0].id):null,
+                threadIds,threads:history.threads,messages,total,hasOlder,nextBeforeId});
+        }catch(error){
+            if(error.code==="CHAT_ENCRYPTION_KEY_UNAVAILABLE"||error.code==="CHAT_ENCRYPTION_INTEGRITY_FAILED")return res.status(503).json({success:false,message:"Support history is temporarily unavailable because a stored message could not be securely decrypted."});
+            console.error("Admin support history read failed:",error.message);
+            return res.status(500).json({success:false,message:"Could not load support history."});
+        }
+    });
+
+    router.get("/users/:id/chat-history/export",authenticateToken,adminOnly,async(req,res)=>{
+        const playerId=Number(req.params.id),format=String(req.query.format||"json").toLowerCase();
+        if(!Number.isSafeInteger(playerId)||playerId<=0)return res.status(400).json({success:false,message:"Invalid player account."});
+        if(!["json","pdf"].includes(format))return res.status(400).json({success:false,message:"Choose JSON or PDF for the evidence export."});
+        try{
+            const history=await readSupportHistory(playerId);
+            if(!history)return res.status(404).json({success:false,message:"Player account not found."});
+            const threadIds=history.threads.map((thread)=>Number(thread.id));
+            let messages=[];
+            if(threadIds.length){
+                const result=await pool.query(
+                    `SELECT m.id,m.thread_id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,
+                            m.encryption_key_id,m.created_at,m.read_at,m.client_message_id,u.username
+                       FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                      WHERE m.thread_id=ANY($1::bigint[]) ORDER BY m.created_at,m.id`,[threadIds]
+                );
+                messages=decryptMessageRows(result.rows).map((row)=>Object.assign({},row,{attachments:[]}));
+            }
+            const archive={player:history.player,threads:history.threads,messages,admin:{id:Number(req.user.userId),username:req.user.username||"Administrator"}};
+            const output=format==="pdf"?await buildPdfExport(archive):buildJsonExport(archive);
+            const digest=sha256(output);
+            await recordChatHistoryAudit(Number(req.user.userId),playerId,history.threads,"export",format,digest);
+            res.set("Cache-Control","private, no-store");
+            res.set("X-Content-Type-Options","nosniff");
+            res.set("X-Evidence-SHA256",digest);
+            res.set("Content-Type",format==="pdf"?"application/pdf":"application/json; charset=utf-8");
+            res.set("Content-Disposition",`attachment; filename="goal-gambit-support-${playerId}-${new Date().toISOString().slice(0,10)}.${format}"`);
+            return res.end(output);
+        }catch(error){
+            if(error.code==="CHAT_ENCRYPTION_KEY_UNAVAILABLE"||error.code==="CHAT_ENCRYPTION_INTEGRITY_FAILED")return res.status(503).json({success:false,message:"Support history is temporarily unavailable because a stored message could not be securely decrypted."});
+            console.error("Admin support history export failed:",error.message);
+            return res.status(500).json({success:false,message:"Could not create the protected evidence export."});
         }
     });
 
@@ -701,6 +1039,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            await acquireAccountInvalidationLocks(client, id);
             const target = await client.query("SELECT id,username,role FROM users WHERE id=$1 FOR UPDATE", [id]);
             if (!target.rows.length) {
                 await client.query("ROLLBACK");
@@ -709,6 +1048,20 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             if (target.rows[0].role === "admin") {
                 await client.query("ROLLBACK");
                 return res.status(409).json({success:false,message:"Administrator accounts cannot be permanently deleted from this desk."});
+            }
+            const unsettledChess = await client.query(
+                `SELECT 1
+                   FROM chess_match_financial_dispositions d
+                   JOIN chess_matches m ON m.id=d.match_id
+                  WHERE d.user_id=$1 AND m.match_type='tournament'
+                    AND m.payout_status='pending_competition'
+                    AND d.disposition IN ('pending','admin_forfeited')
+                  LIMIT 1`,
+                [id]
+            );
+            if (unsettledChess.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({success:false,message:"This account has an unsettled Chess tournament financial disposition. Settle the season before deleting the account."});
             }
             const wallet = await client.query("SELECT balance,locked_balance,withdrawal_reserved_balance FROM wallets WHERE user_id=$1 FOR UPDATE", [id]);
             if (wallet.rows.length && (Number(wallet.rows[0].balance) !== 0 || Number(wallet.rows[0].locked_balance) !== 0 || Number(wallet.rows[0].withdrawal_reserved_balance || 0) !== 0)) {
@@ -726,6 +1079,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 await client.query("ROLLBACK");
                 return res.status(409).json({success:false,message:"Finish or cancel the account's active match before deletion."});
             }
+
+            // The target's account gates are held before row locks. Revoke its
+            // tracked sessions only after deletion checks pass so a refused
+            // deletion does not unexpectedly sign the player out.
+            await lockAndRevokeUserSessions(client, id);
 
             // Remove personal identifiers from shared match and receipt rows
             // that remain useful to other players or for payment reconciliation.
@@ -769,17 +1127,32 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             return res.status(400).json({success:false,message:"You cannot suspend or close your own admin account."});
         }
 
+        const client = await pool.connect();
+        let r;
         try {
-            const r = await pool.query(
+            await client.query("BEGIN");
+            // Account invalidation takes both account gates before any row
+            // locks, matching password change/recovery/logout ordering. This
+            // waits for admitted work before the moderation result returns.
+            await acquireAccountInvalidationLocks(client, id);
+            const target = await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [id]);
+            if (!target.rows.length) {
+                await client.query("ROLLBACK");
+                return res.status(404).json({success:false,message:"User not found."});
+            }
+            await lockAndRevokeUserSessions(client, id);
+            r = await client.query(
                 `UPDATE users
                  SET account_status=$1::varchar,
                      suspended_until=$2::timestamptz,
-                     moderation_reason=$3::text
+                     moderation_reason=$3::text,
+                     auth_version=auth_version+1
                  WHERE id=$4::integer
-                 RETURNING id, username, account_status, suspended_until, moderation_reason`,
+                 RETURNING id, username, account_status, suspended_until, moderation_reason, auth_version`,
                 [status, status === "suspended" && until && !isNaN(until.getTime()) ? until : null, reason || null, id]
             );
-            if (!r.rows.length) return res.status(404).json({success:false,message:"User not found."});
+            if (!r.rows.length) throw new Error("Account disappeared during moderation update.");
+            await client.query("COMMIT");
 
             const auditDescription = "Account status changed to " + status + "." + (reason ? " Admin note: " + reason : "");
             await pool.query(
@@ -791,8 +1164,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
 
             res.json({success:true,message:`Account ${status}.`,user:r.rows[0]});
         } catch (e) {
+            await client.query("ROLLBACK").catch(()=>{});
             console.error(e);
             res.status(500).json({success:false,message:"Failed to update account."});
+        } finally {
+            client.release();
         }
     });
 
@@ -888,17 +1264,19 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             const r = await pool.query(
                 `SELECT ct.id, ct.admin_cleared_at, ct.support_category,ct.support_subject,ct.support_status,
                         u.id AS user_id, u.username,
-                        (SELECT message FROM chat_messages m WHERE m.thread_id=ct.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-                        (SELECT created_at FROM chat_messages m WHERE m.thread_id=ct.id ORDER BY m.created_at DESC LIMIT 1) AS last_at,
+                        lm.message AS last_message,lm.message_ciphertext,lm.message_iv,lm.message_auth_tag,lm.encryption_key_id,
+                        lm.created_at AS last_at,
                         (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=ct.id AND m.sender_id <> $1 AND m.read_at IS NULL)::int AS unread
                  FROM chat_threads ct
                  JOIN users u ON u.id=ct.user_one_id
+                 LEFT JOIN LATERAL (SELECT message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at
+                                      FROM chat_messages WHERE thread_id=ct.id ORDER BY created_at DESC,id DESC LIMIT 1) lm ON TRUE
                  WHERE ct.thread_type='support'
                    AND ($2::boolean OR (ct.admin_cleared_at IS NULL AND COALESCE(ct.support_status,'open')<>'resolved'))
                  ORDER BY last_at DESC NULLS LAST`,
                 [req.user.userId, includeCleared]
             );
-            res.json({success:true,threads:r.rows});
+            res.json({success:true,threads:r.rows.map(function(row){return Object.assign({},row,{last_message:decryptMessage(row)});})});
         } catch (e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to load support chats."});
@@ -996,12 +1374,12 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 [t.rows[0].id,userId]
             );
             const messages = await pool.query(
-                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,m.client_message_id,u.username
+                `SELECT m.id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,m.encryption_key_id,m.created_at,m.read_at,m.client_message_id,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
                  WHERE m.thread_id=$1 ORDER BY m.created_at ASC`,
                 [t.rows[0].id]
             );
-            res.json({success:true,threadId:t.rows[0].id,messages:messages.rows});
+            res.json({success:true,threadId:t.rows[0].id,messages:decryptMessageRows(messages.rows)});
         } catch (e) {
             console.error(e);
             res.status(500).json({success:false,message:"Failed to load support conversation."});
@@ -1023,10 +1401,12 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 return res.status(404).json({success:false,message:"Player account is not available."});
             }
             const threadId = await getOrCreateSupportThread(userId,client);
+            const sealed=encryptedMessageValues(message);
             const m = await client.query(
-                `INSERT INTO chat_messages(thread_id,sender_id,message) VALUES($1,$2,$3)
-                 RETURNING id,sender_id,message,created_at,client_message_id`,
-                [threadId,req.user.userId,message]
+                `INSERT INTO chat_messages(thread_id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id)
+                 VALUES($1,$2,$3,$4,$5,$6,$7)
+                 RETURNING id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,client_message_id`,
+                [threadId,req.user.userId,...sealed]
             );
             await client.query(`UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1`,[threadId]);
 
@@ -1054,7 +1434,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 }
             }
             await client.query("COMMIT");
-            res.json({success:true,message:m.rows[0]});
+            res.json({success:true,message:Object.assign({},m.rows[0],{message:decryptMessage(m.rows[0])})});
         } catch (e) {
             await client.query("ROLLBACK").catch(function(){});
             console.error(e);

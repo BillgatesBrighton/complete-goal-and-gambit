@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
 }
 
+if (file("google-services.json").isFile) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 val configuredApiBase = providers.gradleProperty("GG_TRIAL_API_BASE_URL")
     .orElse("https://desktop-elb0fth.taildd904a.ts.net")
     .get()
@@ -15,8 +19,8 @@ android {
         applicationId = "com.goalgambit.trial"
         minSdk = 24
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.3.0"
+        versionCode = 17
+        versionName = "1.3.2"
         buildConfigField("String", "API_BASE_URL", "\"" + configuredApiBase + "\"")
     }
 
@@ -37,6 +41,10 @@ android {
 }
 
 dependencies {
+    implementation("com.github.bhlangonijr:chesslib:1.3.7")
+    implementation(platform("com.google.firebase:firebase-bom:35.0.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("androidx.work:work-runtime:2.10.5")
     implementation("com.google.android.filament:filament-android:1.77.3")
     implementation("com.google.android.filament:gltfio-android:1.77.3")
     implementation("com.google.android.filament:filament-utils-android:1.77.3")

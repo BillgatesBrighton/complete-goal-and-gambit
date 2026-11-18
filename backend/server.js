@@ -49,9 +49,13 @@ const adminWalletRoutes = require("./routes/adminWallet");
 const chatRoutes = require("./routes/chat");
 const companionRoutes = require("./routes/companion");
 const authenticateToken = require("./middleware/authMiddleware");
+const { isAuthSessionActive, installSocketSessionGuard } = require("./services/authSession");
+const createAuthSessionCleanup = require("./services/authSessionCleanup");
 const { publicAccountRole } = require("./middleware/adminAuthorization");
 const gameAccess = require("./middleware/gameAccess");
 const repairDuplicateSupportThreads = require("./db/repairSupportThreads");
+const redactSensitiveRequestUrl = require("./middleware/requestUrlRedaction");
+const { hasAcceptableJwtSecret } = require("./middleware/jwtSecretPolicy");
 
 // ======================================================
 // EXPRESS APPLICATION
@@ -72,10 +76,10 @@ const HOST = String(process.env.HOST || "127.0.0.1");
 // BASIC VALIDATION
 // ======================================================
 
-if (!process.env.JWT_SECRET) {
+if (!hasAcceptableJwtSecret(process.env.JWT_SECRET)) {
 
     console.error(
-        "ERROR: JWT_SECRET is missing from your .env file."
+        "ERROR: JWT_SECRET must contain at least 32 UTF-8 bytes of random secret material."
     );
 
     process.exit(1);
@@ -103,6 +107,15 @@ const pool = new pg.Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000
 });
+// Keep per-event session row locks on a small pool separate from handlers'
+// regular queries so lock holders cannot exhaust the application's DB pool.
+const authSessionLockPool = new pg.Pool({
+    ...databaseConfig,
+    max: 8,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000
+});
+const authSessionCleanup = createAuthSessionCleanup(pool);
 const accountPresence = createAccountPresence();
 const webPushService = createWebPushService(pool);
 const androidPushService = createAndroidPushService(pool);
@@ -162,6 +175,10 @@ pool.on("error", function(error) {
 
     console.error(error);
 
+});
+
+authSessionLockPool.on("error", function(error) {
+    console.error("Unexpected authentication-session lock pool error:", error && error.message);
 });
 
 // ======================================================
@@ -282,15 +299,7 @@ app.use(function(req, res, next) {
 app.use(
     function(req, res, next) {
 
-        const logUrl = req.originalUrl
-            .replace(
-                /(\/api\/payments\/payout-(?:result|timeout)\/)[^/?]+/i,
-                "$1[redacted]"
-            )
-            .replace(
-                /(\/api\/payments\/c2b-(?:confirmation|validation)\/)[^/?]+/i,
-                "$1[redacted]"
-            );
+        const logUrl = redactSensitiveRequestUrl(req.originalUrl);
         console.log(req.method + " " + logUrl);
 
         next();
@@ -371,7 +380,9 @@ io.use(
         }
 
         const userId = Number(decoded && decoded.userId);
-        if (!Number.isSafeInteger(userId) || userId <= 0) {
+        const sessionId = String(decoded && decoded.jti || "");
+        if (!Number.isSafeInteger(userId) || userId <= 0 ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
             return next(new Error("Invalid authentication token."));
         }
 
@@ -388,6 +399,9 @@ io.use(
             let user = result.rows[0];
             if (Number(decoded.authVersion || 0) !== Number(user.auth_version || 0)) {
                 return next(new Error("Session expired after an account change."));
+            }
+            if (!(await isAuthSessionActive(pool, sessionId, user.id, user.auth_version))) {
+                return next(new Error("Invalid or expired authentication session."));
             }
             if (user.account_status === "suspended" && user.suspended_until) {
                 const activated = await pool.query(
@@ -423,6 +437,7 @@ io.use(
             socket.user = {
                 ...decoded,
                 userId: user.id,
+                sessionId,
                 username: user.username,
                 role: publicAccountRole(user)
             };
@@ -442,6 +457,11 @@ io.on(
     "connection",
     function(socket) {
 
+        // Validate every incoming packet against the persistent session row.
+        // This closes the window where an already-connected socket could keep
+        // issuing authenticated commands after its session is revoked.
+        installSocketSessionGuard(socket, authSessionLockPool);
+
         chessEngineRelay.attachSocket(socket);
 
         console.log(
@@ -452,10 +472,12 @@ io.on(
         );
 
         const presenceUserId = Number(socket.user.userId);
+        accountPresence.setApplicationSocket(presenceUserId, socket.id, socket.clientType, true);
         const connections = onlineUserSockets.get(presenceUserId) || new Set();
         const wasOffline = connections.size === 0;
         connections.add(socket.id);
         onlineUserSockets.set(presenceUserId, connections);
+        socket.join("auth_session_" + socket.user.sessionId);
         socket.join("user_" + presenceUserId);
         if (wasOffline) broadcastOnlineUsers();
         else socket.emit("presence:update", { onlineUserIds: getOnlineUserIds() });
@@ -463,6 +485,13 @@ io.on(
         socket.on("website:presence", function(data) {
             if (socket.clientType !== "website") return;
             accountPresence.setWebsitePresence(presenceUserId, socket.id, Boolean(data && data.active === true));
+            if (data && data.activity === true) {
+                const stamp = Date.now();
+                if (!socket.lastApplicationActivityAt || stamp - socket.lastApplicationActivityAt >= 15000) {
+                    socket.lastApplicationActivityAt = stamp;
+                    accountPresence.recordApplicationActivity(presenceUserId, socket.id);
+                }
+            }
         });
 
         socket.on("chess:companion:presence", async function(data) {
@@ -956,7 +985,7 @@ app.use(
 
 app.use(
     "/api/admin",
-    adminRoutes(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler)
+    adminRoutes(pool, authenticateToken, getOnlineUserIds, pushService, efootballScheduler, accountPresence)
 );
 
 app.use(
@@ -1346,6 +1375,7 @@ async function shutdown(signal) {
     pushService.stop();
     efootballScheduler.stop();
     chessConnectionMonitor.stop();
+    authSessionCleanup.stop();
 
     console.log(
         `\n${signal} received. Shutting down GOAL$GAMBIT...`
@@ -1360,7 +1390,7 @@ async function shutdown(signal) {
 
             try {
 
-                await pool.end();
+                await Promise.all([pool.end(), authSessionLockPool.end()]);
 
                 console.log(
                     "PostgreSQL pool closed."
@@ -1429,6 +1459,7 @@ async function startServer() {
 
     pushService.start();
     efootballScheduler.start();
+    authSessionCleanup.start();
     server.listen(PORT, HOST, function() {
 
         console.log(
@@ -1468,6 +1499,6 @@ async function startServer() {
 
 startServer().catch(async function(error) {
     console.error("Database initialization failed:", error.message);
-    await pool.end().catch(() => {});
+    await Promise.all([pool.end().catch(() => {}), authSessionLockPool.end().catch(() => {})]);
     process.exitCode = 1;
 });

@@ -201,14 +201,18 @@ test("match workflow, chat, and wallet page scripts parse", () => {
     }
 });
 
-test("companion APK download falls back to the public GitHub file when the API is unavailable", () => {
+test("website guidance downloads the current Player App and keeps notifications optional", () => {
     const apiSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "js", "api.js"), "utf8");
-    assert.match(apiSource, /var PUBLIC_COMPANION_DOWNLOAD_URL = ANDROID_COMPANION_DOWNLOAD_URL/);
-    assert.match(apiSource, /controller\.abort\(\)[\s\S]*?10000/);
-    assert.match(apiSource, /application\/vnd\.android\.package-archive/);
-    assert.match(apiSource, /signature\[0\] !== 0x50[\s\S]*?signature\[3\] !== 0x04/);
-    assert.match(apiSource, /url\.searchParams\.set\("download", String\(Date\.now\(\)\)\)/);
-    assert.match(apiSource, /window\.location\.assign\(url\.toString\(\)\)/);
+    const homePage = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "pages", "index.html"), "utf8");
+    const notificationPage = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "pages", "notification-settings.html"), "utf8");
+    assert.doesNotMatch(apiSource, /PUBLIC_COMPANION_DOWNLOAD_URL|ANDROID_COMPANION_DOWNLOAD_URL/);
+    assert.match(apiSource, /Download Player App · v1\.3\.2/);
+    assert.match(apiSource, /Match notifications are optional/);
+    for (const page of [homePage, notificationPage]) {
+        assert.match(page, /goal-gambit-player-v1\.3\.2\.apk/);
+        assert.match(page, /GOAL-GAMBIT-Player-v1\.3\.2\.apk/);
+    }
+    assert.match(homePage, /native Android player app version 1\.3\.2/);
 });
 
 test("Android sender alert offers inline code reply and persists until successful send", () => {

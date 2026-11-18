@@ -3,6 +3,7 @@
 
 <head>
     <link rel="stylesheet" href="gold-glow.css?v=20261115-ambient-gold-visibility">
+
     <meta name="robots" content="noindex">
     <link rel="manifest" href="../manifest.webmanifest">
 
@@ -231,6 +232,13 @@
         if (result.status === 401 || result.status === 403) GG.clearSession();
     });
 })();
+
+var logoutState = new URLSearchParams(location.search).get("logout");
+if (logoutState === "confirmed") {
+    document.getElementById("loginMessage").textContent = "Signed out. The server session was revoked.";
+} else if (logoutState === "local") {
+    document.getElementById("loginMessage").textContent = "Signed out on this device. The server could not confirm revocation, so this session may remain valid until it expires.";
+}
 
 document.getElementById("loginForm").addEventListener("submit", async function (event) {
     event.preventDefault();

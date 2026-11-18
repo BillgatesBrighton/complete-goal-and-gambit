@@ -136,6 +136,7 @@ function createPausedMatchPool() {
     const io = { to(room) { return { emit(name, data) { events.push({ room, name, data }); } }; } };
     const pool = {
         async query(sql) {
+            if (String(sql).includes("FROM auth_sessions s") && String(sql).includes("JOIN users u")) return { rows: [{ "1": 1 }] };
             if (String(sql).includes("SELECT id FROM chess_matches WHERE player_black_id")) return { rows: [] };
             if (String(sql).includes("FROM chess_matches m")) return { rows: [{ ...row }] };
             throw new Error("Unexpected pool query in isolated chess pause test: " + String(sql).slice(0, 120));
@@ -145,6 +146,10 @@ function createPausedMatchPool() {
                 async query(sql, params) {
                     const text = String(sql);
                     if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text.trim())) return { rows: [] };
+                    if (/^\s*SET LOCAL /i.test(text) ||
+                        /pg_advisory_xact_lock(?:_shared)?\(\$1::integer,\$2::integer\)/i.test(text) ||
+                        (text.includes("FROM auth_sessions s") && text.includes("JOIN users u"))) return { rows: [{ "1": 1 }] };
+                    if (text.includes("SELECT match_type,season_key,time_control,stake_amount FROM chess_matches WHERE id=$1")) return { rows: [] };
                     if (/SELECT\s+\*\s+FROM\s+chess_matches\s+WHERE\s+id\s*=\s*\$1\s+FOR\s+UPDATE/i.test(text)) return { rows: [{ ...row }] };
                     if (text.includes("SET white_time_ms=$1,black_time_ms=$2,last_move_at=NULL")) {
                         row.white_time_ms = params[0]; row.black_time_ms = params[1]; row.last_move_at = null;
@@ -159,6 +164,7 @@ function createPausedMatchPool() {
                     }
                     throw new Error("Unexpected isolated chess pause transaction: " + text.slice(0, 160));
                 },
+                on() {},
                 release() {}
             };
         }
@@ -168,7 +174,10 @@ function createPausedMatchPool() {
 
 test("server pause freezes both clock values, broadcasts, blocks moves, and resumes from saved time", async t => {
     const { row, pool, io, events } = createPausedMatchPool();
-    const router = chessRoutes(pool, (req, _res, next) => { req.user = { userId: 41 }; next(); }, io);
+    const router = chessRoutes(pool, (req, _res, next) => {
+        req.user = { userId: 41, sessionId: "00000000-0000-4000-8000-000000000041", authVersion: 0 };
+        next();
+    }, io);
     const pause = await router.pauseForConnectionLoss(501, 42);
 
     assert.equal(pause.paused, true);
@@ -210,7 +219,10 @@ test("server pause freezes both clock values, broadcasts, blocks moves, and resu
 
 test("process recovery pause preserves persisted clocks instead of expiring a match during backend downtime", async () => {
     const { row, pool } = createPausedMatchPool();
-    const router = chessRoutes(pool, (req, _res, next) => { req.user = { userId: 41 }; next(); }, null);
+    const router = chessRoutes(pool, (req, _res, next) => {
+        req.user = { userId: 41, sessionId: "00000000-0000-4000-8000-000000000041", authVersion: 0 };
+        next();
+    }, null);
     const paused = await router.pauseForConnectionLoss(501, 42, { preserveStoredClock: true });
     assert.equal(paused.paused, true);
     assert.equal(row.white_time_ms, 60000);

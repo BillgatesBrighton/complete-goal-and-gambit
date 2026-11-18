@@ -4,7 +4,13 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
-const { getImageType, safeStoragePath, storePrivateImage } = require("../services/privateEvidence");
+const { getImageType, safeStoragePath, storePrivateImage, readPrivateImage } = require("../services/privateEvidence");
+const { encryptMessage, decryptMessage, decryptMessageRows } = require("../services/chatEncryption");
+
+function encryptedMessageValues(message) {
+    const record=encryptMessage(message);
+    return [record.message,record.message_ciphertext,record.message_iv,record.message_auth_tag,record.encryption_key_id];
+}
 
 module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService) {
     const router = express.Router();
@@ -93,14 +99,16 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                         u.id AS user_id,
                         u.username,
                         u.game,
-                        lm.message AS last_message,
+                        lm.message AS last_message,lm.message_ciphertext AS last_message_ciphertext,
+                        lm.message_iv AS last_message_iv,lm.message_auth_tag AS last_message_auth_tag,
+                        lm.encryption_key_id AS last_message_key_id,
                         lm.created_at AS last_message_at,
                         lm.read_at AS last_message_read_at,
                         COALESCE(un.unread_count,0)::int AS unread_count
                  FROM chat_threads t
                  JOIN users u ON u.id = CASE WHEN t.user_one_id=$1 THEN t.user_two_id ELSE t.user_one_id END
                  LEFT JOIN LATERAL (
-                     SELECT m.message,m.created_at,m.read_at
+                     SELECT m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,m.encryption_key_id,m.created_at,m.read_at
                      FROM chat_messages m
                      WHERE m.thread_id=t.id
                        AND (CASE WHEN t.user_one_id=$1 THEN t.user_one_cleared_at ELSE t.user_two_cleared_at END IS NULL
@@ -126,7 +134,10 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             );
             const unread = r.rows.reduce((sum,row)=>sum+Number(row.unread_count||0),0);
             const threads = r.rows.map(function(row) {
-                return Object.assign({}, row, { online: isOnline(row.user_id) });
+                return Object.assign({}, row, {
+                    last_message:decryptMessage({message:row.last_message,message_ciphertext:row.last_message_ciphertext,message_iv:row.last_message_iv,message_auth_tag:row.last_message_auth_tag,encryption_key_id:row.last_message_key_id}),
+                    online: isOnline(row.user_id)
+                });
             });
             res.json({success:true,threads:threads,unreadCount:unread});
         } catch(e) {
@@ -139,7 +150,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
         const me = Number(req.user.userId);
         try {
             const r = await pool.query(
-                `SELECT m.id,m.thread_id,m.sender_id,m.message,m.created_at,u.username
+                `SELECT m.id,m.thread_id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,m.encryption_key_id,m.created_at,u.username
                  FROM chat_messages m
                  JOIN chat_threads t ON t.id=m.thread_id AND t.thread_type='direct'
                  JOIN users u ON u.id=m.sender_id
@@ -152,7 +163,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                  LIMIT 50`,
                 [me]
             );
-            res.json({success:true,notifications:r.rows,unreadCount:r.rows.length});
+            res.json({success:true,notifications:decryptMessageRows(r.rows),unreadCount:r.rows.length});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load notifications."});
@@ -224,11 +235,11 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 [t.rows[0].id,other,clearedAt]
             );
             const messages=await pool.query(
-                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,u.username
+                `SELECT m.id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,m.encryption_key_id,m.created_at,m.read_at,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
                  WHERE m.thread_id=$1 AND ($2::timestamptz IS NULL OR m.created_at>$2)
                  ORDER BY m.created_at ASC LIMIT 500`,[t.rows[0].id,clearedAt]);
-            res.json({success:true,threadId:t.rows[0].id,other:Object.assign({},target,{online:isOnline(target.id)}),messages:messages.rows});
+            res.json({success:true,threadId:t.rows[0].id,other:Object.assign({},target,{online:isOnline(target.id)}),messages:decryptMessageRows(messages.rows)});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load conversation."});
@@ -277,19 +288,21 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                  ON CONFLICT(thread_type,user_one_id,user_two_id)
                  DO UPDATE SET user_one_id=EXCLUDED.user_one_id
                  RETURNING id`,[low,high]);
+            const sealed=encryptedMessageValues(message);
             const m=await pool.query(
-                `INSERT INTO chat_messages(thread_id,sender_id,message)
-                 VALUES($1,$2,$3)
-                 RETURNING id,sender_id,message,created_at,read_at`,[t.rows[0].id,me,message]);
+                `INSERT INTO chat_messages(thread_id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id)
+                 VALUES($1,$2,$3,$4,$5,$6,$7)
+                 RETURNING id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,read_at`,
+                [t.rows[0].id,me,...sealed]);
             await pool.query(`UPDATE chat_threads SET admin_cleared_at=NULL WHERE id=$1`,[t.rows[0].id]);
 
             await pool.query(
                 `INSERT INTO system_notifications(user_id,type,title,message)
                  VALUES($1,'chat_message',$2,$3)`,
-                [target.id, `New message from ${req.user.username}`, message]
+                 [target.id, `New message from ${req.user.username}`, "Open the app to read your new private message."]
             );
 
-            res.json({success:true,message:m.rows[0],recipient:{id:target.id,username:target.username}});
+            res.json({success:true,message:Object.assign({},m.rows[0],{message:decryptMessage(m.rows[0])}),recipient:{id:target.id,username:target.username}});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not send message."});
@@ -331,13 +344,13 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 [threadId,me,clearedAt]
             );
             const messages=await pool.query(
-                `SELECT m.id,m.sender_id,m.message,m.created_at,m.read_at,m.client_message_id,u.username
+                `SELECT m.id,m.sender_id,m.message,m.message_ciphertext,m.message_iv,m.message_auth_tag,m.encryption_key_id,m.created_at,m.read_at,m.client_message_id,u.username
                  FROM chat_messages m JOIN users u ON u.id=m.sender_id
                  WHERE m.thread_id=$1 AND ($2::timestamptz IS NULL OR m.created_at>$2)
                  ORDER BY m.created_at ASC LIMIT 500`,[threadId,clearedAt]);
             res.set("Cache-Control","private, no-store");
             res.json({success:true,threadId,category:thread.rows[0]&&thread.rows[0].support_category,
-                subject:thread.rows[0]&&thread.rows[0].support_subject,messages:messages.rows});
+                subject:thread.rows[0]&&thread.rows[0].support_subject,messages:decryptMessageRows(messages.rows)});
         } catch(e) {
             console.error(e);
             res.status(500).json({success:false,message:"Could not load support chat."});
@@ -380,21 +393,22 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                 return res.status(403).json({success:false,message:"Your account cannot use support chat."});
             }
             const threadId = await getOrCreateSupportThread(me,client);
+            const sealed=encryptedMessageValues(message);
             const m=clientMessageId
                 ? await client.query(
-                    `INSERT INTO chat_messages(thread_id,sender_id,message,client_message_id)
-                     VALUES($1,$2,$3,$4)
+                    `INSERT INTO chat_messages(thread_id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,client_message_id)
+                     VALUES($1,$2,$3,$4,$5,$6,$7,$8)
                      ON CONFLICT(sender_id,client_message_id) WHERE client_message_id IS NOT NULL DO NOTHING
-                     RETURNING id,sender_id,message,created_at,read_at,client_message_id`,
-                    [threadId,me,message,clientMessageId])
+                     RETURNING id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,read_at,client_message_id`,
+                    [threadId,me,...sealed,clientMessageId])
                 : await client.query(
-                    `INSERT INTO chat_messages(thread_id,sender_id,message)
-                     VALUES($1,$2,$3)
-                     RETURNING id,sender_id,message,created_at,read_at,client_message_id`,[threadId,me,message]);
+                    `INSERT INTO chat_messages(thread_id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id)
+                     VALUES($1,$2,$3,$4,$5,$6,$7)
+                     RETURNING id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,read_at,client_message_id`,[threadId,me,...sealed]);
             let saved=m.rows[0];
             if(!saved&&clientMessageId){
                 const existing=await client.query(
-                    `SELECT id,sender_id,message,created_at,read_at,client_message_id
+                    `SELECT id,sender_id,message,message_ciphertext,message_iv,message_auth_tag,encryption_key_id,created_at,read_at,client_message_id
                        FROM chat_messages WHERE sender_id=$1 AND client_message_id=$2`,[me,clientMessageId]);
                 saved=existing.rows[0];
                 if(!saved){
@@ -402,7 +416,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
                     return res.status(409).json({success:false,message:"This message reference is already in use."});
                 }
                 await client.query("COMMIT");
-                return res.json({success:true,duplicate:true,message:saved});
+                return res.json({success:true,duplicate:true,message:Object.assign({},saved,{message:decryptMessage(saved)})});
             }
             await client.query(
                 `UPDATE chat_threads SET admin_cleared_at=NULL,support_status='open',
@@ -430,7 +444,7 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
 
             await client.query("COMMIT");
             shouldDispatch=true;
-            res.status(201).json({success:true,message:saved});
+            res.status(201).json({success:true,message:Object.assign({},saved,{message:decryptMessage(saved)})});
         } catch(e) {
             await client.query("ROLLBACK").catch(function(){});
             console.error(e);
@@ -772,7 +786,9 @@ module.exports = function(pool, authenticateToken, getOnlineUserIds, pushService
             res.setHeader("Content-Disposition", "inline");
             res.setHeader("X-Content-Type-Options", "nosniff");
             res.setHeader("Cache-Control", "private, no-store");
-            return res.sendFile(file);
+            const image = await readPrivateImage(file);
+            res.setHeader("Content-Length",image.length);
+            return res.end(image);
         } catch (error) {
             console.error("Player complaint evidence read failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not open evidence." });

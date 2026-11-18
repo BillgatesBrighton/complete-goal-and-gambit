@@ -5,6 +5,7 @@ const gameAccess = require("../middleware/gameAccess");
 const { ensureLeagueRound, recordLeagueFixtureResult } = require("../services/efootballtournament");
 const { creditPlatform, refundReservedPlatformFee } = require("../services/adminWalletAccounting");
 const { recordJournal } = require("../services/financialLedger");
+const { lockActiveAuthSession } = require("../services/authSession");
 
 const MAX_LEAGUE_PLAYERS = 20;
 
@@ -159,6 +160,9 @@ module.exports = function (pool, authenticateToken) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
 
             const u = await client.query("SELECT game,account_status FROM users WHERE id = $1", [uid]);
             if (!u.rows.length || u.rows[0].account_status !== "active") {
@@ -243,6 +247,9 @@ module.exports = function (pool, authenticateToken) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
             const league = await findLeague(client, req.params.id);
             if (!league) throw Object.assign(new Error("League not found."), { status: 404 });
             await client.query("SELECT id FROM efootball_leagues WHERE id=$1 FOR UPDATE", [league.id]);
@@ -333,6 +340,9 @@ module.exports = function (pool, authenticateToken) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            if (!(await lockActiveAuthSession(client, req.user))) {
+                throw Object.assign(new Error("Authentication session is no longer active."), { status: 401 });
+            }
             const league = await findLeague(client, req.params.id);
             if (!league) throw Object.assign(new Error("League not found."), { status: 404 });
             await client.query("SELECT id FROM efootball_leagues WHERE id=$1 FOR UPDATE", [league.id]);

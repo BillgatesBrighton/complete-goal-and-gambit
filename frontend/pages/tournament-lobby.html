@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <link rel="stylesheet" href="gold-glow.css?v=20261115-ambient-gold-visibility">
+
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080808">
@@ -20,7 +21,8 @@
     .intro{max-width:780px;margin:0 0 24px;color:var(--muted)}
     .toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:22px 0}
     .controls{display:flex;gap:8px;flex-wrap:wrap}
-    button,select,.play{border:1px solid #333;border-radius:9px;background:#151515;color:#ddd;padding:10px 13px;font:inherit}
+    button,select,input,.play{border:1px solid #333;border-radius:9px;background:#151515;color:#ddd;padding:10px 13px;font:inherit}
+    input[type="datetime-local"]{display:block;min-width:min(260px,78vw);margin-top:6px;color-scheme:dark}
     button{cursor:pointer;font-weight:800}button.active{background:var(--gold);border-color:var(--gold);color:#111}
     select{min-width:145px}.play{background:var(--gold);border-color:var(--gold);color:#111;font-weight:900;text-decoration:none;white-space:nowrap}
     .status{color:#888;font-size:12px}
@@ -64,6 +66,14 @@
       </label>
       <span class="status">Awards by entry: KSh 20 → 100 / 80 / 60 · KSh 50 → 250 / 200 / 150 · KSh 100 → 500 / 400 / 300 (1st / 2nd / 3rd).</span>
     </div>
+    <section class="panel" aria-labelledby="scheduleTitle">
+      <h2 id="scheduleTitle">Optional match schedule</h2>
+      <p class="footnote">Leave both fields blank for the current instant matchmaking flow. Times are interpreted in Africa/Nairobi. Only a configured deadline can trigger a walkover or no-contest expiry.</p>
+      <div class="controls">
+        <label>Scheduled start · optional<input id="scheduledAtInput" type="datetime-local"></label>
+        <label>Attendance deadline · optional<input id="deadlineAtInput" type="datetime-local"></label>
+      </div>
+    </section>
     <div class="toolbar"><span class="status" id="tableStatus" role="status">Connecting to live chess data…</span><span class="status">Refreshes every 10 seconds while this page is open</span></div>
     <div class="grid">
       <section class="panel" aria-labelledby="standingsTitle">
@@ -72,7 +82,7 @@
       </section>
       <section class="panel" aria-labelledby="fixturesTitle">
         <h2 id="fixturesTitle">Pairings and recent results</h2>
-        <div class="table-scroll"><table><thead><tr><th>White</th><th>Black</th><th>Result</th><th>Status</th></tr></thead><tbody id="fixturesBody"><tr><td class="empty" colspan="4">Loading fixtures…</td></tr></tbody></table></div>
+        <div class="table-scroll"><table><thead><tr><th>White</th><th>Black</th><th>Result</th><th>Status</th><th>Schedule / deadline · EAT</th></tr></thead><tbody id="fixturesBody"><tr><td class="empty" colspan="5">Loading fixtures…</td></tr></tbody></table></div>
         <p class="footnote">Live pairings appear when players search at the same clock and stake. Completed games update the standings above.</p>
         <button id="joinNextMatch" class="play" type="button">Join next tournament match</button>
         <section id="entryActions" class="entry-actions" aria-label="Tournament entry actions" hidden>
@@ -99,17 +109,28 @@
   let entryActionPending = false;
   const clockButtons = Array.from(document.querySelectorAll("[data-clock]"));
   const stakeSelect = document.getElementById("stakeSelect");
+  const scheduledAtInput = document.getElementById("scheduledAtInput");
+  const deadlineAtInput = document.getElementById("deadlineAtInput");
   const clockModes = {"10+5":"rapid-tournament","3+2":"blitz-tournament","1+1":"bullet-tournament"};
   if (["20","50","100"].includes(initialParams.get("stake"))) stakeSelect.value=initialParams.get("stake");
   else if (["20","50","100"].includes(String(savedTournamentSelection.stake))) stakeSelect.value=String(savedTournamentSelection.stake);
+  if (savedTournamentSelection.scheduledLocal) scheduledAtInput.value=String(savedTournamentSelection.scheduledLocal);
+  if (savedTournamentSelection.deadlineLocal) deadlineAtInput.value=String(savedTournamentSelection.deadlineLocal);
 
   function escape(value) { return GG.escapeHTML(value == null ? "" : value); }
   function resultLabel(row) {
     if (row.status !== "completed") return String(row.status || "scheduled").replace(/_/g," ");
+    if (row.result === "walkover") return "Walkover · winner";
+    if (row.result === "no_contest") return "No contest · stakes reserved";
     if (row.result === "draw") return "½ – ½";
     if (row.result === "white_win") return "1 – 0";
     if (row.result === "black_win") return "0 – 1";
     return "Completed";
+  }
+  function scheduleLabel(row) {
+    if (!row.scheduled_at) return "Unscheduled";
+    const format=value=>value?new Date(value).toLocaleString("en-KE",{timeZone:"Africa/Nairobi",dateStyle:"medium",timeStyle:"short"}):"—";
+    return format(row.scheduled_at)+(row.deadline_at?" · due "+format(row.deadline_at):" · no expiry");
   }
   function updateControls() {
     clockButtons.forEach(button=>button.classList.toggle("active",button.dataset.clock===selectedClock));
@@ -117,7 +138,7 @@
     const name = label ? label.textContent.split("·")[0].trim() : "Tournament";
     document.getElementById("standingsTitle").textContent = name + " standings · KSh " + stakeSelect.value;
     document.getElementById("joinNextMatch").textContent = "Join next " + name.toLowerCase() + " tournament match · KSh " + stakeSelect.value;
-    localStorage.setItem("goalGambitChessTournamentSelection", JSON.stringify({timeControl:selectedClock,stake:Number(stakeSelect.value)}));
+    localStorage.setItem("goalGambitChessTournamentSelection", JSON.stringify({timeControl:selectedClock,stake:Number(stakeSelect.value),scheduledLocal:scheduledAtInput.value,deadlineLocal:deadlineAtInput.value}));
   }
   async function refreshEntryActions() {
     if (entryRefreshPending || !GG.getToken()) {
@@ -189,7 +210,7 @@
     if (!response.ok) {
       document.getElementById("tableStatus").textContent = response.data.message || "Chess tables are temporarily unavailable.";
       document.getElementById("standingsBody").innerHTML = '<tr><td class="empty" colspan="8">Could not load standings.</td></tr>';
-      document.getElementById("fixturesBody").innerHTML = '<tr><td class="empty" colspan="4">Could not load fixtures.</td></tr>';
+      document.getElementById("fixturesBody").innerHTML = '<tr><td class="empty" colspan="5">Could not load fixtures.</td></tr>';
       return;
     }
     const username = String(localStorage.getItem("goalGambitUsername") || "").toLowerCase();
@@ -199,8 +220,8 @@
       : '<tr><td class="empty" colspan="8">No players have joined this clock and stake yet.</td></tr>';
     const fixtures = Array.isArray(response.data.fixtures) ? response.data.fixtures : [];
     document.getElementById("fixturesBody").innerHTML = fixtures.length
-      ? fixtures.slice(0,20).map(row => '<tr><td>' + escape(row.white_player || "Player") + '</td><td>' + escape(row.black_player || "Finding opponent") + '</td><td>' + escape(resultLabel(row)) + '</td><td>' + escape(String(row.status || "").replace(/_/g," ")) + '</td></tr>').join("")
-      : '<tr><td class="empty" colspan="4">No tournament fixtures for this clock and stake this month.</td></tr>';
+      ? fixtures.slice(0,20).map(row => '<tr><td>' + escape(row.white_player || "Player") + '</td><td>' + escape(row.black_player || "Finding opponent") + '</td><td>' + escape(resultLabel(row)) + '</td><td>' + escape(String(row.status || "").replace(/_/g," ")) + '</td><td>' + escape(scheduleLabel(row)) + '</td></tr>').join("")
+      : '<tr><td class="empty" colspan="5">No tournament fixtures for this clock and stake this month.</td></tr>';
     document.getElementById("tableStatus").textContent = "Updated " + new Date().toLocaleTimeString();
   }
   document.getElementById("cancelTournamentEntry").addEventListener("click", function() {
@@ -217,10 +238,29 @@
     refreshEntryActions();
   }));
   stakeSelect.addEventListener("change", function() { updateControls(); refreshTables(); refreshEntryActions(); });
+  scheduledAtInput.addEventListener("change", updateControls);
+  deadlineAtInput.addEventListener("change", updateControls);
   document.getElementById("joinNextMatch").addEventListener("click", function() {
     const settings={"10+5":{minutes:10,increment:5},"3+2":{minutes:3,increment:2},"1+1":{minutes:1,increment:1}}[selectedClock];
     const stake=Number(stakeSelect.value);
-    const target="board.html?mode="+encodeURIComponent(clockModes[selectedClock])+"&minutes="+settings.minutes+"&increment="+settings.increment+"&stake="+encodeURIComponent(stake);
+    if (deadlineAtInput.value && !scheduledAtInput.value) {
+      document.getElementById("entryActionNotice").textContent="Choose a scheduled start before adding an attendance deadline.";
+      scheduledAtInput.focus();
+      return;
+    }
+    function nairobiIso(value) {
+      if (!value) return "";
+      const match=value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
+      return match ? new Date(match[1]+"T"+match[2]+":00+03:00").toISOString() : "";
+    }
+    const params=new URLSearchParams({mode:clockModes[selectedClock],minutes:String(settings.minutes),increment:String(settings.increment),stake:String(stake)});
+    if (scheduledAtInput.value) params.set("scheduledAt",nairobiIso(scheduledAtInput.value));
+    if (deadlineAtInput.value) params.set("deadlineAt",nairobiIso(deadlineAtInput.value));
+    if ((scheduledAtInput.value&&!params.get("scheduledAt"))||(deadlineAtInput.value&&!params.get("deadlineAt"))) {
+      document.getElementById("entryActionNotice").textContent="Enter valid schedule and deadline times.";
+      return;
+    }
+    const target="board.html?"+params.toString();
     GG.guardedGo(target,stake,"chess");
   });
   document.addEventListener("visibilitychange", function() { if (!document.hidden) refreshTables(); });
